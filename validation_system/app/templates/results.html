@@ -11,17 +11,47 @@
     <div id="reportContent"></div>
     <button id="downloadReport">Download Report</button>
     <script>
-        // Example script to fetch and display the report
         const urlParams = new URLSearchParams(window.location.search);
         const claimId = urlParams.get('claim_id');
         const reportContent = document.getElementById('reportContent');
+
+        function displayReport(data) {
+            let html = `
+                <h2>Claim: ${data.text}</h2>
+                <p><strong>Status:</strong> ${data.status}</p>
+                <h3>Supporting Papers:</h3>
+                <ul>
+            `;
+
+            data.report.supportingPapers.forEach(paper => {
+                html += `
+                    <li>
+                        <h4>${paper.title}</h4>
+                        <p><strong>Authors:</strong> ${paper.authors.map(author => `${author.name} (H-index: ${author.hIndex})`).join(', ')}</p>
+                        <p><strong>Relevance:</strong> ${paper.relevance}</p>
+                        <p><strong>Excerpts:</strong> ${paper.excerpts}</p>
+                        <p><a href="${paper.link}" target="_blank">Read Paper</a></p>
+                    </li>
+                `;
+            });
+
+            html += `
+                </ul>
+                <h3>Explanation:</h3>
+                <p>${data.report.explanation}</p>
+                <h3>Claim Rating:</h3>
+                <p>${data.report.claimRating}</p>
+            `;
+
+            reportContent.innerHTML = html;
+        }
 
         if (claimId) {
             fetch(`/api/v1/claims/${claimId}/report`)
                 .then(response => response.json())
                 .then(data => {
                     if (data.report) {
-                        reportContent.textContent = data.report;
+                        displayReport(data);
                     } else {
                         reportContent.textContent = 'Report not found.';
                     }

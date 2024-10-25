@@ -67,12 +67,16 @@ def get_claim_status(claim_id):
 
 @api.route('/api/v1/claims/<claim_id>/report', methods=['GET'])
 def get_claim_report(claim_id):
-    # Retrieve the report from the filesystem
     for root, dirs, files in os.walk(SAVED_JOBS_DIR):
         if f"{claim_id}.txt" in files:
             with open(os.path.join(root, f"{claim_id}.txt"), 'r') as f:
-                report = f.read()
-            return jsonify({"claim_id": claim_id, "report": report}), 200
+                claim_data = json.load(f)
+            return jsonify({
+                "claim_id": claim_id,
+                "text": claim_data.get('text', ''),
+                "status": claim_data.get('status', ''),
+                "report": json.loads(claim_data.get('additional_info', '{}'))
+            }), 200
     return jsonify({"error": "Claim not found"}), 404
 
 @api.route('/api/v1/batch', methods=['POST'])

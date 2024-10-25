@@ -54,6 +54,7 @@ class ClaimProcessor:
             if paper_content:
                 relevance, excerpts = self.paper_analyzer.analyze_relevance_and_extract(paper_content, claim)
                 if relevance > 0:
+                    print("Paper is relevant: ", paper.title)
                     paper_score = self.evidence_scorer.calculate_paper_weight(paper)
                     processed_papers.append({
                         'paper': paper,
@@ -61,12 +62,22 @@ class ClaimProcessor:
                         'excerpts': excerpts,
                         'score': paper_score
                     })
+                else:
+                    print("Paper is not relevant: ", paper.title)
 
         self.update_claim_status(batch_id, claim_id, "generating_report")
+
+        # Print the processed papers
+        print("Processed papers: ", processed_papers)
+
         # Generate final report
-        claim.report = self.generate_final_report(claim, processed_papers)
-        claim.status = 'processed'
-        self.update_claim_status(batch_id, claim_id, "processed", json.dumps(claim.report))
+        if processed_papers:
+            claim.report = self.generate_final_report(claim, processed_papers)
+            claim.status = 'processed'
+            self.update_claim_status(batch_id, claim_id, "processed", json.dumps(claim.report))
+        else:
+            claim.status = 'processed'
+            self.update_claim_status(batch_id, claim_id, "processed", "No relevant papers found")
         return claim
 
     def update_claim_status(self, batch_id: str, claim_id: str, status: str, additional_info: str = "", suggested_claim: str = ""):
@@ -133,7 +144,9 @@ class ClaimProcessor:
     def generate_final_report(self, claim: Claim, processed_papers: List[dict]) -> dict:
         # Prepare input for the LLM
         paper_summaries = "\n".join([
-            f"Paper: {p['paper'].title}\nRelevance: {p['relevance']}\nScore: {p['score']}\nExcerpts: {p['excerpts']}"
+            f"Paper: {p['paper'].title}\n"
+            f"Authors: {', '.join([f'{author['name']} (H-index: {self.evidence_scorer.get_author_h_index(author)})' for author in p['paper'].authors])}\n"
+            f"Relevance: {p['relevance']}\nScore: {p['score']}\nExcerpts: {p['excerpts']}"
             for p in processed_papers
         ])
         
@@ -148,26 +161,40 @@ class ClaimProcessor:
 
         system_prompt = dedent("""
         You are an AI assistant tasked with evaluating scientific claims based on evidence from papers.
-        First, generate a list of supporting papers with their details and relevant excerpts.
-        Then, provide an explanation in a three-paragraph essay format.
-        Finally, assign a claim rating between -10 (unsupported) and 10 (universally supported).
+        Provide an explanation in an essay format, including specific references to the scientific papers. The essay should have a paragraph highlighting supporting evidence, a paragraph highlighting caveats or contradictions, and then an analysis of which of these outweighs the other and how strongly the claim is supported. Assign a claim rating between -10 (unsupported) and 10 (universally supported).
 
-        The JSON report should have the following structure:
-        {{
-            "supportingPapers": [
-                {{
-                    "title": <paper title>,
-                    "authors": <list of authors>,
-                    "link": <paper URL>,
-                    "relevance": <relevance score>,
-                    "excerpts": <relevant excerpts>
-                }},
-                ...
-            ],
-            "explanation": <three paragraph essay explaining the rating>,
+        The JSON response should have the following structure:
+        {
+            "explanation": <str containing a short essay explaining the rating>,
             "claimRating": <int between -10 and 10>
-        }}
+        }
         """).strip()
 
         response = self.openai_service.generate_json(prompt, system_prompt=system_prompt)
-        return response
+
+        # Construct the supporting papers data from processed_papers
+        supporting_papers = [
+            {
+                "title": p['paper'].title,
+                "authors": [
+                    {
+                        "name": author['name'],
+                        "hIndex": self.evidence_scorer.get_author_h_index(author)
+                    }
+                    for author in p['paper'].authors
+                ],
+                "link": p['paper'].url,
+                "relevance": p['relevance'],
+                "excerpts": p['excerpts']
+            }
+            for p in processed_papers
+        ]
+
+        # Combine the LLM response with the supporting papers data
+        final_report = {
+            "supportingPapers": supporting_papers,
+            "explanation": response['explanation'],
+            "claimRating": response['claimRating']
+        }
+
+        return final_report

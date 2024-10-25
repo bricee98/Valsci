@@ -15,7 +15,8 @@ class OpenAIService:
         
         response = self.client.chat.completions.create(
             model=model,
-            messages=messages
+            messages=messages,
+            temperature=0.0
         )
         return response.choices[0].message.content
 
@@ -28,7 +29,8 @@ class OpenAIService:
         response = self.client.chat.completions.create(
             model=model,
             messages=messages,
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
+            temperature=0.0
         )
         
         return json.loads(response.choices[0].message.content)

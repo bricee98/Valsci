@@ -31,6 +31,10 @@ class EvidenceScorer:
         
         normalized_h_index = min(max_h_index / 50, 1)
         normalized_impact_factor = min(impact_factor / 20, 1)
+
+        print("Normalized h-index: ", normalized_h_index)
+        print("Normalized impact factor: ", normalized_impact_factor)
+        print("Weight: ", (normalized_h_index + normalized_impact_factor) / 2)
         
         return (normalized_h_index + normalized_impact_factor) / 2
 
@@ -63,7 +67,7 @@ class EvidenceScorer:
                     time.sleep(wait_time)
                     continue
                 
-                time.sleep(3)  # Wait 3 seconds between requests
+                time.sleep(0.1)  # Wait 0.1 seconds between requests
                 return response
             except RequestException as e:
                 if attempt == max_retries - 1:

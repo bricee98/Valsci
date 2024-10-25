@@ -166,6 +166,7 @@ env_vars.json
 ex_*
 
 validation_system/saved_jobs/*
-papers/*
+papers/
+cookies/
 
 *.pdf
