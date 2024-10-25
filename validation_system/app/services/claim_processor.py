@@ -1,0 +1,173 @@
+from typing import List, Union
+import pandas as pd
+from app.models.claim import Claim
+from app.models.batch_job import BatchJob
+from app.services.literature_searcher import LiteratureSearcher
+from app.services.paper_analyzer import PaperAnalyzer
+from app.services.evidence_scorer import EvidenceScorer
+from app.services.openai_service import OpenAIService
+import os
+import json
+import time
+from textwrap import dedent
+
+class ClaimProcessor:
+    def __init__(self):
+        self.literature_searcher = LiteratureSearcher()
+        self.paper_analyzer = PaperAnalyzer()
+        self.evidence_scorer = EvidenceScorer()
+        self.openai_service = OpenAIService()
+
+    def process_claim(self, claim: Claim, batch_id: str, claim_id: str) -> Claim:
+        # Validate the claim
+        validation_result = self.validate_claim_format(claim.text)
+        if not validation_result['is_valid']:
+            claim.status = 'invalid'
+            claim.validation_message = validation_result['explanation']
+            self.update_claim_status(batch_id, claim_id, "invalid", claim.validation_message, validation_result['suggested'])
+            return claim
+
+        # If the claim is valid, update with the suggested claim
+        self.update_claim_status(batch_id, claim_id, "validating", suggested_claim=validation_result['suggested'])
+        
+        # Search for relevant papers
+        relevant_papers = self.literature_searcher.search_papers(claim)
+
+        # Check if no results were found
+        if not relevant_papers:
+            claim.status = 'processed'
+            claim.report = {
+                "supportingPapers": [],
+                "explanation": "No relevant papers were found for this claim.",
+                "claimRating": 0
+            }
+            self.update_claim_status(batch_id, claim_id, "processed", json.dumps(claim.report))
+            return claim
+
+        self.update_claim_status(batch_id, claim_id, "analyzing_papers")
+        # Process the top 50 papers
+        processed_papers = []
+        for i, paper in enumerate(relevant_papers[:50]):
+            self.update_claim_status(batch_id, claim_id, f"analyzing_paper_{i+1}_of_50")
+            time.sleep(1)
+            paper_content = self.literature_searcher.fetch_paper_content(paper)
+            if paper_content:
+                relevance, excerpts = self.paper_analyzer.analyze_relevance_and_extract(paper_content, claim)
+                if relevance > 0:
+                    paper_score = self.evidence_scorer.calculate_paper_weight(paper)
+                    processed_papers.append({
+                        'paper': paper,
+                        'relevance': relevance,
+                        'excerpts': excerpts,
+                        'score': paper_score
+                    })
+
+        self.update_claim_status(batch_id, claim_id, "generating_report")
+        # Generate final report
+        claim.report = self.generate_final_report(claim, processed_papers)
+        claim.status = 'processed'
+        self.update_claim_status(batch_id, claim_id, "processed", json.dumps(claim.report))
+        return claim
+
+    def update_claim_status(self, batch_id: str, claim_id: str, status: str, additional_info: str = "", suggested_claim: str = ""):
+        file_path = os.path.join('saved_jobs', batch_id, f"{claim_id}.txt")
+        with open(file_path, 'r+') as f:
+            content = json.load(f)
+            content['status'] = status
+            if additional_info:
+                content['additional_info'] = additional_info
+            if suggested_claim:
+                content['suggested_claim'] = suggested_claim
+            f.seek(0)
+            json.dump(content, f, indent=2)
+            f.truncate()
+
+    def process_batch(self, batch_job: BatchJob) -> BatchJob:
+        for claim in batch_job.claims:
+            self.process_claim(claim, batch_job.id, claim.id)
+        batch_job.status = 'processed'
+        return batch_job
+
+    def parse_claims(self, input_data: Union[str, pd.DataFrame]) -> List[Claim]:
+        if isinstance(input_data, str):
+            return [Claim(text=input_data)]
+        elif isinstance(input_data, pd.DataFrame):
+            return [Claim(text=row['claim']) for _, row in input_data.iterrows()]
+        else:
+            raise ValueError("Invalid input type. Expected string or DataFrame.")
+
+    def validate_claim_format(self, claim: str) -> dict:
+        prompt = f"Evaluate if the following is a valid scientific claim and suggest an optimized version for search:\n\n{claim}"
+        system_prompt = dedent("""
+        You are an AI assistant tasked with evaluating scientific claims and optimizing them for search. 
+        Respond with a JSON object containing 'is_valid' (boolean), 'explanation' (string), and 'suggested' (string).
+        The 'is_valid' field should be true if the input is a proper scientific claim, and false otherwise. 
+        The 'explanation' field should provide a brief reason for your decision.
+        The 'suggested' field should always contain an optimized version of the claim for searching on Semantic Scholar, 
+        even if the original claim is invalid. For invalid claims, provide a corrected or improved version.
+
+        Examples of valid scientific claims (note: these may or may not be true, but they are properly formed claims):
+         1. "Increased consumption of processed foods is linked to higher rates of obesity in urban populations."
+         2. "The presence of certain gut bacteria can influence mood and cognitive function in humans."
+         3. "Exposure to blue light from electronic devices before bedtime disrupts the circadian rhythm."
+         4. "Regular meditation practice can lead to structural changes in the brain's gray matter."
+         5. "Higher levels of atmospheric CO2 are causing an increase in global average temperatures."
+         6. "Calcium channels are affected by MS."
+
+        Examples of non-claims (these are not valid scientific claims):
+         1. "The sky is beautiful." (This is an opinion, not a testable claim)
+         2. "What is the effect of exercise on heart health?" (This is a question, not a claim)
+         3. "Scientists should study climate change more." (This is a recommendation, not a claim)
+         4. "Drink more water!" (This is a command, not a claim)
+
+        Reject claims that include ambiguous abbreviations or shorthand. Remember, a valid scientific claim should be a specific, testable assertion about a phenomenon or relationship between variables.
+
+        For the 'suggested' field, focus on using clear, concise language with relevant scientific terms that would be 
+        likely to appear in academic papers. Avoid colloquialisms and ensure the suggested version maintains the 
+        original meaning while being more search-friendly.
+        """).strip()
+        
+        response = self.openai_service.generate_json(prompt, system_prompt=system_prompt)
+        return response
+
+    def generate_final_report(self, claim: Claim, processed_papers: List[dict]) -> dict:
+        # Prepare input for the LLM
+        paper_summaries = "\n".join([
+            f"Paper: {p['paper'].title}\nRelevance: {p['relevance']}\nScore: {p['score']}\nExcerpts: {p['excerpts']}"
+            for p in processed_papers
+        ])
+        
+        prompt = dedent(f"""
+        Evaluate the following claim based on the provided evidence from scientific papers:
+
+        Claim: {claim.text}
+
+        Evidence:
+        {paper_summaries}
+        """).strip()
+
+        system_prompt = dedent("""
+        You are an AI assistant tasked with evaluating scientific claims based on evidence from papers.
+        First, generate a list of supporting papers with their details and relevant excerpts.
+        Then, provide an explanation in a three-paragraph essay format.
+        Finally, assign a claim rating between -10 (unsupported) and 10 (universally supported).
+
+        The JSON report should have the following structure:
+        {{
+            "supportingPapers": [
+                {{
+                    "title": <paper title>,
+                    "authors": <list of authors>,
+                    "link": <paper URL>,
+                    "relevance": <relevance score>,
+                    "excerpts": <relevant excerpts>
+                }},
+                ...
+            ],
+            "explanation": <three paragraph essay explaining the rating>,
+            "claimRating": <int between -10 and 10>
+        }}
+        """).strip()
+
+        response = self.openai_service.generate_json(prompt, system_prompt=system_prompt)
+        return response

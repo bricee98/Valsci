@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Processing Claims</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <h1>Processing Claims</h1>
+    <p>Your claims are being processed. Here are your reference IDs:</p>
+    <ul id="referenceList"></ul>
+    <div id="statusContainer"></div>
+    <div id="suggestedClaimContainer"></div>
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const claimId = urlParams.get('claim_id');
+        const batchId = urlParams.get('batch_id');
+        const referenceList = document.getElementById('referenceList');
+        const statusContainer = document.getElementById('statusContainer');
+        const suggestedClaimContainer = document.getElementById('suggestedClaimContainer');
+
+        function addReferenceId(type, id) {
+            const li = document.createElement('li');
+            li.textContent = `${type}: ${id}`;
+            referenceList.appendChild(li);
+        }
+
+        if (claimId) {
+            addReferenceId('Claim ID', claimId);
+        }
+
+        if (batchId) {
+            addReferenceId('Batch Job ID', batchId);
+        }
+
+        function updateStatus() {
+            const endpoint = claimId ? `/api/v1/claims/${claimId}` : `/api/v1/batch/${batchId}`;
+            fetch(endpoint)
+                .then(response => response.json())
+                .then(data => {
+                    statusContainer.innerHTML = `
+                        <h2>Current Status: ${data.status}</h2>
+                        <p>${data.additional_info || ''}</p>
+                    `;
+
+                    if (data.suggested_claim) {
+                        suggestedClaimContainer.innerHTML = `
+                            <h3>Suggested Claim:</h3>
+                            <p>${data.suggested_claim}</p>
+                        `;
+                    }
+
+                    if (data.status === 'processed') {
+                        setTimeout(() => {
+                            window.location.href = claimId ? `/results?claim_id=${claimId}` : `/results?batch_id=${batchId}`;
+                        }, 2000); // Redirect after 2 seconds
+                    } else {
+                        setTimeout(updateStatus, 5000); // Check again in 5 seconds
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching status:', error);
+                    statusContainer.innerHTML = '<p>Error fetching status. Please try again later.</p>';
+                });
+        }
+
+        updateStatus(); // Start checking status immediately
+    </script>
+</body>
+</html>

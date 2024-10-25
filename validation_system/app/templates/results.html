@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Claim Report</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <h1>Claim Report</h1>
+    <div id="reportContent"></div>
+    <button id="downloadReport">Download Report</button>
+    <script>
+        // Example script to fetch and display the report
+        const urlParams = new URLSearchParams(window.location.search);
+        const claimId = urlParams.get('claim_id');
+        const reportContent = document.getElementById('reportContent');
+
+        if (claimId) {
+            fetch(`/api/v1/claims/${claimId}/report`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.report) {
+                        reportContent.textContent = data.report;
+                    } else {
+                        reportContent.textContent = 'Report not found.';
+                    }
+                });
+        }
+
+        document.getElementById('downloadReport').addEventListener('click', function() {
+            if (claimId) {
+                window.location.href = `/api/v1/batch/${claimId}/download`;
+            }
+        });
+    </script>
+</body>
+</html>
