@@ -52,7 +52,7 @@ class ClaimProcessor:
             time.sleep(1)
             paper_content = self.literature_searcher.fetch_paper_content(paper)
             if paper_content:
-                relevance, excerpts = self.paper_analyzer.analyze_relevance_and_extract(paper_content, claim)
+                relevance, excerpts, explanation = self.paper_analyzer.analyze_relevance_and_extract(paper_content, claim)
                 if relevance > 0:
                     print("Paper is relevant: ", paper.title)
                     paper_score = self.evidence_scorer.calculate_paper_weight(paper)
@@ -60,7 +60,8 @@ class ClaimProcessor:
                         'paper': paper,
                         'relevance': relevance,
                         'excerpts': excerpts,
-                        'score': paper_score
+                        'score': paper_score,
+                        'explanation': explanation
                     })
                 else:
                     print("Paper is not relevant: ", paper.title)
@@ -185,7 +186,8 @@ class ClaimProcessor:
                 ],
                 "link": p['paper'].url,
                 "relevance": p['relevance'],
-                "excerpts": p['excerpts']
+                "excerpts": p['excerpts'],
+                "explanation": p['explanation']
             }
             for p in processed_papers
         ]

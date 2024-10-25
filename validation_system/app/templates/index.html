@@ -7,22 +7,24 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
-    <h1>Valsci - Claim Validation Service</h1>
-    <form id="claimForm">
-        <label for="claimText">Enter a Claim:</label>
-        <input type="text" id="claimText" name="claimText">
-        <button type="submit">Submit Claim</button>
-    </form>
-    <form id="fileForm" enctype="multipart/form-data">
-        <label for="claimFile">Upload Claims File:</label>
-        <input type="file" id="claimFile" name="claimFile" accept=".txt">
-        <button type="submit">Submit File</button>
-    </form>
-    <form id="referenceForm">
-        <label for="claimReferenceID">Enter Claim Reference ID:</label>
-        <input type="text" id="claimReferenceID" name="claimReferenceID">
-        <button type="submit">Check Status</button>
-    </form>
+    <div class="container">
+        <h1>Valsci</h1>
+        <form id="claimForm">
+            <label for="claimText">Enter a Claim:</label>
+            <input type="text" id="claimText" name="claimText" placeholder="Type your claim here...">
+            <button type="submit">Submit Claim</button>
+        </form>
+        <form id="fileForm" enctype="multipart/form-data">
+            <label for="claimFile">Upload Claims File:</label>
+            <input type="file" id="claimFile" name="claimFile" accept=".txt">
+            <button type="submit">Submit File</button>
+        </form>
+        <form id="referenceForm">
+            <label for="claimReferenceID">Enter Claim Reference ID:</label>
+            <input type="text" id="claimReferenceID" name="claimReferenceID" placeholder="Enter reference ID...">
+            <button type="submit">Check Status</button>
+        </form>
+    </div>
     <script src="{{ url_for('static', filename='scripts.js') }}"></script>
 </body>
 </html>

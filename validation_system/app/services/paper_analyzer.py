@@ -35,4 +35,4 @@ class PaperAnalyzer:
         print("Result: ", result)
         print("Excerpts: ", result['excerpts'])
         
-        return result['relevance'], result['excerpts']
+        return result['relevance'], result['excerpts'], result['explanation']

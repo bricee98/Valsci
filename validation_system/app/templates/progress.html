@@ -7,11 +7,13 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
-    <h1>Processing Claims</h1>
-    <p>Your claims are being processed. Here are your reference IDs:</p>
-    <ul id="referenceList"></ul>
-    <div id="statusContainer"></div>
-    <div id="suggestedClaimContainer"></div>
+    <div class="container">
+        <h1>Processing Claims</h1>
+        <p>Your claims are being processed. Here are your reference IDs:</p>
+        <ul id="referenceList"></ul>
+        <div id="statusContainer"></div>
+        <div id="suggestedClaimContainer"></div>
+    </div>
     <script>
         const urlParams = new URLSearchParams(window.location.search);
         const claimId = urlParams.get('claim_id');
@@ -44,11 +46,13 @@
                         <p>${data.additional_info || ''}</p>
                     `;
 
-                    if (data.suggested_claim) {
+                    if (data.status === 'invalid' && data.suggested_claim) {
                         suggestedClaimContainer.innerHTML = `
                             <h3>Suggested Claim:</h3>
                             <p>${data.suggested_claim}</p>
                         `;
+                    } else {
+                        suggestedClaimContainer.innerHTML = ''; // Clear the container if status is not 'invalid'
                     }
 
                     if (data.status === 'processed') {

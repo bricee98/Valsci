@@ -7,9 +7,11 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
-    <h1>Claim Report</h1>
-    <div id="reportContent"></div>
-    <button id="downloadReport">Download Report</button>
+    <div class="container">
+        <h1>Claim Report</h1>
+        <div id="reportContent"></div>
+        <button id="downloadReport">Download Report</button>
+    </div>
     <script>
         const urlParams = new URLSearchParams(window.location.search);
         const claimId = urlParams.get('claim_id');
@@ -18,6 +20,12 @@
         function displayReport(data) {
             let html = `
                 <h2>Claim: ${data.text}</h2>
+                <div class="claim-rating">
+                    <h3>Claim Rating:</h3>
+                    <div class="rating-value">${data.report.claimRating}</div>
+                </div>
+                <h3>Explanation:</h3>
+                <p>${data.report.explanation}</p>
                 <p><strong>Status:</strong> ${data.status}</p>
                 <h3>Supporting Papers:</h3>
                 <ul>
@@ -30,6 +38,7 @@
                         <p><strong>Authors:</strong> ${paper.authors.map(author => `${author.name} (H-index: ${author.hIndex})`).join(', ')}</p>
                         <p><strong>Relevance:</strong> ${paper.relevance}</p>
                         <p><strong>Excerpts:</strong> ${paper.excerpts}</p>
+                        <p><strong>Explanation:</strong> ${paper.explanation}</p>
                         <p><a href="${paper.link}" target="_blank">Read Paper</a></p>
                     </li>
                 `;
@@ -37,10 +46,6 @@
 
             html += `
                 </ul>
-                <h3>Explanation:</h3>
-                <p>${data.report.explanation}</p>
-                <h3>Claim Rating:</h3>
-                <p>${data.report.claimRating}</p>
             `;
 
             reportContent.innerHTML = html;
