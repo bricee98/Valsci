@@ -32,7 +32,10 @@ class PaperAnalyzer:
         
         result = self.openai_service.generate_json(user_prompt, system_prompt)
 
+        if 'error' in result:
+            return 0, [], []
+
         print("Result: ", result)
         print("Excerpts: ", result['excerpts'])
         
-        return result['relevance'], result['excerpts'], result['explanation']
+        return result['relevance'], result['excerpts'], result['explanations']

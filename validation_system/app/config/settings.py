@@ -22,8 +22,20 @@ class Config:
     USER_EMAIL = env_vars.get('USER_EMAIL')
     FETCH_ABSTRACTS = True  # Set this to False if you don't want to fetch abstracts
 
+    # Azure OpenAI configuration
+    AZURE_OPENAI_API_KEY = env_vars.get('AZURE_OPENAI_API_KEY')
+    AZURE_OPENAI_ENDPOINT = env_vars.get('AZURE_OPENAI_ENDPOINT')
+    AZURE_OPENAI_API_VERSION = env_vars.get('AZURE_OPENAI_API_VERSION', '2024-06-01')
+    USE_AZURE_OPENAI = env_vars.get('USE_AZURE_OPENAI', 'false').lower() == 'true'
+
     @classmethod
     def validate_config(cls):
-        missing_keys = [key for key, value in vars(cls).items() if not key.startswith('__') and value is None]
+        required_keys = ['SECRET_KEY', 'SEMANTIC_SCHOLAR_API_KEY', 'USER_EMAIL']
+        if cls.USE_AZURE_OPENAI:
+            required_keys.extend(['AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_ENDPOINT'])
+        else:
+            required_keys.append('OPENAI_API_KEY')
+
+        missing_keys = [key for key in required_keys if getattr(cls, key) is None]
         if missing_keys:
             raise ValueError(f"Missing required configuration keys: {', '.join(missing_keys)}")

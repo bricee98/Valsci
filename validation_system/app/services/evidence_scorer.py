@@ -17,6 +17,7 @@ class EvidenceScorer:
     def __init__(self):
         self.openai_service = OpenAIService()
         self.email = Config.USER_EMAIL
+        self.author_h_indices = {}  # New dictionary to store h-indices
 
     def calculate_paper_weight(self, paper: Paper) -> float:
         print("There are ", len(paper.authors), " authors")
@@ -85,6 +86,11 @@ class EvidenceScorer:
             logger.warning(f"No author ID found for {author.get('name')}. Returning h-index of 0.")
             return 0
 
+        # Check if we've already looked up this author's h-index
+        if author_id in self.author_h_indices:
+            logger.info(f"Retrieved cached h-index for author {author.get('name')}: {self.author_h_indices[author_id]}")
+            return self.author_h_indices[author_id]
+
         url = f"https://api.openalex.org/authors/{author_id}"
         params = {"select": "summary_stats"}
         response = self.make_api_request(url, params=params)
@@ -93,6 +99,8 @@ class EvidenceScorer:
             data = response.json()
             h_index = data.get('summary_stats', {}).get('h_index', 0)
             logger.info(f"Retrieved h-index for author {author.get('name')}: {h_index}")
+            # Store the h-index for future use
+            self.author_h_indices[author_id] = h_index
             return h_index
         else:
             logger.warning(f"Failed to retrieve h-index for author {author.get('name')}. Returning 0.")

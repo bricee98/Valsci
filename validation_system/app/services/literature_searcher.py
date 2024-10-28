@@ -66,7 +66,7 @@ class LiteratureSearcher:
         self.pdf_session.mount('https://', HTTPAdapter(max_retries=retries))
         self.pdf_session.mount('http://', HTTPAdapter(max_retries=retries))
 
-    def make_api_request(self, url: str, params: dict = None, headers: dict = None, method: str = 'get', max_retries: int = 7) -> requests.Response:
+    def make_api_request(self, url: str, params: dict = None, headers: dict = None, method: str = 'get', max_retries: int = 3) -> requests.Response:
         if params is None:
             params = {}
         params['email'] = self.email
@@ -170,7 +170,7 @@ class LiteratureSearcher:
                 # Save cookies
                 self.session.cookies.save(ignore_discard=True, ignore_expires=True)
                 
-                time.sleep(random.uniform(0.5, 2))  # Random delay between requests
+                time.sleep(random.uniform(0.1, 0.4))  # Random delay between requests
 
                 return new_response
             except RequestException as e:
@@ -208,15 +208,37 @@ class LiteratureSearcher:
                 logger.warning(f"Empty response from {full_url}. Retrying in {wait_time:.2f} seconds...")
                 time.sleep(wait_time)
 
-    def generate_search_queries(self, claim: Claim) -> dict:
+    def analyze_claim(self, claim: Claim) -> str:
         system_prompt = dedent("""
-        You are SciSearchBot. Your job is to provide a list of 10 OpenAlex searches to help the user find papers most relevant to the claim that they are evaluating. Use your scientific knowledge to consider the systems, processes, and concepts involved to develop a robust search for academic literature. Return JSON with two attributes: 'explanation', which should be a string explaining your reasoning for choosing these queries, and 'search_queries', which is a list of strings containing each query to be searched.
+        You are an expert scientific analyst. Your task is to analyze the given claim and provide potential rationale or evidence that could support or refute it. Consider various aspects such as biological mechanisms, known associations, and potential research areas. Provide a detailed analysis without generating specific search queries.
         """).strip()
 
-        user_message = f"Claim: {claim.text}"
+        user_message = f"Analyze the following claim and provide potential supporting or refuting evidence: {claim.text}"
+
+        response = self.openai_service.generate_text(user_message, system_prompt=system_prompt)
+        return response
+
+    def generate_search_queries_from_analysis(self, claim: Claim, analysis: str) -> List[str]:
+        system_prompt = dedent("""
+        You are SciSearchBot, an expert in generating academic search queries. Based on the given claim and its analysis, provide a list of 10 search queries for OpenAlex to find relevant academic papers. These queries should help investigate the claims made in the analysis and explore related concepts. Return a JSON object with a single key 'queries' containing a list of search query strings.
+        """).strip()
+
+        user_message = f"Claim: {claim.text}\n\nAnalysis: {analysis}\n\nGenerate 10 search queries to investigate this claim and analysis using OpenAlex."
 
         response = self.openai_service.generate_json(user_message, system_prompt=system_prompt)
-        return response
+        return response.get('queries', [])
+
+    def generate_search_queries(self, claim: Claim) -> dict:
+        # Step 1: Analyze the claim
+        analysis = self.analyze_claim(claim)
+
+        # Step 2: Generate search queries based on the analysis
+        search_queries = self.generate_search_queries_from_analysis(claim, analysis)
+
+        return {
+            'explanation': analysis,
+            'search_queries': search_queries
+        }
 
     def search_papers(self, claim: Claim) -> List[Paper]:
         # Generate search queries using OpenAI
@@ -404,8 +426,8 @@ class LiteratureSearcher:
             return result[0]
 
         try:
-            # Try pymupdf4llm first with a 90-second timeout
-            full_text = extract_with_timeout(90)
+            # Try pymupdf4llm first with a 45-second timeout
+            full_text = extract_with_timeout(45)
 
             if full_text:
                 logger.info(f"Successfully extracted text from {pdf_path} using pymupdf4llm")

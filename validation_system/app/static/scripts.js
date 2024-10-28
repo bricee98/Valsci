@@ -1,38 +1,66 @@
-document.getElementById('claimForm').addEventListener('submit', function(event) {
-    event.preventDefault();
-    const claimText = document.getElementById('claimText').value;
-    fetch('/api/v1/claims', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: claimText })
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.claim_id) {
+document.addEventListener('DOMContentLoaded', function() {
+    const claimForm = document.getElementById('claimForm');
+    const fileForm = document.getElementById('fileForm');
+    const referenceForm = document.getElementById('referenceForm');
+
+    claimForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        const claimText = document.getElementById('claimText').value;
+        submitClaim(claimText);
+    });
+
+    fileForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        const fileInput = document.getElementById('claimFile');
+        const file = fileInput.files[0];
+        if (file) {
+            submitFile(file);
+        } else {
+            alert('Please select a file to upload.');
+        }
+    });
+
+    referenceForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        const referenceID = document.getElementById('claimReferenceID').value;
+        checkStatus(referenceID);
+    });
+
+    function submitClaim(claimText) {
+        fetch('/api/v1/claims', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ text: claimText }),
+        })
+        .then(response => response.json())
+        .then(data => {
             window.location.href = `/progress?claim_id=${data.claim_id}`;
-        }
-    });
-});
+        })
+        .catch((error) => {
+            console.error('Error:', error);
+        });
+    }
 
-document.getElementById('fileForm').addEventListener('submit', function(event) {
-    event.preventDefault();
-    const fileInput = document.getElementById('claimFile');
-    const formData = new FormData();
-    formData.append('file', fileInput.files[0]);
-    fetch('/api/v1/batch', {
-        method: 'POST',
-        body: formData
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.job_id) {
-            window.location.href = `/progress?job_id=${data.job_id}`;
-        }
-    });
-});
+    function submitFile(file) {
+        const formData = new FormData();
+        formData.append('file', file);
 
-document.getElementById('referenceForm').addEventListener('submit', function(event) {
-    event.preventDefault();
-    const claimReferenceID = document.getElementById('claimReferenceID').value;
-    window.location.href = `/results?claim_id=${claimReferenceID}`;
+        fetch('/api/v1/batch', {
+            method: 'POST',
+            body: formData,
+        })
+        .then(response => response.json())
+        .then(data => {
+            window.location.href = `/progress?batch_id=${data.batch_id}`;
+        })
+        .catch((error) => {
+            console.error('Error:', error);
+        });
+    }
+
+    function checkStatus(referenceID) {
+        window.location.href = `/progress?${referenceID.length === 8 ? 'claim_id' : 'batch_id'}=${referenceID}`;
+    }
 });

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Batch Results</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>Batch Results</h1>
+        <button id="deleteBatchButton">Delete Batch</button>
+        <table id="resultsTable">
+            <thead>
+                <tr>
+                    <th>Claim</th>
+                    <th>Status</th>
+                    <th>Rating</th>
+                    <th>Price</th>
+                    <th>Report</th>
+                </tr>
+            </thead>
+            <tbody id="resultsBody">
+            </tbody>
+        </table>
+        <div id="totalPrice"></div>
+    </div>
+    <script>
+        const batchId = '{{ batch_id }}';
+        const resultsBody = document.getElementById('resultsBody');
+        const totalPriceDiv = document.getElementById('totalPrice');
+        let totalBatchPrice = 0;
+
+        function loadBatchResults() {
+            fetch(`/api/v1/batch/${batchId}`)
+                .then(response => response.json())
+                .then(data => {
+                    data.claims.forEach(claim => {
+                        const row = document.createElement('tr');
+                        let report = 'N/A';
+                        let rating = 'N/A';
+                        let price = 'N/A';
+                        if (claim.status !== 'Error') {
+                            try {
+                                const reportData = JSON.parse(claim.additional_info);
+                                rating = reportData.claimRating || 'N/A';
+                                price = reportData.usage_stats ? `$${reportData.usage_stats.total_cost.toFixed(4)}` : 'N/A';
+                                report = `<a href="/results?claim_id=${claim.claim_id}">View Report</a>`;
+                                
+                                if (reportData.usage_stats && reportData.usage_stats.total_cost) {
+                                    totalBatchPrice += reportData.usage_stats.total_cost;
+                                }
+                            } catch (e) {
+                                console.error('Error parsing report:', e);
+                            }
+                        }
+                        row.innerHTML = `
+                            <td data-label="Claim">${claim.text || 'N/A'}</td>
+                            <td data-label="Status">${claim.status}</td>
+                            <td data-label="Rating">${rating}</td>
+                            <td data-label="Price">${price}</td>
+                            <td data-label="Report">${claim.status === 'Error' ? claim.additional_info : report}</td>
+                        `;
+                        resultsBody.appendChild(row);
+                    });
+                    
+                    // Display total batch price
+                    totalPriceDiv.innerHTML = `<h3>Total Batch Price: $${totalBatchPrice.toFixed(4)}</h3>`;
+                })
+                .catch(error => {
+                    console.error('Error fetching batch results:', error);
+                    resultsBody.innerHTML = '<tr><td colspan="5">Error fetching batch results. Please try again later.</td></tr>';
+                });
+        }
+
+        loadBatchResults();
+
+        document.getElementById('deleteBatchButton').addEventListener('click', function() {
+            if (confirm('Are you sure you want to delete this batch?')) {
+                fetch(`/api/v1/delete/batch/${batchId}`, { method: 'DELETE' })
+                    .then(response => response.json())
+                    .then(data => {
+                        alert(data.message);
+                        window.location.href = '/browser';
+                    })
+                    .catch(error => {
+                        console.error('Error deleting batch:', error);
+                        alert('Error deleting batch. Please try again.');
+                    });
+            }
+        });
+    </script>
+</body>
+</html>

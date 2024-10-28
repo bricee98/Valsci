@@ -10,7 +10,9 @@
     <div class="container">
         <h1>Claim Report</h1>
         <div id="reportContent"></div>
+        <div id="usageStats"></div>
         <button id="downloadReport">Download Report</button>
+        <button id="deleteClaimButton">Delete Claim</button>
     </div>
     <script>
         const urlParams = new URLSearchParams(window.location.search);
@@ -25,7 +27,7 @@
                     <div class="rating-value">${data.report.claimRating}</div>
                 </div>
                 <h3>Explanation:</h3>
-                <p>${data.report.explanation}</p>
+                <p style="white-space: pre-line;">${data.report.explanation}</p>
                 <p><strong>Status:</strong> ${data.status}</p>
                 <h3>Supporting Papers:</h3>
                 <ul>
@@ -37,8 +39,16 @@
                         <h4>${paper.title}</h4>
                         <p><strong>Authors:</strong> ${paper.authors.map(author => `${author.name} (H-index: ${author.hIndex})`).join(', ')}</p>
                         <p><strong>Relevance:</strong> ${paper.relevance}</p>
-                        <p><strong>Excerpts:</strong> ${paper.excerpts}</p>
-                        <p><strong>Explanation:</strong> ${paper.explanation}</p>
+                        <p><strong>Excerpts:</strong></p>
+                        ${Array.isArray(paper.excerpts) 
+                            ? `<ul>${paper.excerpts.map(excerpt => `<li>${excerpt}</li>`).join('')}</ul>`
+                            : `<p>${paper.excerpts}</p>`
+                        }
+                        <p><strong>Explanation:</strong></p>
+                        ${Array.isArray(paper.explanations) 
+                            ? `<ul>${paper.explanations.map(explanation => `<li>${explanation}</li>`).join('')}</ul>`
+                            : `<p>${paper.explanations}</p>`
+                        }
                         <p><a href="${paper.link}" target="_blank">Read Paper</a></p>
                     </li>
                 `;
@@ -47,6 +57,16 @@
             html += `
                 </ul>
             `;
+
+            // Add usage stats
+            const usageStatsHtml = `
+                <h3>OpenAI API Usage:</h3>
+                <p>Prompt Tokens: ${data.report.usage_stats.prompt_tokens}</p>
+                <p>Completion Tokens: ${data.report.usage_stats.completion_tokens}</p>
+                <p>Total Tokens: ${data.report.usage_stats.total_tokens}</p>
+                <p>Estimated Cost: $${data.report.usage_stats.total_cost.toFixed(4)}</p>
+            `;
+            document.getElementById('usageStats').innerHTML = usageStatsHtml;
 
             reportContent.innerHTML = html;
         }
@@ -66,6 +86,21 @@
         document.getElementById('downloadReport').addEventListener('click', function() {
             if (claimId) {
                 window.location.href = `/api/v1/batch/${claimId}/download`;
+            }
+        });
+
+        document.getElementById('deleteClaimButton').addEventListener('click', function() {
+            if (confirm('Are you sure you want to delete this claim?')) {
+                fetch(`/api/v1/delete/claim/${claimId}`, { method: 'DELETE' })
+                    .then(response => response.json())
+                    .then(data => {
+                        alert(data.message);
+                        window.location.href = '/browser';
+                    })
+                    .catch(error => {
+                        console.error('Error deleting claim:', error);
+                        alert('Error deleting claim. Please try again.');
+                    });
             }
         });
     </script>

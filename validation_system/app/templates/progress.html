@@ -11,16 +11,20 @@
         <h1>Processing Claims</h1>
         <p>Your claims are being processed. Here are your reference IDs:</p>
         <ul id="referenceList"></ul>
-        <div id="statusContainer"></div>
+        <div id="claimStatusContainer"></div>
         <div id="suggestedClaimContainer"></div>
+        <div id="batchProgressContainer"></div>
+        <div id="currentClaimStatusContainer"></div>
     </div>
     <script>
         const urlParams = new URLSearchParams(window.location.search);
         const claimId = urlParams.get('claim_id');
         const batchId = urlParams.get('batch_id');
         const referenceList = document.getElementById('referenceList');
-        const statusContainer = document.getElementById('statusContainer');
+        const claimStatusContainer = document.getElementById('claimStatusContainer');
         const suggestedClaimContainer = document.getElementById('suggestedClaimContainer');
+        const batchProgressContainer = document.getElementById('batchProgressContainer');
+        const currentClaimStatusContainer = document.getElementById('currentClaimStatusContainer');
 
         function addReferenceId(type, id) {
             const li = document.createElement('li');
@@ -37,12 +41,20 @@
         }
 
         function updateStatus() {
-            const endpoint = claimId ? `/api/v1/claims/${claimId}` : `/api/v1/batch/${batchId}`;
-            fetch(endpoint)
+            if (claimId) {
+                updateClaimStatus();
+            }
+            if (batchId) {
+                updateBatchStatus();
+            }
+        }
+
+        function updateClaimStatus() {
+            fetch(`/api/v1/claims/${claimId}`)
                 .then(response => response.json())
                 .then(data => {
-                    statusContainer.innerHTML = `
-                        <h2>Current Status: ${data.status}</h2>
+                    claimStatusContainer.innerHTML = `
+                        <h2>Claim Status: ${data.status || 'Unknown'}</h2>
                         <p>${data.additional_info || ''}</p>
                     `;
 
@@ -52,24 +64,80 @@
                             <p>${data.suggested_claim}</p>
                         `;
                     } else {
-                        suggestedClaimContainer.innerHTML = ''; // Clear the container if status is not 'invalid'
+                        suggestedClaimContainer.innerHTML = '';
                     }
 
-                    if (data.status === 'processed') {
+                    if (data.status === 'processed' && !batchId) {
                         setTimeout(() => {
-                            window.location.href = claimId ? `/results?claim_id=${claimId}` : `/results?batch_id=${batchId}`;
-                        }, 2000); // Redirect after 2 seconds
+                            window.location.href = `/results?claim_id=${claimId}`;
+                        }, 2000);
                     } else {
-                        setTimeout(updateStatus, 5000); // Check again in 5 seconds
+                        setTimeout(updateStatus, 5000);
                     }
                 })
                 .catch(error => {
-                    console.error('Error fetching status:', error);
-                    statusContainer.innerHTML = '<p>Error fetching status. Please try again later.</p>';
+                    console.error('Error fetching claim status:', error);
+                    claimStatusContainer.innerHTML = '<p>Error fetching claim status. Please try again later.</p>';
                 });
         }
 
-        updateStatus(); // Start checking status immediately
+        function updateBatchStatus() {
+            fetch(`/api/v1/batch/${batchId}/progress`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Batch progress not available yet');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    const progress = (data.processed_claims / data.total_claims) * 100;
+                    batchProgressContainer.innerHTML = `
+                        <h2>Batch Progress</h2>
+                        <p>Processed ${data.processed_claims} out of ${data.total_claims} claims</p>
+                        <progress value="${data.processed_claims}" max="${data.total_claims}"></progress>
+                        <p>${progress.toFixed(2)}% complete</p>
+                    `;
+
+                    if (data.current_claim_id) {
+                        updateCurrentClaimStatus(data.current_claim_id);
+                    } else {
+                        currentClaimStatusContainer.innerHTML = '<p>Waiting to start next claim...</p>';
+                    }
+
+                    if (data.status === 'completed') {
+                        setTimeout(() => {
+                            window.location.href = `/batch_results?batch_id=${batchId}`;
+                        }, 2000);
+                    } else {
+                        setTimeout(updateStatus, 5000);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching batch status:', error);
+                    batchProgressContainer.innerHTML = '<p>Batch processing is initializing. Please wait...</p>';
+                    currentClaimStatusContainer.innerHTML = '';
+                    setTimeout(updateStatus, 5000);
+                });
+        }
+
+        function updateCurrentClaimStatus(currentClaimId) {
+            fetch(`/api/v1/claims/${currentClaimId}`)
+                .then(response => response.json())
+                .then(data => {
+                    currentClaimStatusContainer.innerHTML = `
+                        <h3>Current Claim Status:</h3>
+                        <p>Claim ID: ${currentClaimId}</p>
+                        <p>Status: ${data.status || 'Unknown'}</p>
+                        <p>${data.additional_info || ''}</p>
+                    `;
+                })
+                .catch(error => {
+                    console.error('Error fetching current claim status:', error);
+                    currentClaimStatusContainer.innerHTML = '<p>Error fetching current claim status.</p>';
+                });
+        }
+
+        updateStatus();
     </script>
 </body>
 </html>

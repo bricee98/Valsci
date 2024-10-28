@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Browse Batches and Claims</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>Browse Batches and Claims</h1>
+        <div class="search-container">
+            <input type="text" id="searchInput" placeholder="Search batches or claims...">
+            <button id="searchButton">Search</button>
+        </div>
+        <div id="batchesContainer"></div>
+    </div>
+    <script>
+        const searchInput = document.getElementById('searchInput');
+        const searchButton = document.getElementById('searchButton');
+        const batchesContainer = document.getElementById('batchesContainer');
+
+        function loadBatches(searchTerm = '') {
+            fetch(`/api/v1/browse?search=${encodeURIComponent(searchTerm)}`)
+                .then(response => response.json())
+                .then(data => {
+                    batchesContainer.innerHTML = '';
+                    data.batches.forEach(batch => {
+                        const batchElement = document.createElement('div');
+                        batchElement.className = 'batch-preview';
+                        batchElement.innerHTML = `
+                            <h2>Batch ID: ${batch.batch_id}</h2>
+                            <p>Total Claims: ${batch.total_claims}</p>
+                            <h3>Preview:</h3>
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Claim</th>
+                                        <th>Status</th>
+                                        <th>Rating</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${batch.preview_claims.map(claim => `
+                                        <tr>
+                                            <td>${claim.text}</td>
+                                            <td>${claim.status}</td>
+                                            <td>${claim.rating || 'N/A'}</td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                            <a href="/batch_results?batch_id=${batch.batch_id}">View Full Batch</a>
+                        `;
+                        batchesContainer.appendChild(batchElement);
+                    });
+                })
+                .catch(error => {
+                    console.error('Error fetching batches:', error);
+                    batchesContainer.innerHTML = '<p>Error fetching batches. Please try again later.</p>';
+                });
+        }
+
+        searchButton.addEventListener('click', () => {
+            loadBatches(searchInput.value);
+        });
+
+        searchInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                loadBatches(searchInput.value);
+            }
+        });
+
+        // Load batches on page load
+        loadBatches();
+    </script>
+</body>
+</html>

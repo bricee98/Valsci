@@ -45,14 +45,15 @@ class ClaimProcessor:
             return claim
 
         self.update_claim_status(batch_id, claim_id, "analyzing_papers")
-        # Process the top 50 papers
+        # Process all relevant papers
         processed_papers = []
-        for i, paper in enumerate(relevant_papers[:50]):
-            self.update_claim_status(batch_id, claim_id, f"analyzing_paper_{i+1}_of_50")
+        total_papers = len(relevant_papers)
+        for i, paper in enumerate(relevant_papers):
+            self.update_claim_status(batch_id, claim_id, f"analyzing_paper_{i+1}_of_{total_papers}")
             time.sleep(1)
             paper_content = self.literature_searcher.fetch_paper_content(paper)
             if paper_content:
-                relevance, excerpts, explanation = self.paper_analyzer.analyze_relevance_and_extract(paper_content, claim)
+                relevance, excerpts, explanations = self.paper_analyzer.analyze_relevance_and_extract(paper_content, claim)
                 if relevance > 0:
                     print("Paper is relevant: ", paper.title)
                     paper_score = self.evidence_scorer.calculate_paper_weight(paper)
@@ -61,7 +62,7 @@ class ClaimProcessor:
                         'relevance': relevance,
                         'excerpts': excerpts,
                         'score': paper_score,
-                        'explanation': explanation
+                        'explanations': explanations
                     })
                 else:
                     print("Paper is not relevant: ", paper.title)
@@ -78,7 +79,12 @@ class ClaimProcessor:
             self.update_claim_status(batch_id, claim_id, "processed", json.dumps(claim.report))
         else:
             claim.status = 'processed'
-            self.update_claim_status(batch_id, claim_id, "processed", "No relevant papers found")
+            claim.report = {
+                "supportingPapers": [],
+                "explanation": "No relevant papers were found for this claim after analysis.",
+                "claimRating": 0
+            }
+            self.update_claim_status(batch_id, claim_id, "processed", json.dumps(claim.report))
         return claim
 
     def update_claim_status(self, batch_id: str, claim_id: str, status: str, additional_info: str = "", suggested_claim: str = ""):
@@ -143,10 +149,11 @@ class ClaimProcessor:
         return response
 
     def generate_final_report(self, claim: Claim, processed_papers: List[dict]) -> dict:
+        print("Generating final report")
         # Prepare input for the LLM
         paper_summaries = "\n".join([
             f"Paper: {p['paper'].title}\n"
-            f"Authors: {', '.join([f'{author['name']} (H-index: {self.evidence_scorer.get_author_h_index(author)})' for author in p['paper'].authors])}\n"
+            f"Authors: {', '.join([f'{author['name']} (H-index: {self.evidence_scorer.author_h_indices.get(author['authorId'], 0)})' for author in p['paper'].authors])}\n"
             f"Relevance: {p['relevance']}\nScore: {p['score']}\nExcerpts: {p['excerpts']}"
             for p in processed_papers
         ])
@@ -162,16 +169,16 @@ class ClaimProcessor:
 
         system_prompt = dedent("""
         You are an AI assistant tasked with evaluating scientific claims based on evidence from papers.
-        Provide an explanation in an essay format, including specific references to the scientific papers. The essay should have a paragraph highlighting supporting evidence, a paragraph highlighting caveats or contradictions, and then an analysis of which of these outweighs the other and how strongly the claim is supported. Assign a claim rating between -10 (unsupported) and 10 (universally supported).
+        Provide an explanation in an essay format with newlines between paragraphs, including specific references to the scientific papers. The essay should have a paragraph highlighting supporting evidence, a paragraph highlighting caveats or contradictions, and then an analysis of which of these outweighs the other and how strongly the claim is supported. Assign a claim rating between -10 (unsupported) and 10 (universally supported).
 
         The JSON response should have the following structure:
         {
             "explanation": <str containing a short essay explaining the rating>,
-            "claimRating": <int between -10 and 10>
+            "claimRating": <int between -10 and 10, where 10 is universally supported, 0 is no evidence in either direction, and -10 is universally contradicted>
         }
         """).strip()
 
-        response = self.openai_service.generate_json(prompt, system_prompt=system_prompt)
+        response = self.openai_service.generate_json(prompt, system_prompt)
 
         # Construct the supporting papers data from processed_papers
         supporting_papers = [
@@ -180,14 +187,14 @@ class ClaimProcessor:
                 "authors": [
                     {
                         "name": author['name'],
-                        "hIndex": self.evidence_scorer.get_author_h_index(author)
+                        "hIndex": self.evidence_scorer.author_h_indices.get(author['authorId'], 0)
                     }
                     for author in p['paper'].authors
                 ],
                 "link": p['paper'].url,
                 "relevance": p['relevance'],
                 "excerpts": p['excerpts'],
-                "explanation": p['explanation']
+                "explanations": p['explanations']
             }
             for p in processed_papers
         ]
@@ -198,5 +205,8 @@ class ClaimProcessor:
             "explanation": response['explanation'],
             "claimRating": response['claimRating']
         }
+
+        # Add usage stats to the final report
+        final_report["usage_stats"] = self.openai_service.get_usage_stats()
 
         return final_report

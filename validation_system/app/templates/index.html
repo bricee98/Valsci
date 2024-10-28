@@ -16,14 +16,17 @@
         </form>
         <form id="fileForm" enctype="multipart/form-data">
             <label for="claimFile">Upload Claims File:</label>
-            <input type="file" id="claimFile" name="claimFile" accept=".txt">
+            <input type="file" id="claimFile" name="file" accept=".txt">
             <button type="submit">Submit File</button>
         </form>
         <form id="referenceForm">
-            <label for="claimReferenceID">Enter Claim Reference ID:</label>
+            <label for="claimReferenceID">Enter Claim or Batch Reference ID:</label>
             <input type="text" id="claimReferenceID" name="claimReferenceID" placeholder="Enter reference ID...">
             <button type="submit">Check Status</button>
         </form>
+        {% if saved_jobs_exist %}
+        <a href="/browser" class="browse-link">Browse Results</a>
+        {% endif %}
     </div>
     <script src="{{ url_for('static', filename='scripts.js') }}"></script>
 </body>
