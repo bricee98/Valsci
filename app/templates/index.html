@@ -12,11 +12,17 @@
         <form id="claimForm">
             <label for="claimText">Enter a Claim:</label>
             <input type="text" id="claimText" name="claimText" placeholder="Type your claim here...">
+            {% if config.REQUIRE_PASSWORD %}
+            <input type="password" id="claimPassword" name="password" placeholder="Enter access password">
+            {% endif %}
             <button type="submit">Submit Claim</button>
         </form>
         <form id="fileForm" enctype="multipart/form-data">
             <label for="claimFile">Upload Claims File:</label>
             <input type="file" id="claimFile" name="file" accept=".txt">
+            {% if config.REQUIRE_PASSWORD %}
+            <input type="password" id="batchPassword" name="password" placeholder="Enter access password">
+            {% endif %}
             <button type="submit">Submit File</button>
         </form>
         <form id="referenceForm">
@@ -28,6 +34,9 @@
         <a href="/browser" class="browse-link">Browse Results</a>
         {% endif %}
     </div>
+    <script>
+        const requirePassword = {{ 'true' if config.REQUIRE_PASSWORD else 'false' }};
+    </script>
     <script src="{{ url_for('static', filename='scripts.js') }}"></script>
 </body>
 </html>

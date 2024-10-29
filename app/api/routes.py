@@ -34,11 +34,21 @@ def save_claim_to_file(claim, batch_id, claim_id):
 def process_claim_in_background(claim, batch_id, claim_id):
     claim_processor.process_claim(claim, batch_id, claim_id)
 
+def verify_password(password):
+    if current_app.config['REQUIRE_PASSWORD']:
+        if not password:
+            return False
+        return password == current_app.config['ACCESS_PASSWORD']
+    return True
+
 @api.route('/api/v1/claims', methods=['POST'])
 def upload_claim():
     data = request.json
     if 'text' not in data:
         return jsonify({"error": "Missing claim text"}), 400
+    
+    if not verify_password(data.get('password')):
+        return jsonify({"error": "Invalid password"}), 403
     
     claim = Claim(text=data['text'], source=data.get('source', 'user'))
     
@@ -84,6 +94,10 @@ def get_claim_report(claim_id):
 def start_batch_job():
     if 'file' not in request.files:
         return jsonify({"error": "No file part"}), 400
+    
+    if not verify_password(request.form.get('password')):
+        return jsonify({"error": "Invalid password"}), 403
+    
     file = request.files['file']
     if file.filename == '':
         return jsonify({"error": "No selected file"}), 400
@@ -151,7 +165,9 @@ def download_batch_reports(batch_id):
 def index():
     saved_jobs_path = os.path.join(current_app.root_path, '..', 'saved_jobs')
     saved_jobs_exist = os.path.isdir(saved_jobs_path)
-    return render_template('index.html', saved_jobs_exist=saved_jobs_exist)
+    return render_template('index.html', 
+                         saved_jobs_exist=saved_jobs_exist,
+                         config=current_app.config)
 
 @api.route('/results', methods=['GET'])
 def results():

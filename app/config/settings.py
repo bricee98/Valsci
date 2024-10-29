@@ -28,6 +28,10 @@ class Config:
     AZURE_OPENAI_API_VERSION = env_vars.get('AZURE_OPENAI_API_VERSION', '2024-06-01')
     USE_AZURE_OPENAI = env_vars.get('USE_AZURE_OPENAI', 'false').lower() == 'true'
 
+    # Add password configuration
+    REQUIRE_PASSWORD = env_vars.get('REQUIRE_PASSWORD', 'false').lower() == 'true'
+    ACCESS_PASSWORD = env_vars.get('ACCESS_PASSWORD')
+
     @classmethod
     def validate_config(cls):
         required_keys = ['SECRET_KEY', 'SEMANTIC_SCHOLAR_API_KEY', 'USER_EMAIL']
@@ -35,6 +39,10 @@ class Config:
             required_keys.extend(['AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_ENDPOINT'])
         else:
             required_keys.append('OPENAI_API_KEY')
+
+        # Add password validation
+        if cls.REQUIRE_PASSWORD and not cls.ACCESS_PASSWORD:
+            required_keys.append('ACCESS_PASSWORD')
 
         missing_keys = [key for key in required_keys if getattr(cls, key) is None]
         if missing_keys:
