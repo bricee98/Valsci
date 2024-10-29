@@ -153,7 +153,7 @@ class ClaimProcessor:
         # Prepare input for the LLM
         paper_summaries = "\n".join([
             f"Paper: {p['paper'].title}\n"
-            f"Authors: {', '.join([f'{author['name']} (H-index: {self.evidence_scorer.author_h_indices.get(author['authorId'], 0)})' for author in p['paper'].authors])}\n"
+            f"Authors: {', '.join(author['name'] + ' (H-index: ' + str(self.evidence_scorer.author_h_indices.get(author['authorId'], 0)) + ')' for author in p['paper'].authors)}\n"
             f"Relevance: {p['relevance']}\nScore: {p['score']}\nExcerpts: {p['excerpts']}"
             for p in processed_papers
         ])
