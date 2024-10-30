@@ -12,18 +12,18 @@
         <form id="claimForm">
             <label for="claimText">Enter a Claim:</label>
             <input type="text" id="claimText" name="claimText" placeholder="Type your claim here...">
+            <button type="submit">Submit Claim</button>
             {% if config.REQUIRE_PASSWORD %}
             <input type="password" id="claimPassword" name="password" placeholder="Enter access password">
             {% endif %}
-            <button type="submit">Submit Claim</button>
         </form>
         <form id="fileForm" enctype="multipart/form-data">
             <label for="claimFile">Upload Claims File:</label>
             <input type="file" id="claimFile" name="file" accept=".txt">
+            <button type="submit">Submit File</button>
             {% if config.REQUIRE_PASSWORD %}
             <input type="password" id="batchPassword" name="password" placeholder="Enter access password">
             {% endif %}
-            <button type="submit">Submit File</button>
         </form>
         <form id="referenceForm">
             <label for="claimReferenceID">Enter Claim or Batch Reference ID:</label>

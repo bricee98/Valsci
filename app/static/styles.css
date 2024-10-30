@@ -327,3 +327,18 @@ td a:hover {
     cursor: pointer;
     margin-top: 20px;
 }
+
+input[type="password"] {
+    width: 90%;
+    padding: 12px;
+    margin-top: 20px;
+    border: 1px solid var(--secondary-color);
+    border-radius: 4px;
+    font-size: 16px;
+    transition: border-color 0.3s ease;
+}
+
+input[type="password"]:focus {
+    outline: none;
+    border-color: var(--primary-color);
+}
