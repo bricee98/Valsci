@@ -6,7 +6,8 @@ document.addEventListener('DOMContentLoaded', function() {
     claimForm.addEventListener('submit', function(e) {
         e.preventDefault();
         const claimText = document.getElementById('claimText').value;
-        submitClaim(claimText);
+        const password = document.getElementById('claimPassword') ? document.getElementById('claimPassword').value : null;
+        submitClaim(claimText, password);
     });
 
     fileForm.addEventListener('submit', function(e) {
@@ -26,13 +27,18 @@ document.addEventListener('DOMContentLoaded', function() {
         checkStatus(referenceID);
     });
 
-    function submitClaim(claimText) {
+    function submitClaim(claimText, password) {
+        const body = { text: claimText };
+        if (requirePassword && password) {
+            body.password = password;
+        }
+
         fetch('/api/v1/claims', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ text: claimText }),
+            body: JSON.stringify(body),
         })
         .then(response => response.json())
         .then(data => {
@@ -52,6 +58,12 @@ document.addEventListener('DOMContentLoaded', function() {
     function submitFile(file) {
         const formData = new FormData();
         formData.append('file', file);
+        if (requirePassword) {
+            const password = document.getElementById('batchPassword') ? document.getElementById('batchPassword').value : null;
+            if (password) {
+                formData.append('password', password);
+            }
+        }
 
         fetch('/api/v1/batch', {
             method: 'POST',

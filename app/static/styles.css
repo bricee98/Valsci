@@ -64,17 +64,16 @@ label {
     font-weight: 500;
 }
 
-input[type="text"], input[type="file"] {
+input[type="text"], input[type="file"], input[type="password"] {
     width: 90%;
     padding: 12px;
-    margin-bottom: 20px;
     border: 1px solid var(--secondary-color);
     border-radius: 4px;
     font-size: 16px;
     transition: border-color 0.3s ease;
 }
 
-input[type="text"]:focus, input[type="file"]:focus {
+input[type="text"]:focus, input[type="file"]:focus, input[type="password"]:focus {
     outline: none;
     border-color: var(--primary-color);
 }
