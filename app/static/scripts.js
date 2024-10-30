@@ -58,6 +58,12 @@ document.addEventListener('DOMContentLoaded', function() {
     function submitFile(file) {
         const formData = new FormData();
         formData.append('file', file);
+        if (requirePassword) {
+            const password = document.getElementById('batchPassword') ? document.getElementById('batchPassword').value : null;
+            if (password) {
+                formData.append('password', password);
+            }
+        }
 
         fetch('/api/v1/batch', {
             method: 'POST',

@@ -262,11 +262,17 @@ def browse_batches():
                 if file.endswith('.txt') and file != 'claims.txt':
                     with open(os.path.join(batch_dir, file), 'r') as f:
                         claim_data = json.load(f)
+                        additional_info = claim_data.get('additional_info', '{}')
+                        try:
+                            additional_info_json = json.loads(additional_info)
+                        except json.JSONDecodeError:
+                            additional_info_json = {}
+
                         if search_term in claim_data.get('text', '').lower():
                             claims.append({
                                 'text': claim_data.get('text', ''),
                                 'status': claim_data.get('status', ''),
-                                'rating': json.loads(claim_data.get('additional_info', '{}')).get('claimRating', 'N/A')
+                                'rating': additional_info_json.get('claimRating', 'N/A')
                             })
 
             if claims or search_term in batch_id.lower():
