@@ -36,10 +36,16 @@ document.addEventListener('DOMContentLoaded', function() {
         })
         .then(response => response.json())
         .then(data => {
-            window.location.href = `/progress?claim_id=${data.claim_id}`;
+            if (data.claim_id) {
+                window.location.href = `/progress?claim_id=${data.claim_id}`;
+            } else {
+                console.error('Claim ID is undefined:', data);
+                alert('There was an error processing your claim. Please try again.');
+            }
         })
         .catch((error) => {
             console.error('Error:', error);
+            alert('There was an error processing your claim. Please try again.');
         });
     }
 
