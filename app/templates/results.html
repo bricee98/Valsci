@@ -58,15 +58,39 @@
                 </ul>
             `;
 
-            // Add usage stats
-            const usageStatsHtml = `
-                <h3>OpenAI API Usage:</h3>
-                <p>Prompt Tokens: ${data.report.usage_stats.prompt_tokens}</p>
-                <p>Completion Tokens: ${data.report.usage_stats.completion_tokens}</p>
-                <p>Total Tokens: ${data.report.usage_stats.total_tokens}</p>
-                <p>Estimated Cost: $${data.report.usage_stats.total_cost.toFixed(4)}</p>
+            // Add usage stats with null check
+            if (data.report.usage_stats) {
+                const usageStatsHtml = `
+                    <h3>OpenAI API Usage:</h3>
+                    <p>Prompt Tokens: ${data.report.usage_stats.prompt_tokens}</p>
+                    <p>Completion Tokens: ${data.report.usage_stats.completion_tokens}</p>
+                    <p>Total Tokens: ${data.report.usage_stats.total_tokens}</p>
+                    <p>Estimated Cost: $${data.report.usage_stats.total_cost.toFixed(4)}</p>
+                `;
+                document.getElementById('usageStats').innerHTML = usageStatsHtml;
+            } else {
+                document.getElementById('usageStats').innerHTML = '<p>Usage statistics not available</p>';
+            }
+
+            // Add non-relevant papers
+            html += `
+                <h3>Other Reviewed Papers:</h3>
+                <div class="non-relevant-papers">
+                    ${data.report.nonRelevantPapers && data.report.nonRelevantPapers.length > 0 ? `
+                        <ul>
+                            ${data.report.nonRelevantPapers.map(paper => `
+                                <li>
+                                    <h4>${paper.title}</h4>
+                                    <p><strong>Authors:</strong> ${paper.authors.map(author => 
+                                        `${author.name} (H-index: ${author.hIndex})`).join(', ')}</p>
+                                    <p><strong>Why Not Relevant:</strong> ${paper.explanation}</p>
+                                    <p><a href="${paper.link}" target="_blank">Read Paper</a></p>
+                                </li>
+                            `).join('')}
+                        </ul>
+                    ` : '<p>No other papers were reviewed.</p>'}
+                </div>
             `;
-            document.getElementById('usageStats').innerHTML = usageStatsHtml;
 
             reportContent.innerHTML = html;
         }

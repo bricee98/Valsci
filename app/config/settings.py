@@ -34,7 +34,7 @@ class Config:
 
     @classmethod
     def validate_config(cls):
-        required_keys = ['SECRET_KEY', 'SEMANTIC_SCHOLAR_API_KEY', 'USER_EMAIL']
+        required_keys = ['SECRET_KEY', 'USER_EMAIL']
         if cls.USE_AZURE_OPENAI:
             required_keys.extend(['AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_ENDPOINT'])
         else:

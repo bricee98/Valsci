@@ -47,40 +47,52 @@ class ClaimProcessor:
         self.update_claim_status(batch_id, claim_id, "analyzing_papers")
         # Process all relevant papers
         processed_papers = []
+        self.non_relevant_papers = []  # Make this an instance variable
+        inaccessible_papers = []  # New list for tracking inaccessible papers
         total_papers = len(relevant_papers)
         for i, paper in enumerate(relevant_papers):
             self.update_claim_status(batch_id, claim_id, f"analyzing_paper_{i+1}_of_{total_papers}")
             time.sleep(1)
-            paper_content = self.literature_searcher.fetch_paper_content(paper)
-            if paper_content:
-                relevance, excerpts, explanations = self.paper_analyzer.analyze_relevance_and_extract(paper_content, claim)
-                if relevance > 0:
-                    print("Paper is relevant: ", paper.title)
-                    paper_score = self.evidence_scorer.calculate_paper_weight(paper)
-                    processed_papers.append({
-                        'paper': paper,
-                        'relevance': relevance,
-                        'excerpts': excerpts,
-                        'score': paper_score,
-                        'explanations': explanations
-                    })
-                else:
-                    print("Paper is not relevant: ", paper.title)
+            paper_content, access_info = self.literature_searcher.fetch_paper_content(paper)
+            
+            if not paper_content:
+                inaccessible_papers.append({
+                    'paper': paper,
+                    'reason': access_info
+                })
+                continue
+            
+            relevance, excerpts, explanations, non_relevant_explanation = self.paper_analyzer.analyze_relevance_and_extract(paper_content, claim)
+            if relevance >= 0.1:
+                print("Paper is relevant: ", paper.title)
+                paper_score = self.evidence_scorer.calculate_paper_weight(paper)
+                processed_papers.append({
+                    'paper': paper,
+                    'relevance': relevance,
+                    'excerpts': excerpts,
+                    'score': paper_score,
+                    'explanations': explanations,
+                    'content_type': access_info  # 'full_text' or 'abstract_only'
+                })
+            else:
+                print("Paper is not relevant: ", paper.title)
+                self.non_relevant_papers.append({  # Use the instance variable
+                    'paper': paper,
+                    'explanation': non_relevant_explanation or "Paper was determined to be not relevant to the claim."
+                })
 
         self.update_claim_status(batch_id, claim_id, "generating_report")
 
-        # Print the processed papers
-        print("Processed papers: ", processed_papers)
-
         # Generate final report
         if processed_papers:
-            claim.report = self.generate_final_report(claim, processed_papers)
+            claim.report = self.generate_final_report(claim, processed_papers, inaccessible_papers)
             claim.status = 'processed'
             self.update_claim_status(batch_id, claim_id, "processed", json.dumps(claim.report))
         else:
             claim.status = 'processed'
             claim.report = {
                 "supportingPapers": [],
+                "nonRelevantPapers": self.non_relevant_papers,  # Include non-relevant papers even when no relevant papers found
                 "explanation": "No relevant papers were found for this claim after analysis.",
                 "claimRating": 0
             }
@@ -130,7 +142,7 @@ class ClaimProcessor:
          3. "Exposure to blue light from electronic devices before bedtime disrupts the circadian rhythm."
          4. "Regular meditation practice can lead to structural changes in the brain's gray matter."
          5. "Higher levels of atmospheric CO2 are causing an increase in global average temperatures."
-         6. "Calcium channels are affected by MS."
+         6. "Calcium channels are affected by AMP."
 
         Examples of non-claims (these are not valid scientific claims):
          1. "The sky is beautiful." (This is an opinion, not a testable claim)
@@ -138,7 +150,7 @@ class ClaimProcessor:
          3. "Scientists should study climate change more." (This is a recommendation, not a claim)
          4. "Drink more water!" (This is a command, not a claim)
 
-        Reject claims that include ambiguous abbreviations or shorthand. Remember, a valid scientific claim should be a specific, testable assertion about a phenomenon or relationship between variables.
+        Reject claims that include ambiguous abbreviations or shorthand, unless it's clear to you what they mean. Remember, a valid scientific claim should be a specific, testable assertion about a phenomenon or relationship between variables.
 
         For the 'suggested' field, focus on using clear, concise language with relevant scientific terms that would be 
         likely to appear in academic papers. Avoid colloquialisms and ensure the suggested version maintains the 
@@ -148,7 +160,7 @@ class ClaimProcessor:
         response = self.openai_service.generate_json(prompt, system_prompt=system_prompt)
         return response
 
-    def generate_final_report(self, claim: Claim, processed_papers: List[dict]) -> dict:
+    def generate_final_report(self, claim: Claim, processed_papers: List[dict], inaccessible_papers: List[dict]) -> dict:
         print("Generating final report")
         # Prepare input for the LLM
         paper_summaries = "\n".join([
@@ -202,6 +214,7 @@ class ClaimProcessor:
         # Combine the LLM response with the supporting papers data
         final_report = {
             "supportingPapers": supporting_papers,
+            "nonRelevantPapers": self.non_relevant_papers,  # Use the instance variable
             "explanation": response['explanation'],
             "claimRating": response['claimRating']
         }

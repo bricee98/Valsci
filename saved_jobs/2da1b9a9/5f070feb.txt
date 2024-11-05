@@ -1,0 +1,6 @@
+{
+  "text": "Adenosine monophosphate (AMP) binds to all G protein-coupled receptors (GPCRs)",
+  "status": "processed",
+  "additional_info": "{\"supportingPapers\": [], \"explanation\": \"No relevant papers were found for this claim after analysis.\", \"claimRating\": 0}",
+  "suggested_claim": "Adenosine monophosphate (AMP) interaction with G protein-coupled receptors (GPCRs)"
+}

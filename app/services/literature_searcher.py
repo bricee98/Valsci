@@ -1,4 +1,4 @@
-from typing import List, Union
+from typing import List, Union, Tuple
 import os
 import requests
 from bs4 import BeautifulSoup
@@ -485,16 +485,31 @@ class LiteratureSearcher:
             logger.error(f"Error fetching abstract for paper {paper_id}: {str(e)}")
             return None
 
-    def fetch_paper_content(self, paper: Paper) -> str:
+    def fetch_paper_content(self, paper: Paper) -> Tuple[Union[str, None], str]:
+        """
+        Attempts to fetch paper content, returns tuple of (content, access_info)
+        content can be None if paper is inaccessible
+        access_info describes how the content was accessed or why it wasn't accessible
+        """
         if paper.url:
-            pdf_path = self.download_pdf_with_redirect(paper.url)
-            if pdf_path:
-                content = self.extract_text_from_pdf(pdf_path)
-                if content and not content.startswith("Error extracting text"):
-                    return content
+            try:
+                pdf_path = self.download_pdf_with_redirect(paper.url)
+                if pdf_path:
+                    content = self.extract_text_from_pdf(pdf_path)
+                    if content and not content.startswith("Error extracting text"):
+                        return content, 'full_text'
+                    else:
+                        logger.warning(f"Failed to extract text from PDF for paper: {paper.title}")
+                else:
+                    logger.warning(f"Failed to download PDF for paper: {paper.title}")
+            except Exception as e:
+                logger.error(f"Error accessing paper {paper.title}: {str(e)}")
         
-        # If all else fails, fall back to the abstract
-        return paper.abstract
+        # Fall back to abstract if available
+        if paper.abstract:
+            return paper.abstract, 'abstract_only'
+        
+        return None, 'inaccessible'
 
 class TimeoutException(Exception):
     pass
