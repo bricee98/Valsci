@@ -1,0 +1,5 @@
+{
+  "text": "Individuals with BRCA2 mutations exhibit higher intelligence levels compared to those without the mutations.",
+  "status": "analyzing_paper_14_of_24",
+  "additional_info": ""
+}

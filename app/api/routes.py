@@ -1,22 +1,15 @@
-from flask import Blueprint, request, jsonify, send_file, render_template, current_app
+from flask import Blueprint, request, jsonify, send_file, render_template, current_app, Response
 import os
 import uuid
 import shutil
 import threading
 import json
 from app.services.claim_processor import ClaimProcessor
-from app.services.literature_searcher import LiteratureSearcher
-from app.services.paper_analyzer import PaperAnalyzer
-from app.services.evidence_scorer import EvidenceScorer
 from app.models.claim import Claim
 from app.models.batch_job import BatchJob
+from datetime import datetime
 
 api = Blueprint('api', __name__)
-
-claim_processor = ClaimProcessor()
-literature_searcher = LiteratureSearcher()
-paper_analyzer = PaperAnalyzer()
-evidence_scorer = EvidenceScorer()
 
 SAVED_JOBS_DIR = 'saved_jobs'
 
@@ -32,6 +25,7 @@ def save_claim_to_file(claim, batch_id, claim_id):
         }, f, indent=2)
 
 def process_claim_in_background(claim, batch_id, claim_id):
+    claim_processor = ClaimProcessor()
     claim_processor.process_claim(claim, batch_id, claim_id)
 
 def verify_password(password):
@@ -134,6 +128,7 @@ def process_batch_in_background(batch_job: BatchJob, batch_id: str):
         claim_id = str(uuid.uuid4())[:8]
         save_claim_to_file(claim, batch_id, claim_id)
         update_batch_progress(batch_id, i, len(batch_job.claims), current_claim_id=claim_id)
+        claim_processor = ClaimProcessor()
         claim_processor.process_claim(claim, batch_id, claim_id)
         update_batch_progress(batch_id, i + 1, len(batch_job.claims))
 
@@ -321,3 +316,99 @@ def download_citations(claim_id):
                 return send_file(citation_file_path, as_attachment=True, download_name=f"{claim_id}_citations.ris")
 
     return jsonify({"error": "Claim not found"}), 404
+
+@api.route('/api/v1/enhance-claim', methods=['POST'])
+def enhance_claim():
+    data = request.json
+    if 'text' not in data:
+        return jsonify({"error": "Missing claim text"}), 400
+    
+    if not verify_password(data.get('password')):
+        return jsonify({"error": "Invalid password"}), 403
+    
+    claim_processor = ClaimProcessor()
+    validation_result = claim_processor.validate_claim_format(data['text'])
+    return jsonify(validation_result), 200
+
+@api.route('/api/v1/enhance-batch', methods=['POST'])
+def enhance_batch():
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    
+    if not verify_password(request.form.get('password')):
+        return jsonify({"error": "Invalid password"}), 403
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    
+    batch_id = str(uuid.uuid4())[:8]
+    batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
+    os.makedirs(batch_dir, exist_ok=True)
+    
+    # Save original claims
+    original_claims = []
+    enhanced_claims = []
+    
+    claim_processor = ClaimProcessor()
+
+    # Read and process claims
+    for line in file.stream.read().decode('utf-8').splitlines():
+        if line.strip():
+            original_claims.append(line.strip())
+            
+            validation_result = claim_processor.validate_claim_format(line.strip())
+            enhanced_claims.append({
+                'original': line.strip(),
+                'enhanced': validation_result['suggested'],
+                'is_valid': validation_result['is_valid'],
+                'explanation': validation_result['explanation']
+            })
+    
+    # Save results
+    results_file = os.path.join(batch_dir, 'enhanced_claims.json')
+    with open(results_file, 'w') as f:
+        json.dump({
+            'claims': enhanced_claims,
+            'timestamp': datetime.now().isoformat()
+        }, f, indent=2)
+    
+    return jsonify({
+        "batch_id": batch_id,
+        "message": "Claims enhanced successfully"
+    }), 200
+
+@api.route('/enhance-results', methods=['GET'])
+def enhance_results():
+    batch_id = request.args.get('batch_id')
+    if not batch_id:
+        return "No batch ID provided", 400
+    
+    results_file = os.path.join(SAVED_JOBS_DIR, batch_id, 'enhanced_claims.json')
+    if not os.path.exists(results_file):
+        return "Results not found", 404
+    
+    with open(results_file, 'r') as f:
+        results = json.load(f)
+    
+    return render_template('enhance_results.html', batch_id=batch_id, results=results)
+
+@api.route('/api/v1/enhanced-claims/<batch_id>/download', methods=['GET'])
+def download_enhanced_claims(batch_id):
+    results_file = os.path.join(SAVED_JOBS_DIR, batch_id, 'enhanced_claims.json')
+    if not os.path.exists(results_file):
+        return jsonify({"error": "Results not found"}), 404
+    
+    with open(results_file, 'r') as f:
+        results = json.load(f)
+    
+    # Create CSV content
+    output = "Original Claim,Enhanced Claim,Is Valid,Explanation\n"
+    for claim in results['claims']:
+        output += f'"{claim["original"]}","{claim["enhanced"]}",{claim["is_valid"]},"{claim["explanation"]}"\n'
+    
+    return Response(
+        output,
+        mimetype="text/csv",
+        headers={"Content-disposition": f"attachment; filename=enhanced_claims_{batch_id}.csv"}
+    )

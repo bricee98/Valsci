@@ -19,17 +19,7 @@ class ClaimProcessor:
         self.openai_service = OpenAIService()
 
     def process_claim(self, claim: Claim, batch_id: str, claim_id: str) -> Claim:
-        # Validate the claim
-        validation_result = self.validate_claim_format(claim.text)
-        if not validation_result['is_valid']:
-            claim.status = 'invalid'
-            claim.validation_message = validation_result['explanation']
-            self.update_claim_status(batch_id, claim_id, "invalid", claim.validation_message, validation_result['suggested'])
-            return claim
-
-        # If the claim is valid, update with the suggested claim
-        self.update_claim_status(batch_id, claim_id, "validating", suggested_claim=validation_result['suggested'])
-        
+       
         # Search for relevant papers
         relevant_papers = self.literature_searcher.search_papers(claim)
 
@@ -79,9 +69,13 @@ class ClaimProcessor:
                 })
             else:
                 print("Paper is not relevant: ", paper.title)
+                paper_score = self.evidence_scorer.calculate_paper_weight(paper)
                 non_relevant_papers.append({
                     'paper': paper,
-                    'explanation': non_relevant_explanation or "Paper was determined to be not relevant to the claim."
+                    'explanation': non_relevant_explanation or "Paper was determined to be not relevant to the claim.",
+                    'relevance': relevance,
+                    'score': paper_score,
+                    'content_type': access_info  # 'full_text' or 'abstract_only'
                 })
 
         self.update_claim_status(batch_id, claim_id, "generating_report")
@@ -90,35 +84,6 @@ class ClaimProcessor:
         if processed_papers:
             claim.report = self.generate_final_report(claim, processed_papers, non_relevant_papers, inaccessible_papers)
             claim.status = 'processed'
-            # Convert Paper objects to dictionaries for JSON serialization
-            claim.report['supportingPapers'] = [
-                {
-                    "title": p['paper'].title,
-                    "authors": p['paper'].authors,
-                    "link": p['paper'].url,
-                    "relevance": p['relevance'],
-                    "excerpts": p['excerpts'],
-                    "explanations": p['explanations'],
-                    "citations": [
-                        {
-                            "text": excerpt,
-                            "page": excerpt_page,  # Assuming excerpt_page is captured during analysis
-                            "citation": self.format_citation(p['paper'], excerpt_page)
-                        }
-                        for excerpt, excerpt_page in zip(p['excerpts'], p.get('excerpt_pages', []))
-                    ]
-                }
-                for p in processed_papers
-            ]
-            claim.report['nonRelevantPapers'] = [
-                {
-                    "title": nrp['paper'].title,
-                    "authors": nrp['paper'].authors,
-                    "link": nrp['paper'].url,
-                    "explanation": nrp['explanation']
-                }
-                for nrp in non_relevant_papers
-            ]
             self.update_claim_status(batch_id, claim_id, "processed", json.dumps(claim.report))
         else:
             claim.status = 'processed'
@@ -173,28 +138,30 @@ class ClaimProcessor:
         Respond with a JSON object containing 'is_valid' (boolean), 'explanation' (string), and 'suggested' (string).
         The 'is_valid' field should be true if the input is a proper scientific claim, and false otherwise. 
         The 'explanation' field should provide a brief reason for your decision.
-        The 'suggested' field should always contain an optimized version of the claim for searching on Semantic Scholar, 
+        The 'suggested' field should always contain an optimized version of the claim, 
         even if the original claim is invalid. For invalid claims, provide a corrected or improved version.
 
         Examples of valid scientific claims (note: these may or may not be true, but they are properly formed claims):
          1. "Increased consumption of processed foods is linked to higher rates of obesity in urban populations."
          2. "The presence of certain gut bacteria can influence mood and cognitive function in humans."
-         3. "Exposure to blue light from electronic devices before bedtime disrupts the circadian rhythm."
+         3. "Exposure to blue light from electronic devices before bedtime does not disrupt the circadian rhythm."
          4. "Regular meditation practice can lead to structural changes in the brain's gray matter."
-         5. "Higher levels of atmospheric CO2 are causing an increase in global average temperatures."
+         5. "Higher levels of atmospheric CO2 have no effect on global average temperatures."
          6. "Calcium channels are affected by AMP."
+         7. "People who drink soda are much healthier than those who don't."
 
         Examples of non-claims (these are not valid scientific claims):
          1. "The sky is beautiful." (This is an opinion, not a testable claim)
          2. "What is the effect of exercise on heart health?" (This is a question, not a claim)
          3. "Scientists should study climate change more." (This is a recommendation, not a claim)
-         4. "Drink more water!" (This is a command, not a claim)
+         4. "Drink more water!" (This is a command, not a claim),
+         5. "Investigating the cognitive effects of BRCA2 mutations on intelligence quotient (IQ) levels." (This doesn't make a claim about anything)
 
-        Reject claims that include ambiguous abbreviations or shorthand, unless it's clear to you what they mean. Remember, a valid scientific claim should be a specific, testable assertion about a phenomenon or relationship between variables.
+        Reject claims that include ambiguous abbreviations or shorthand, unless it's clear to you what they mean. Remember, a valid scientific claim should be a specific, testable assertion about a phenomenon or relationship between variables. It doesn't have to be true, but it should be a testable assertion.
 
         For the 'suggested' field, focus on using clear, concise language with relevant scientific terms that would be 
         likely to appear in academic papers. Avoid colloquialisms and ensure the suggested version maintains the 
-        original meaning while being more search-friendly.
+        original meaning (even if you think it's not true) while being more search-friendly.
         """).strip()
         
         response = self.openai_service.generate_json(prompt, system_prompt=system_prompt)
@@ -206,7 +173,7 @@ class ClaimProcessor:
         paper_summaries = "\n".join([
             f"Paper: {p['paper'].title}\n"
             f"Authors: {', '.join(author['name'] + ' (H-index: ' + str(self.evidence_scorer.author_h_indices.get(author['authorId'], 0)) + ')' for author in p['paper'].authors)}\n"
-            f"Relevance: {p['relevance']}\nScore: {p['score']}\nExcerpts: {p['excerpts']}"
+            f"Relevance: {p['relevance']}\nReliability Weight: {p['score']}\nExcerpts: {p['excerpts']}"
             for p in processed_papers
         ])
         
@@ -250,6 +217,7 @@ class ClaimProcessor:
                 ],
                 "link": p['paper'].url,
                 "relevance": p['relevance'],
+                "weight_score": p['score'],
                 "excerpts": p['excerpts'],
                 "explanations": p['explanations'],
                 "citations": [
@@ -264,11 +232,38 @@ class ClaimProcessor:
             for p in processed_papers
         ]
 
+        # Construct the non-relevant papers data
+        non_relevant_papers_data = [
+            {
+                "title": nrp['paper'].title,
+                "authors": [
+                    {
+                        "name": author['name'],
+                        "hIndex": self.evidence_scorer.author_h_indices.get(
+                            normalize_author_id(author.get('authorId', '')), 0
+                        )
+                    }
+                    for author in nrp['paper'].authors
+                ],
+                "link": nrp['paper'].url,
+                "explanation": nrp['explanation']
+            }
+            for nrp in non_relevant_papers
+        ]
+
         # Construct the inaccessible papers data
         inaccessible_papers_data = [
             {
                 "title": ip['paper'].title,
-                "authors": ip['paper'].authors,
+                "authors": [
+                    {
+                        "name": author['name'],
+                        "hIndex": self.evidence_scorer.author_h_indices.get(
+                            normalize_author_id(author.get('authorId', '')), 0
+                        )
+                    }
+                    for author in ip['paper'].authors
+                ],
                 "link": ip['paper'].url,
                 "reason": ip['reason']
             }
@@ -278,7 +273,7 @@ class ClaimProcessor:
         # Combine the LLM response with the supporting papers data
         final_report = {
             "supportingPapers": supporting_papers,
-            "nonRelevantPapers": non_relevant_papers,  # Use the parameter
+            "nonRelevantPapers": non_relevant_papers_data,  # Use the parameter
             "inaccessiblePapers": inaccessible_papers_data,  # Add inaccessible papers
             "explanation": response['explanation'],
             "claimRating": response['claimRating']

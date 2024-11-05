@@ -252,8 +252,8 @@ class LiteratureSearcher:
             url = "https://api.openalex.org/works"
             params = {
                 "search": query,
-                "per-page": 3,
-                "select": "id,title,authorships,publication_year,primary_location,locations,open_access"
+                "per-page": 1,
+                "select": "id,title,authorships,publication_year,primary_location,locations,open_access,abstract_inverted_index"
             }
             
             try:
@@ -269,6 +269,22 @@ class LiteratureSearcher:
                     continue
 
                 for item in response_data['results']:
+                    # Extract abstract from inverted index if available
+                    abstract = None
+                    if 'abstract_inverted_index' in item and item['abstract_inverted_index']:
+                        try:
+                            # Create a list of (word, position) tuples for all word positions
+                            word_positions = []
+                            for word, positions in item['abstract_inverted_index'].items():
+                                for position in positions:
+                                    word_positions.append((word, position))
+                            
+                            # Sort by position and join words
+                            abstract = ' '.join(word for word, _ in sorted(word_positions, key=lambda x: x[1]))
+                            logger.debug(f"Reconstructed abstract: {abstract[:200]}...")
+                        except Exception as e:
+                            logger.error(f"Error reconstructing abstract: {str(e)}")
+
                     # Extract journal name from primary_location if available
                     journal_name = None
                     if item.get('primary_location') and item['primary_location'].get('source'):
@@ -287,7 +303,7 @@ class LiteratureSearcher:
                                 'authorId': author_id
                             })
 
-                    # Create Paper object without abstract
+                    # Create Paper object with abstract
                     paper = Paper(
                         id=item.get('id'),
                         title=item['title'],
@@ -295,7 +311,7 @@ class LiteratureSearcher:
                         year=item.get('publication_year'),
                         journal=journal_name,
                         url=self._get_best_url(item),
-                        abstract=None  # We'll fetch this separately if needed
+                        abstract=abstract
                     )
 
                     all_papers.append(paper)
@@ -303,10 +319,10 @@ class LiteratureSearcher:
             except requests.exceptions.JSONDecodeError as e:
                 logger.error(f"JSONDecodeError for query '{query}': {str(e)}")
                 logger.error(f"Response content: {response.text}")
-                continue  # Skip this query and move to the next one
+                continue
             except Exception as e:
                 logger.error(f"Unexpected error for query '{query}': {str(e)}")
-                continue  # Skip this query and move to the next one
+                continue
 
         # Remove duplicates based on paper ID
         unique_papers = {paper.id: paper for paper in all_papers}.values()
@@ -428,8 +444,6 @@ class LiteratureSearcher:
 
                         if 'text/html' in content_type:
                             soup = BeautifulSoup(response.content, 'html.parser')
-                            pdf_link = None
-
                             # Look for PDF links
                             for a in soup.find_all('a', href=True):
                                 href = a['href']
@@ -439,27 +453,7 @@ class LiteratureSearcher:
                                     result = self.download_pdf_with_redirect(pdf_link)
                                     if result:
                                         return result
-                                    logger.info(f"Trying PDF link as absolute URL: {href}")
-                                    result = self.download_pdf_with_redirect(href)
-                                    if result:
-                                        return result
                                     break
-
-                            # Secondary fallback: Extract potential abstracts
-                            potential_abstracts = []
-                            for element in soup.find_all(['p', 'div']):
-                                text = element.get_text(strip=True)
-                                if len(text.split()) > 50:  # Consider elements with more than 50 words
-                                    potential_abstracts.append(text)
-
-                            # Evaluate each potential abstract
-                            for text in potential_abstracts:
-                                confidence = self.openai_service.evaluate_abstract_confidence(text)
-                                logger.info(f"Evaluated text with confidence: {confidence}")
-
-                                if confidence > 0.8:  # Threshold for considering it as an abstract
-                                    logger.info(f"Using extracted text as abstract with confidence {confidence}")
-                                    return text
 
                         return None
 
@@ -477,8 +471,81 @@ class LiteratureSearcher:
             logger.error(f"Error downloading PDF from {url}: {str(e)}")
             return None
 
-    def download_pdf(self, url: str) -> Union[str, None]:
-        return self.download_pdf_with_redirect(url)
+    def extract_abstract_from_html(self, url: str) -> Union[str, None]:
+        """Attempts to extract an abstract from an HTML page."""
+        try:
+            headers = {
+                'User-Agent': self.user_agent.random,
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            }
+            
+            response = self.session.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Look for potential abstract text
+            potential_abstracts = []
+            for element in soup.find_all(['p', 'div']):
+                text = element.get_text(strip=True)
+                if len(text.split()) > 50:  # Consider elements with more than 50 words
+                    potential_abstracts.append(text)
+
+            # Evaluate each potential abstract
+            for text in potential_abstracts:
+                confidence = self.openai_service.evaluate_abstract_confidence(text)
+                logger.info(f"Evaluated text with confidence: {confidence}")
+
+                if confidence > 0.8:  # Threshold for considering it as an abstract
+                    logger.info(f"Found abstract in HTML with confidence {confidence}")
+                    return text
+                    
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error extracting abstract from HTML at {url}: {str(e)}")
+            return None
+
+    def fetch_paper_content(self, paper: Paper) -> Tuple[Union[str, None], str]:
+        """
+        Attempts to fetch paper content, returns tuple of (content, access_info)
+        content can be None if paper is inaccessible
+        access_info describes how the content was accessed or why it wasn't accessible
+        """
+        # Try to get full text first
+        if paper.url:
+            try:
+                pdf_path = self.download_pdf_with_redirect(paper.url)
+                if pdf_path:
+                    content = self.extract_text_from_pdf(pdf_path)
+                    if content and not content.startswith("Error extracting text"):
+                        return content, 'full_text'
+                    else:
+                        logger.warning(f"Failed to extract text from PDF for paper: {paper.title}")
+                else:
+                    logger.warning(f"Failed to download PDF for paper: {paper.title}")
+            except Exception as e:
+                logger.error(f"Error accessing paper {paper.title}: {str(e)}")
+        
+        # Check for existing abstract
+        if paper.abstract:
+            logger.info(f"Using existing abstract for paper: {paper.title}")
+            return paper.abstract, 'abstract_only'
+        
+        # Try to extract abstract from HTML page
+        if paper.url:
+            abstract = self.extract_abstract_from_html(paper.url)
+            if abstract:
+                return abstract, 'extracted_abstract'
+        
+        # Try to fetch abstract from OpenAlex if we have paper ID
+        if paper.id:
+            abstract = self.fetch_paper_abstract(paper.id)
+            if abstract:
+                return abstract, 'openalex_abstract'
+        
+        logger.warning(f"Paper {paper.title} is inaccessible")
+        return None, 'inaccessible'
 
     def extract_text_from_pdf(self, pdf_path: str) -> str:
         def extract_with_pymupdf4llm():
@@ -560,34 +627,6 @@ class LiteratureSearcher:
         except Exception as e:
             logger.error(f"Error fetching abstract for paper {paper_id}: {str(e)}")
             return None
-
-    def fetch_paper_content(self, paper: Paper) -> Tuple[Union[str, None], str]:
-        """
-        Attempts to fetch paper content, returns tuple of (content, access_info)
-        content can be None if paper is inaccessible
-        access_info describes how the content was accessed or why it wasn't accessible
-        """
-        if paper.url:
-            try:
-                pdf_path = self.download_pdf_with_redirect(paper.url)
-                if pdf_path:
-                    content = self.extract_text_from_pdf(pdf_path)
-                    if content and not content.startswith("Error extracting text"):
-                        return content, 'full_text'
-                    else:
-                        logger.warning(f"Failed to extract text from PDF for paper: {paper.title}")
-                else:
-                    logger.warning(f"Failed to download PDF for paper: {paper.title}")
-            except Exception as e:
-                logger.error(f"Error accessing paper {paper.title}: {str(e)}")
-        
-        # Fall back to abstract if available
-        if paper.abstract:
-            logger.info(f"Using abstract for paper: {paper.title}")
-            return paper.abstract, 'abstract_only'
-        
-        logger.warning(f"Paper {paper.title} is inaccessible")
-        return None, 'inaccessible'
 
 class TimeoutException(Exception):
     pass

@@ -11,7 +11,13 @@
         <h1>Valsci</h1>
         <form id="claimForm">
             <label for="claimText">Enter a Claim:</label>
-            <input type="text" id="claimText" name="claimText" placeholder="Type your claim here...">
+            <div class="claim-input-group">
+                <input type="text" id="claimText" name="claimText" placeholder="Type your claim here...">
+                <button type="button" id="enhanceClaimBtn">
+                    <span>Enhance Claim</span>
+                    <div class="spinner" id="enhanceSpinner"></div>
+                </button>
+            </div>
             {% if config.REQUIRE_PASSWORD %}
             <input type="password" id="claimPassword" name="password" placeholder="Enter access password">
             {% endif %}
@@ -23,7 +29,10 @@
             {% if config.REQUIRE_PASSWORD %}
             <input type="password" id="batchPassword" name="password" placeholder="Enter access password">
             {% endif %}
-            <button type="submit">Submit File</button>
+            <div class="button-group">
+                <button type="submit">Submit File</button>
+                <button type="button" id="enhanceBatchBtn">Enhance Claims</button>
+            </div>
         </form>
         <form id="referenceForm">
             <label for="claimReferenceID">Enter Claim or Batch Reference ID:</label>

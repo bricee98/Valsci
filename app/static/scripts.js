@@ -3,6 +3,9 @@ document.addEventListener('DOMContentLoaded', function() {
     const fileForm = document.getElementById('fileForm');
     const referenceForm = document.getElementById('referenceForm');
 
+    const enhanceClaimBtn = document.getElementById('enhanceClaimBtn');
+    const enhanceBatchBtn = document.getElementById('enhanceBatchBtn');
+
     claimForm.addEventListener('submit', function(e) {
         e.preventDefault();
         const claimText = document.getElementById('claimText').value;
@@ -25,6 +28,29 @@ document.addEventListener('DOMContentLoaded', function() {
         e.preventDefault();
         const referenceID = document.getElementById('claimReferenceID').value;
         checkStatus(referenceID);
+    });
+
+    enhanceClaimBtn.addEventListener('click', function() {
+        const claimText = document.getElementById('claimText').value;
+        if (!claimText) {
+            alert('Please enter a claim to enhance.');
+            return;
+        }
+        
+        const password = document.getElementById('claimPassword') ? document.getElementById('claimPassword').value : null;
+        enhanceClaim(claimText, password);
+    });
+
+    enhanceBatchBtn.addEventListener('click', function() {
+        const fileInput = document.getElementById('claimFile');
+        const file = fileInput.files[0];
+        if (!file) {
+            alert('Please select a file to enhance.');
+            return;
+        }
+        
+        const password = document.getElementById('batchPassword') ? document.getElementById('batchPassword').value : null;
+        enhanceBatch(file, password);
     });
 
     function submitClaim(claimText, password) {
@@ -80,5 +106,72 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function checkStatus(referenceID) {
         window.location.href = `/progress?${referenceID.length === 8 ? 'claim_id' : 'batch_id'}=${referenceID}`;
+    }
+
+    function enhanceClaim(claimText, password) {
+        const enhanceBtn = document.getElementById('enhanceClaimBtn');
+        const spinner = document.getElementById('enhanceSpinner');
+        const claimInput = document.getElementById('claimText');
+        
+        // Show loading state
+        enhanceBtn.classList.add('loading');
+        spinner.style.display = 'block';
+        claimInput.classList.add('loading');
+
+        const body = { text: claimText };
+        if (requirePassword && password) {
+            body.password = password;
+        }
+
+        fetch('/api/v1/enhance-claim', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(body),
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.suggested) {
+                document.getElementById('claimText').value = data.suggested;
+            } else {
+                alert('Error enhancing claim: ' + (data.error || 'Unknown error'));
+            }
+        })
+        .catch((error) => {
+            console.error('Error:', error);
+            alert('There was an error enhancing your claim. Please try again.');
+        })
+        .finally(() => {
+            // Hide loading state
+            enhanceBtn.classList.remove('loading');
+            spinner.style.display = 'none';
+            claimInput.classList.remove('loading');
+        });
+    }
+
+    function enhanceBatch(file, password) {
+        const formData = new FormData();
+        formData.append('file', file);
+        if (requirePassword && password) {
+            formData.append('password', password);
+        }
+
+        fetch('/api/v1/enhance-batch', {
+            method: 'POST',
+            body: formData,
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.batch_id) {
+                window.location.href = `/enhance-results?batch_id=${data.batch_id}`;
+            } else {
+                alert('Error enhancing claims: ' + (data.error || 'Unknown error'));
+            }
+        })
+        .catch((error) => {
+            console.error('Error:', error);
+            alert('There was an error enhancing your claims. Please try again.');
+        });
     }
 });

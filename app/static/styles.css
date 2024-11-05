@@ -65,12 +65,14 @@ label {
 }
 
 input[type="text"], input[type="file"], input[type="password"] {
-    width: 90%;
-    padding: 12px;
+    width: 100%;
+    padding: 10px;
     border: 1px solid var(--secondary-color);
     border-radius: 4px;
     font-size: 16px;
     transition: border-color 0.3s ease;
+    height: 40px;
+    box-sizing: border-box;
 }
 
 input[type="text"]:focus, input[type="file"]:focus, input[type="password"]:focus {
@@ -341,4 +343,108 @@ input[type="password"] {
 input[type="password"]:focus {
     outline: none;
     border-color: var(--primary-color);
+}
+
+/* Add these styles to your existing CSS */
+.claim-input-group {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+    align-items: center;
+}
+
+.claim-input-group input[type="text"] {
+    flex: 1;
+}
+
+.claim-input-group button {
+    margin-top: 0;
+    height: 40px;
+    white-space: nowrap;
+    padding: 0 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.button-group {
+    display: flex;
+    gap: 10px;
+    margin-top: 10px;
+}
+
+.results-table {
+    margin-top: 20px;
+    overflow-x: auto;
+}
+
+.results-table table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.results-table th,
+.results-table td {
+    padding: 10px;
+    border: 1px solid #ddd;
+    text-align: left;
+}
+
+.results-table th {
+    background-color: #f5f5f5;
+}
+
+.actions {
+    margin: 20px 0;
+    display: flex;
+    gap: 10px;
+}
+
+.button {
+    display: inline-block;
+    padding: 10px 20px;
+    background-color: #007bff;
+    color: white;
+    text-decoration: none;
+    border-radius: 4px;
+}
+
+.button:hover {
+    background-color: #0056b3;
+}
+
+/* Add these styles for the loading indicator */
+.spinner {
+    display: none;
+    width: 20px;
+    height: 20px;
+    border: 3px solid #f3f3f3;
+    border-top: 3px solid var(--primary-color);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-left: 10px;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.loading {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+.claim-input-group {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+    align-items: center;
+}
+
+/* Update the existing claim-input-group styles to accommodate the spinner */
+.claim-input-group button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
