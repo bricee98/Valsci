@@ -1,0 +1,6 @@
+{
+  "text": "BRCA patients live longer if they consume soda.",
+  "status": "invalid",
+  "additional_info": "The claim is not valid as it lacks specificity and clarity. It uses 'BRCA' ambiguously, which could refer to BRCA gene mutation carriers or patients with BRCA-related cancer. Additionally, the claim is not supported by any known scientific evidence and seems implausible.",
+  "suggested_claim": "BRCA gene mutation carriers' survival rates are influenced by dietary factors, including soda consumption."
+}

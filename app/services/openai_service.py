@@ -79,3 +79,21 @@ class OpenAIService:
             "total_tokens": self.total_prompt_tokens + self.total_completion_tokens,
             "total_cost": round(self.total_cost, 4)
         }
+
+    def evaluate_abstract_confidence(self, text: str) -> float:
+        """
+        Evaluate the confidence that the given text is an abstract.
+        Returns a confidence score between 0 and 1.
+        """
+        system_prompt = "You are an expert in identifying scientific abstracts. Given the following text, provide a confidence score between 0 and 1 indicating how likely it is to be an abstract."
+        user_message = f"Text: {text}\n\nProvide a confidence score."
+
+        response = self.client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message}
+            ],
+            temperature=0.0
+        )
+        return float(response.choices[0].message.content.strip())

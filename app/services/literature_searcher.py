@@ -29,6 +29,7 @@ from io import BytesIO
 import chardet
 import brotli  # Make sure to install this: pip install brotli
 from brotli import error as BrotliError
+from urllib.parse import urljoin
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -277,9 +278,13 @@ class LiteratureSearcher:
                     authors = []
                     for authorship in item.get('authorships', []):
                         if 'author' in authorship:
+                            author_id = authorship['author'].get('id')
+                            # Normalize the author_id here as well (to be consistent)
+                            if author_id:
+                                author_id = author_id.replace('https://openalex.org/', '')
                             authors.append({
                                 'name': authorship['author'].get('display_name'),
-                                'authorId': authorship['author'].get('id')
+                                'authorId': author_id
                             })
 
                     # Create Paper object without abstract
@@ -371,31 +376,102 @@ class LiteratureSearcher:
 
     def download_pdf_with_redirect(self, url: str) -> Union[str, None]:
         try:
+            # Enhanced headers to mimic a real browser more closely
             headers = {
                 'User-Agent': self.user_agent.random,
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept': 'text/html,application/pdf,application/x-pdf,application/octet-stream',
+                'Accept-Language': 'en-US,en;q=0.9',
                 'Accept-Encoding': 'gzip, deflate, br',
                 'DNT': '1',
                 'Connection': 'keep-alive',
                 'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'cross-site',
+                'Sec-Fetch-User': '?1',
+                'Pragma': 'no-cache',
+                'Cache-Control': 'no-cache',
+                'Referer': 'https://scholar.google.com/'
             }
 
-            response = self.pdf_session.get(url, headers=headers, allow_redirects=True, timeout=30)
-            response.raise_for_status()
+            # Add random common browser headers
+            if random.random() < 0.5:
+                headers['Sec-Ch-Ua'] = '"Google Chrome";v="117", "Not;A=Brand";v="8", "Chromium";v="117"'
+                headers['Sec-Ch-Ua-Mobile'] = '?0'
+                headers['Sec-Ch-Ua-Platform'] = '"Windows"'
 
-            if 'application/pdf' in response.headers.get('Content-Type', ''):
-                pdf_path = os.path.join('papers', f'{hash(url)}.pdf')
-                os.makedirs('papers', exist_ok=True)
+            for attempt in range(3):
+                try:
+                    response = self.pdf_session.get(
+                        url, 
+                        headers=headers, 
+                        allow_redirects=True, 
+                        timeout=30,
+                        stream=True
+                    )
+                    response.raise_for_status()
 
-                with open(pdf_path, 'wb') as f:
-                    f.write(response.content)
+                    content_type = response.headers.get('Content-Type', '').lower()
+                    if 'application/pdf' in content_type or url.lower().endswith('.pdf'):
+                        pdf_path = os.path.join('papers', f'{hash(url)}.pdf')
+                        os.makedirs('papers', exist_ok=True)
 
-                logger.info(f"Successfully downloaded PDF from {url}")
-                return pdf_path
-            else:
-                logger.warning(f"URL {url} does not point to a PDF file")
-                return None
+                        with open(pdf_path, 'wb') as f:
+                            for chunk in response.iter_content(chunk_size=8192):
+                                if chunk:
+                                    f.write(chunk)
+
+                        logger.info(f"Successfully downloaded PDF from {url}")
+                        return pdf_path
+                    else:
+                        logger.warning(f"URL {url} returned content-type: {content_type}")
+
+                        if 'text/html' in content_type:
+                            soup = BeautifulSoup(response.content, 'html.parser')
+                            pdf_link = None
+
+                            # Look for PDF links
+                            for a in soup.find_all('a', href=True):
+                                href = a['href']
+                                if href.lower().endswith('.pdf'):
+                                    pdf_link = urljoin(url, href)
+                                    logger.info(f"Trying PDF link: {pdf_link}")
+                                    result = self.download_pdf_with_redirect(pdf_link)
+                                    if result:
+                                        return result
+                                    logger.info(f"Trying PDF link as absolute URL: {href}")
+                                    result = self.download_pdf_with_redirect(href)
+                                    if result:
+                                        return result
+                                    break
+
+                            # Secondary fallback: Extract potential abstracts
+                            potential_abstracts = []
+                            for element in soup.find_all(['p', 'div']):
+                                text = element.get_text(strip=True)
+                                if len(text.split()) > 50:  # Consider elements with more than 50 words
+                                    potential_abstracts.append(text)
+
+                            # Evaluate each potential abstract
+                            for text in potential_abstracts:
+                                confidence = self.openai_service.evaluate_abstract_confidence(text)
+                                logger.info(f"Evaluated text with confidence: {confidence}")
+
+                                if confidence > 0.8:  # Threshold for considering it as an abstract
+                                    logger.info(f"Using extracted text as abstract with confidence {confidence}")
+                                    return text
+
+                        return None
+
+                except requests.RequestException as e:
+                    logger.warning(f"Attempt {attempt + 1} failed for {url}: {str(e)}")
+                    if attempt < 2:
+                        headers['User-Agent'] = self.user_agent.random
+                        time.sleep(random.uniform(1, 3))
+                        continue
+                    raise
+
+            return None
 
         except requests.RequestException as e:
             logger.error(f"Error downloading PDF from {url}: {str(e)}")
@@ -507,8 +583,10 @@ class LiteratureSearcher:
         
         # Fall back to abstract if available
         if paper.abstract:
+            logger.info(f"Using abstract for paper: {paper.title}")
             return paper.abstract, 'abstract_only'
         
+        logger.warning(f"Paper {paper.title} is inaccessible")
         return None, 'inaccessible'
 
 class TimeoutException(Exception):

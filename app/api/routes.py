@@ -299,3 +299,25 @@ def delete_batch(batch_id):
         shutil.rmtree(batch_dir)
         return jsonify({"message": "Batch deleted successfully"}), 200
     return jsonify({"error": "Batch not found"}), 404
+
+@api.route('/api/v1/claims/<claim_id>/download_citations', methods=['GET'])
+def download_citations(claim_id):
+    for root, dirs, files in os.walk(SAVED_JOBS_DIR):
+        if f"{claim_id}.txt" in files:
+            with open(os.path.join(root, f"{claim_id}.txt"), 'r') as f:
+                claim_data = json.load(f)
+                report = json.loads(claim_data.get('additional_info', '{}'))
+                citations = []
+
+                for paper in report.get('supportingPapers', []):
+                    for citation in paper.get('citations', []):
+                        citations.append(citation['citation'])
+
+                # Create a temporary file for the citations
+                citation_file_path = os.path.join(SAVED_JOBS_DIR, f"{claim_id}_citations.ris")
+                with open(citation_file_path, 'w') as citation_file:
+                    citation_file.write("\n\n".join(citations))
+
+                return send_file(citation_file_path, as_attachment=True, download_name=f"{claim_id}_citations.ris")
+
+    return jsonify({"error": "Claim not found"}), 404

@@ -1,0 +1,6 @@
+{
+  "text": "Homologous recombination occurs in humans.",
+  "status": "analyzing_paper_14_of_30",
+  "additional_info": "",
+  "suggested_claim": "Homologous recombination in humans"
+}

@@ -67,7 +67,6 @@ The following packages are required and will be installed via `requirements.txt`
    ```json
    {
        "FLASK_SECRET_KEY": "your_secret_key",
-       "SEMANTIC_SCHOLAR_API_KEY": "your_semantic_scholar_api_key",
        "OPENAI_API_KEY": "your_openai_api_key",
        "ANTHROPIC_API_KEY": "your_anthropic_api_key",
        "USER_EMAIL": "your_email@example.com",
@@ -81,7 +80,7 @@ The following packages are required and will be installed via `requirements.txt`
    ```
 
    **Note:**
-   - `FLASK_SECRET_KEY`, `SEMANTIC_SCHOLAR_API_KEY`, and `USER_EMAIL` are required.
+   - `FLASK_SECRET_KEY` and `USER_EMAIL` are required.
    - If `USE_AZURE_OPENAI` is set to `"true"`, you must provide `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT`.
    - If `REQUIRE_PASSWORD` is set to `"true"`, you must provide `ACCESS_PASSWORD`.
 

@@ -47,7 +47,7 @@ class ClaimProcessor:
         self.update_claim_status(batch_id, claim_id, "analyzing_papers")
         # Process all relevant papers
         processed_papers = []
-        self.non_relevant_papers = []  # Make this an instance variable
+        non_relevant_papers = []  # Local variable instead of instance variable
         inaccessible_papers = []  # New list for tracking inaccessible papers
         total_papers = len(relevant_papers)
         for i, paper in enumerate(relevant_papers):
@@ -62,7 +62,9 @@ class ClaimProcessor:
                 })
                 continue
             
-            relevance, excerpts, explanations, non_relevant_explanation = self.paper_analyzer.analyze_relevance_and_extract(paper_content, claim)
+            # Correctly unpack all five values
+            relevance, excerpts, explanations, non_relevant_explanation, excerpt_pages = self.paper_analyzer.analyze_relevance_and_extract(paper_content, claim)
+            
             if relevance >= 0.1:
                 print("Paper is relevant: ", paper.title)
                 paper_score = self.evidence_scorer.calculate_paper_weight(paper)
@@ -72,11 +74,12 @@ class ClaimProcessor:
                     'excerpts': excerpts,
                     'score': paper_score,
                     'explanations': explanations,
-                    'content_type': access_info  # 'full_text' or 'abstract_only'
+                    'content_type': access_info,  # 'full_text' or 'abstract_only'
+                    'excerpt_pages': excerpt_pages  # Use the captured excerpt pages
                 })
             else:
                 print("Paper is not relevant: ", paper.title)
-                self.non_relevant_papers.append({  # Use the instance variable
+                non_relevant_papers.append({
                     'paper': paper,
                     'explanation': non_relevant_explanation or "Paper was determined to be not relevant to the claim."
                 })
@@ -85,14 +88,51 @@ class ClaimProcessor:
 
         # Generate final report
         if processed_papers:
-            claim.report = self.generate_final_report(claim, processed_papers, inaccessible_papers)
+            claim.report = self.generate_final_report(claim, processed_papers, non_relevant_papers, inaccessible_papers)
             claim.status = 'processed'
+            # Convert Paper objects to dictionaries for JSON serialization
+            claim.report['supportingPapers'] = [
+                {
+                    "title": p['paper'].title,
+                    "authors": p['paper'].authors,
+                    "link": p['paper'].url,
+                    "relevance": p['relevance'],
+                    "excerpts": p['excerpts'],
+                    "explanations": p['explanations'],
+                    "citations": [
+                        {
+                            "text": excerpt,
+                            "page": excerpt_page,  # Assuming excerpt_page is captured during analysis
+                            "citation": self.format_citation(p['paper'], excerpt_page)
+                        }
+                        for excerpt, excerpt_page in zip(p['excerpts'], p.get('excerpt_pages', []))
+                    ]
+                }
+                for p in processed_papers
+            ]
+            claim.report['nonRelevantPapers'] = [
+                {
+                    "title": nrp['paper'].title,
+                    "authors": nrp['paper'].authors,
+                    "link": nrp['paper'].url,
+                    "explanation": nrp['explanation']
+                }
+                for nrp in non_relevant_papers
+            ]
             self.update_claim_status(batch_id, claim_id, "processed", json.dumps(claim.report))
         else:
             claim.status = 'processed'
             claim.report = {
                 "supportingPapers": [],
-                "nonRelevantPapers": self.non_relevant_papers,  # Include non-relevant papers even when no relevant papers found
+                "nonRelevantPapers": [
+                    {
+                        "title": nrp['paper'].title,
+                        "authors": nrp['paper'].authors,
+                        "link": nrp['paper'].url,
+                        "explanation": nrp['explanation']
+                    }
+                    for nrp in non_relevant_papers
+                ],
                 "explanation": "No relevant papers were found for this claim after analysis.",
                 "claimRating": 0
             }
@@ -160,7 +200,7 @@ class ClaimProcessor:
         response = self.openai_service.generate_json(prompt, system_prompt=system_prompt)
         return response
 
-    def generate_final_report(self, claim: Claim, processed_papers: List[dict], inaccessible_papers: List[dict]) -> dict:
+    def generate_final_report(self, claim: Claim, processed_papers: List[dict], non_relevant_papers: List[dict], inaccessible_papers: List[dict]) -> dict:
         print("Generating final report")
         # Prepare input for the LLM
         paper_summaries = "\n".join([
@@ -192,6 +232,9 @@ class ClaimProcessor:
 
         response = self.openai_service.generate_json(prompt, system_prompt)
 
+        # Use the normalize_author_id method from EvidenceScorer
+        normalize_author_id = self.evidence_scorer.normalize_author_id
+
         # Construct the supporting papers data from processed_papers
         supporting_papers = [
             {
@@ -199,22 +242,44 @@ class ClaimProcessor:
                 "authors": [
                     {
                         "name": author['name'],
-                        "hIndex": self.evidence_scorer.author_h_indices.get(author['authorId'], 0)
+                        "hIndex": self.evidence_scorer.author_h_indices.get(
+                            normalize_author_id(author.get('authorId', '')), 0
+                        )
                     }
                     for author in p['paper'].authors
                 ],
                 "link": p['paper'].url,
                 "relevance": p['relevance'],
                 "excerpts": p['excerpts'],
-                "explanations": p['explanations']
+                "explanations": p['explanations'],
+                "citations": [
+                    {
+                        "text": excerpt,
+                        "page": excerpt_page,  # Assuming excerpt_page is captured during analysis
+                        "citation": self.format_citation(p['paper'], excerpt_page)
+                    }
+                    for excerpt, excerpt_page in zip(p['excerpts'], p.get('excerpt_pages', []))
+                ]
             }
             for p in processed_papers
+        ]
+
+        # Construct the inaccessible papers data
+        inaccessible_papers_data = [
+            {
+                "title": ip['paper'].title,
+                "authors": ip['paper'].authors,
+                "link": ip['paper'].url,
+                "reason": ip['reason']
+            }
+            for ip in inaccessible_papers
         ]
 
         # Combine the LLM response with the supporting papers data
         final_report = {
             "supportingPapers": supporting_papers,
-            "nonRelevantPapers": self.non_relevant_papers,  # Use the instance variable
+            "nonRelevantPapers": non_relevant_papers,  # Use the parameter
+            "inaccessiblePapers": inaccessible_papers_data,  # Add inaccessible papers
             "explanation": response['explanation'],
             "claimRating": response['claimRating']
         }
@@ -223,3 +288,17 @@ class ClaimProcessor:
         final_report["usage_stats"] = self.openai_service.get_usage_stats()
 
         return final_report
+
+    def format_citation(self, paper, page_number):
+        # Format citation in RIS format for EndNote
+        authors = ' and '.join([author['name'] for author in paper.authors])
+        return f"""
+        TY  - JOUR
+        TI  - {paper.title}
+        AU  - {authors}
+        PY  - {paper.year}
+        JO  - {paper.journal}
+        UR  - {paper.url}
+        SP  - {page_number}
+        ER  -
+        """.strip()

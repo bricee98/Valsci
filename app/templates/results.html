@@ -12,6 +12,7 @@
         <div id="reportContent"></div>
         <div id="usageStats"></div>
         <button id="downloadReport">Download Report</button>
+        <button id="downloadCitations">Download Citations</button>
         <button id="deleteClaimButton">Delete Claim</button>
     </div>
     <script>
@@ -37,18 +38,22 @@
                 html += `
                     <li>
                         <h4>${paper.title}</h4>
-                        <p><strong>Authors:</strong> ${paper.authors.map(author => `${author.name} (H-index: ${author.hIndex})`).join(', ')}</p>
+                        <p><strong>Authors:</strong> ${paper.authors.map(author => `${author.name} (H-index: ${author.hIndex || 0})`).join(', ')}</p>
                         <p><strong>Relevance:</strong> ${paper.relevance}</p>
                         <p><strong>Excerpts:</strong></p>
                         ${Array.isArray(paper.excerpts) 
                             ? `<ul>${paper.excerpts.map(excerpt => `<li>${excerpt}</li>`).join('')}</ul>`
                             : `<p>${paper.excerpts}</p>`
                         }
-                        <p><strong>Explanation:</strong></p>
+                        <p><strong>Explanations:</strong></p>
                         ${Array.isArray(paper.explanations) 
                             ? `<ul>${paper.explanations.map(explanation => `<li>${explanation}</li>`).join('')}</ul>`
                             : `<p>${paper.explanations}</p>`
                         }
+                        <p><strong>Citations:</strong></p>
+                        <ul>
+                            ${paper.citations.map(citation => `<li>${citation.citation}</li>`).join('')}
+                        </ul>
                         <p><a href="${paper.link}" target="_blank">Read Paper</a></p>
                     </li>
                 `;
@@ -92,6 +97,26 @@
                 </div>
             `;
 
+            // Add inaccessible papers
+            html += `
+                <h3>Inaccessible Papers:</h3>
+                <div class="inaccessible-papers">
+                    ${data.report.inaccessiblePapers && data.report.inaccessiblePapers.length > 0 ? `
+                        <ul>
+                            ${data.report.inaccessiblePapers.map(paper => `
+                                <li>
+                                    <h4>${paper.title}</h4>
+                                    <p><strong>Authors:</strong> ${paper.authors.map(author => 
+                                        `${author.name}`).join(', ')}</p>
+                                    <p><strong>Reason:</strong> ${paper.reason}</p>
+                                    <p><a href="${paper.link}" target="_blank">Read Paper</a></p>
+                                </li>
+                            `).join('')}
+                        </ul>
+                    ` : '<p>No inaccessible papers were found.</p>'}
+                </div>
+            `;
+
             reportContent.innerHTML = html;
         }
 
@@ -110,6 +135,12 @@
         document.getElementById('downloadReport').addEventListener('click', function() {
             if (claimId) {
                 window.location.href = `/api/v1/batch/${claimId}/download`;
+            }
+        });
+
+        document.getElementById('downloadCitations').addEventListener('click', function() {
+            if (claimId) {
+                window.location.href = `/api/v1/claims/${claimId}/download_citations`;
             }
         });
 

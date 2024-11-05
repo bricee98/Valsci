@@ -25,6 +25,10 @@ class EvidenceScorer:
         print("Using first 4 authors")
         paper.authors = paper.authors[:4]
 
+        if not paper.authors:
+            logger.warning("No authors found for the paper. Returning weight of 0.")
+            return 0.0  # Default weight when there are no authors
+
         max_h_index = max(self.get_author_h_index(author) for author in paper.authors)
         impact_factor_data = self.get_journal_impact_factor(paper.journal)
         
@@ -86,6 +90,9 @@ class EvidenceScorer:
             logger.warning(f"No author ID found for {author.get('name')}. Returning h-index of 0.")
             return 0
 
+        # Normalize the author_id to ensure consistent formatting
+        author_id = self.normalize_author_id(author_id)
+        
         # Check if we've already looked up this author's h-index
         if author_id in self.author_h_indices:
             logger.info(f"Retrieved cached h-index for author {author.get('name')}: {self.author_h_indices[author_id]}")
@@ -105,6 +112,12 @@ class EvidenceScorer:
         else:
             logger.warning(f"Failed to retrieve h-index for author {author.get('name')}. Returning 0.")
             return 0
+
+    def normalize_author_id(self, author_id: str) -> str:
+        # Remove the OpenAlex URL prefix if present
+        if author_id.startswith('https://openalex.org/'):
+            author_id = author_id.replace('https://openalex.org/', '')
+        return author_id
 
     def get_journal_impact_factor(self, journal: str) -> dict:
         url = "https://api.openalex.org/sources"  # Changed from venues to sources

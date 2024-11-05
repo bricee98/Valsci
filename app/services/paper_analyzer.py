@@ -7,7 +7,7 @@ class PaperAnalyzer:
     def __init__(self):
         self.openai_service = OpenAIService()
 
-    def analyze_relevance_and_extract(self, paper_content: str, claim: Claim) -> Tuple[float, List[str], List[str]]:
+    def analyze_relevance_and_extract(self, paper_content: str, claim: Claim) -> Tuple[float, List[str], List[str], List[int]]:
         system_prompt = dedent("""
         You are an expert in analyzing scientific papers and determining their relevance to specific claims.
         Your task is to analyze the given paper content, assess the relevance to the claim (including whether it supports or refutes the claim), extract relevant verbatim sections, and then score the overall relevance to the provided claim.
@@ -31,12 +31,13 @@ class PaperAnalyzer:
         2. 'excerpts': A list of relevant verbatim excerpts from the paper
         3. 'relevance': A float between 0 (not relevant) and 1 (highly relevant), based on the extracted excerpts
         4. 'non_relevant_explanation': A string explaining why the paper is not relevant (if relevance < 0.1)
+        5. 'excerpt_pages': A list of page numbers for each excerpt
         """).strip()
         
         result = self.openai_service.generate_json(user_prompt, system_prompt)
 
         if 'error' in result:
-            return 0, [], [], None
+            return 0, [], [], [], []
 
         print("Result: ", result)
         print("Excerpts: ", result['excerpts'])
@@ -45,5 +46,6 @@ class PaperAnalyzer:
             result['relevance'], 
             result['excerpts'], 
             result['explanations'],
-            result.get('non_relevant_explanation')
+            result.get('non_relevant_explanation'),
+            result.get('excerpt_pages', [])
         )

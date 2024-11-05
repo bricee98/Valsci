@@ -16,7 +16,6 @@ except json.JSONDecodeError:
 
 class Config:
     SECRET_KEY = env_vars.get('FLASK_SECRET_KEY')
-    SEMANTIC_SCHOLAR_API_KEY = env_vars.get('SEMANTIC_SCHOLAR_API_KEY')
     OPENAI_API_KEY = env_vars.get('OPENAI_API_KEY')
     ANTHROPIC_API_KEY = env_vars.get('ANTHROPIC_API_KEY')
     USER_EMAIL = env_vars.get('USER_EMAIL')
