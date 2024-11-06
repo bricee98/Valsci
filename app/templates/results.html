@@ -120,13 +120,15 @@
                 </div>
             `;
 
-            reportContent.innerHTML = html;
-
             // Add search queries
             html += `
                 <h3>Search Queries:</h3>
                 <ul>${data.report.searchQueries.map(query => `<li>${query}</li>`).join('')}</ul>
             `;
+
+            reportContent.innerHTML = html;
+
+
         }
 
         if (claimId) {
