@@ -1,10 +1,10 @@
 # Valsci
 
-**Validate scientific claims en masse.**
+**A self-hosted, bring-your-own-API-key automated literature review tool.**
 
 ## Overview
 
-Valsci is a powerful tool designed to validate scientific claims by leveraging a combination of literature search, paper analysis, and evidence scoring. It automates the process of evaluating claims against existing scientific literature, providing users with detailed reports and insights.
+Valsci is designed to validate scientific claims by leveraging a combination of literature search, paper analysis, and evidence scoring. It automates the process of evaluating claims against existing scientific literature, providing users with detailed reports and insights.
 
 ## Features
 
