@@ -1,6 +1,0 @@
-{
-  "text": "BRCA-2 patients should not consume carbonated beverages.",
-  "status": "invalid",
-  "additional_info": "The statement is a recommendation rather than a scientific claim. It lacks a specific, testable assertion about the relationship between BRCA-2 and carbonated beverages.",
-  "suggested_claim": "The consumption of carbonated beverages may affect the health outcomes of patients with BRCA-2 mutations."
-}

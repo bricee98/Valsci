@@ -1,6 +1,0 @@
-{
-  "text": "cAMP binds to GCPR proteins.",
-  "status": "invalid",
-  "additional_info": "The claim uses abbreviations (cAMP and GCPR) that are not universally recognized without context. It is unclear what specific proteins or processes are being referred to.",
-  "suggested_claim": "Cyclic adenosine monophosphate (cAMP) interacts with G protein-coupled receptors (GPCRs)."
-}

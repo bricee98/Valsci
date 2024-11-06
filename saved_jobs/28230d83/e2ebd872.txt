@@ -1,6 +1,0 @@
-{
-  "text": "BRCA gene mutation carriers' survival rates are influenced by soda consumption.",
-  "status": "generating_report",
-  "additional_info": "",
-  "suggested_claim": "The survival rates of BRCA gene mutation carriers are affected by soda consumption."
-}

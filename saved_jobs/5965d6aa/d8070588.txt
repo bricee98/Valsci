@@ -1,6 +1,0 @@
-{
-  "text": "amp binds to every gcpr",
-  "status": "invalid",
-  "additional_info": "The claim is not valid because it uses ambiguous abbreviations ('amp' and 'gcpr') without context. It is unclear what 'amp' refers to (it could be adenosine monophosphate or something else), and 'gcpr' likely refers to G protein-coupled receptors, but this should be clarified.",
-  "suggested_claim": "Adenosine monophosphate (AMP) binds to all G protein-coupled receptors (GPCRs)."
-}
