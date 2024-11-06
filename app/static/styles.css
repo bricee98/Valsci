@@ -448,3 +448,72 @@ input[type="password"]:focus {
     align-items: center;
     gap: 8px;
 }
+
+/* Add these styles to your existing CSS file */
+
+.config-section {
+    margin-bottom: 20px;
+    width: 100%;
+}
+
+.config-toggle {
+    background-color: var(--primary-color);
+    color: white;
+    border: none;
+    padding: 12px 20px;
+    border-radius: 4px;
+    cursor: pointer;
+    width: 100%;
+    text-align: left;
+    margin-bottom: 10px;
+    transition: background-color 0.3s ease, transform 0.1s ease;
+}
+
+.config-toggle:hover {
+    background-color: var(--accent-color);
+    transform: translateY(-2px);
+}
+
+.config-toggle:active {
+    transform: translateY(0);
+}
+
+.config-panel {
+    background-color: white;
+    border: none;
+    padding: 30px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.config-panel h3 {
+    color: var(--primary-color);
+    border-bottom: 2px solid var(--secondary-color);
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+}
+
+.config-group {
+    margin-bottom: 10px;
+}
+
+.config-group label {
+    display: block;
+    margin-bottom: 5px;
+    color: var(--accent-color);
+    font-weight: 500;
+}
+
+.config-group input {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid var(--secondary-color);
+    border-radius: 4px;
+    transition: border-color 0.3s ease;
+}
+
+.config-group input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+}

@@ -218,6 +218,7 @@ class ClaimProcessor:
                 "link": p['paper'].url,
                 "relevance": p['relevance'],
                 "weight_score": p['score'],
+                "content_type": p['content_type'],
                 "excerpts": p['excerpts'],
                 "explanations": p['explanations'],
                 "citations": [
@@ -236,6 +237,7 @@ class ClaimProcessor:
         non_relevant_papers_data = [
             {
                 "title": nrp['paper'].title,
+                "content_type": nrp['content_type'],
                 "authors": [
                     {
                         "name": author['name'],
@@ -255,6 +257,7 @@ class ClaimProcessor:
         inaccessible_papers_data = [
             {
                 "title": ip['paper'].title,
+                "content_type": ip['content_type'],
                 "authors": [
                     {
                         "name": author['name'],
@@ -276,7 +279,8 @@ class ClaimProcessor:
             "nonRelevantPapers": non_relevant_papers_data,  # Use the parameter
             "inaccessiblePapers": inaccessible_papers_data,  # Add inaccessible papers
             "explanation": response['explanation'],
-            "claimRating": response['claimRating']
+            "claimRating": response['claimRating'],
+            "searchQueries": self.literature_searcher.saved_search_queries
         }
 
         # Add usage stats to the final report

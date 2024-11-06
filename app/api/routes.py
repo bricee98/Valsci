@@ -44,7 +44,16 @@ def upload_claim():
     if not verify_password(data.get('password')):
         return jsonify({"error": "Invalid password"}), 403
     
+    # Get search configuration
+    search_config = data.get('searchConfig', {})
+    num_queries = search_config.get('numQueries', 10)
+    results_per_query = search_config.get('resultsPerQuery', 1)
+    
     claim = Claim(text=data['text'], source=data.get('source', 'user'))
+    claim.search_config = {
+        'num_queries': num_queries,
+        'results_per_query': results_per_query
+    }
     
     batch_id = str(uuid.uuid4())[:8]
     claim_id = str(uuid.uuid4())[:8]

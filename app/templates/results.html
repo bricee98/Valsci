@@ -40,6 +40,7 @@
                         <h4>${paper.title}</h4>
                         <p><strong>Authors:</strong> ${paper.authors.map(author => `${author.name} (H-index: ${author.hIndex || 0})`).join(', ')}</p>
                         <p><strong>Relevance:</strong> ${paper.relevance}</p>
+                        <p><strong>Weight Score:</strong> ${paper.weight_score}</p>
                         <p><strong>Excerpts:</strong></p>
                         ${Array.isArray(paper.excerpts) 
                             ? `<ul>${paper.excerpts.map(excerpt => `<li>${excerpt}</li>`).join('')}</ul>`
@@ -54,6 +55,7 @@
                         <ul>
                             ${paper.citations.map(citation => `<li>${citation.citation}</li>`).join('')}
                         </ul>
+                        <p><strong>Content Type:</strong> ${paper.content_type}</p>
                         <p><a href="${paper.link}" target="_blank">Read Paper</a></p>
                     </li>
                 `;
@@ -89,6 +91,7 @@
                                     <p><strong>Authors:</strong> ${paper.authors.map(author => 
                                         `${author.name} (H-index: ${author.hIndex})`).join(', ')}</p>
                                     <p><strong>Why Not Relevant:</strong> ${paper.explanation}</p>
+                                    <p><strong>Content Reviewed:</strong> ${paper.content_type}</p>
                                     <p><a href="${paper.link}" target="_blank">Read Paper</a></p>
                                 </li>
                             `).join('')}
@@ -118,6 +121,12 @@
             `;
 
             reportContent.innerHTML = html;
+
+            // Add search queries
+            html += `
+                <h3>Search Queries:</h3>
+                <ul>${data.report.searchQueries.map(query => `<li>${query}</li>`).join('')}</ul>
+            `;
         }
 
         if (claimId) {

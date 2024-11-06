@@ -6,11 +6,43 @@ document.addEventListener('DOMContentLoaded', function() {
     const enhanceClaimBtn = document.getElementById('enhanceClaimBtn');
     const enhanceBatchBtn = document.getElementById('enhanceBatchBtn');
 
-    claimForm.addEventListener('submit', function(e) {
+    function getSearchConfig() {
+        return {
+            numQueries: parseInt(document.getElementById('numQueries').value) || 10,
+            resultsPerQuery: parseInt(document.getElementById('resultsPerQuery').value) || 1
+        };
+    }
+
+    claimForm.addEventListener('submit', async function(e) {
         e.preventDefault();
+        
         const claimText = document.getElementById('claimText').value;
-        const password = document.getElementById('claimPassword') ? document.getElementById('claimPassword').value : null;
-        submitClaim(claimText, password);
+        const password = requirePassword ? document.getElementById('claimPassword').value : '';
+        const config = getSearchConfig();
+        
+        try {
+            const response = await fetch('/api/v1/claims', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    text: claimText,
+                    password: password,
+                    searchConfig: config
+                })
+            });
+            const data = await response.json();
+            if (data.claim_id) {
+                window.location.href = `/progress?claim_id=${data.claim_id}`;
+            } else {
+                console.error('Claim ID is undefined:', data);
+                alert('There was an error processing your claim. Please try again.');
+            }
+        } catch (error) {
+            console.error('Error:', error);
+            alert('There was an error processing your claim. Please try again.');
+        }
     });
 
     fileForm.addEventListener('submit', function(e) {
@@ -52,34 +84,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const password = document.getElementById('batchPassword') ? document.getElementById('batchPassword').value : null;
         enhanceBatch(file, password);
     });
-
-    function submitClaim(claimText, password) {
-        const body = { text: claimText };
-        if (requirePassword && password) {
-            body.password = password;
-        }
-
-        fetch('/api/v1/claims', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(body),
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.claim_id) {
-                window.location.href = `/progress?claim_id=${data.claim_id}`;
-            } else {
-                console.error('Claim ID is undefined:', data);
-                alert('There was an error processing your claim. Please try again.');
-            }
-        })
-        .catch((error) => {
-            console.error('Error:', error);
-            alert('There was an error processing your claim. Please try again.');
-        });
-    }
 
     function submitFile(file) {
         const formData = new FormData();

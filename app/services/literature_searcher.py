@@ -57,6 +57,8 @@ class LiteratureSearcher:
         self.pdf_session = requests.Session()
         self.setup_pdf_session()
 
+        self.saved_search_queries = []
+
     def setup_session(self):
         retries = Retry(total=5, backoff_factor=0.1, status_forcelist=[500, 502, 503, 504])
         self.session.mount('https://', HTTPAdapter(max_retries=retries))
@@ -219,40 +221,46 @@ class LiteratureSearcher:
         response = self.openai_service.generate_text(user_message, system_prompt=system_prompt)
         return response
 
-    def generate_search_queries_from_analysis(self, claim: Claim, analysis: str) -> List[str]:
+    def generate_search_queries_from_analysis(self, claim: Claim, analysis: str, num_queries: int) -> List[str]:
         system_prompt = dedent("""
-        You are SciSearchBot, an expert in generating academic search queries. Based on the given claim and its analysis, provide a list of 10 search queries for OpenAlex to find relevant academic papers. These queries should help investigate the claims made in the analysis and explore related concepts. Return a JSON object with a single key 'queries' containing a list of search query strings.
+        You are SciSearchBot, an expert in generating academic search queries. Based on the given claim and its analysis, provide a list of {num_queries} search queries for OpenAlex to find relevant academic papers. These queries should help investigate the claims made in the analysis and explore related concepts. Return a JSON object with a single key 'queries' containing a list of search query strings.
         """).strip()
 
-        user_message = f"Claim: {claim.text}\n\nAnalysis: {analysis}\n\nGenerate 10 search queries to investigate this claim and analysis using OpenAlex."
+        user_message = f"Claim: {claim.text}\n\nAnalysis: {analysis}\n\nGenerate {num_queries} search queries to investigate this claim and analysis using OpenAlex."
 
         response = self.openai_service.generate_json(user_message, system_prompt=system_prompt)
         return response.get('queries', [])
 
-    def generate_search_queries(self, claim: Claim) -> dict:
+    def generate_search_queries(self, claim: Claim, num_queries: int) -> dict:
         # Step 1: Analyze the claim
         analysis = self.analyze_claim(claim)
 
         # Step 2: Generate search queries based on the analysis
-        search_queries = self.generate_search_queries_from_analysis(claim, analysis)
-
+        search_queries = self.generate_search_queries_from_analysis(claim, analysis, num_queries)
+        self.saved_search_queries.extend(search_queries)
         return {
             'explanation': analysis,
             'search_queries': search_queries
         }
 
     def search_papers(self, claim: Claim) -> List[Paper]:
+        num_queries = claim.search_config.get('num_queries', 10)
         # Generate search queries using OpenAI
-        search_data = self.generate_search_queries(claim)
+        search_data = self.generate_search_queries(claim, num_queries)
         search_queries = search_data.get('search_queries', [])
         logger.info(f"Generated search queries: {search_queries}")
+
+        # Get configuration from claim object
+        search_config = getattr(claim, 'search_config', {})
+        results_per_query = search_config.get('results_per_query', 1)
+
 
         all_papers = []
         for query in search_queries:
             url = "https://api.openalex.org/works"
             params = {
                 "search": query,
-                "per-page": 1,
+                "per-page": results_per_query,
                 "select": "id,title,authorships,publication_year,primary_location,locations,open_access,abstract_inverted_index"
             }
             
