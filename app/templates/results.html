@@ -35,27 +35,34 @@
             `;
 
             data.report.supportingPapers.forEach(paper => {
+                const authorText = paper.authors && Array.isArray(paper.authors) 
+                    ? paper.authors.map(author => `${author.name} (H-index: ${author.hIndex || 0})`).join(', ')
+                    : 'Authors not available';
+
                 html += `
                     <li>
                         <h4>${paper.title}</h4>
-                        <p><strong>Authors:</strong> ${paper.authors.map(author => `${author.name} (H-index: ${author.hIndex || 0})`).join(', ')}</p>
+                        <p><strong>Authors:</strong> ${authorText}</p>
                         <p><strong>Relevance:</strong> ${paper.relevance}</p>
                         <p><strong>Weight Score:</strong> ${paper.weight_score}</p>
                         <p><strong>Excerpts:</strong></p>
                         ${Array.isArray(paper.excerpts) 
                             ? `<ul>${paper.excerpts.map(excerpt => `<li>${excerpt}</li>`).join('')}</ul>`
-                            : `<p>${paper.excerpts}</p>`
+                            : `<p>${paper.excerpts || 'No excerpts available'}</p>`
                         }
                         <p><strong>Explanations:</strong></p>
                         ${Array.isArray(paper.explanations) 
                             ? `<ul>${paper.explanations.map(explanation => `<li>${explanation}</li>`).join('')}</ul>`
-                            : `<p>${paper.explanations}</p>`
+                            : `<p>${paper.explanations || 'No explanations available'}</p>`
                         }
                         <p><strong>Citations:</strong></p>
                         <ul>
-                            ${paper.citations.map(citation => `<li>${citation.citation}</li>`).join('')}
+                            ${Array.isArray(paper.citations) 
+                                ? paper.citations.map(citation => `<li>${citation.citation}</li>`).join('')
+                                : '<li>No citations available</li>'
+                            }
                         </ul>
-                        <p><strong>Content Type:</strong> ${paper.content_type}</p>
+                        <p><strong>Content Type:</strong> ${paper.content_type || 'Not specified'}</p>
                         <p><a href="${paper.link}" target="_blank">Read Paper</a></p>
                     </li>
                 `;
@@ -83,18 +90,23 @@
             html += `
                 <h3>Other Reviewed Papers:</h3>
                 <div class="non-relevant-papers">
-                    ${data.report.nonRelevantPapers && data.report.nonRelevantPapers.length > 0 ? `
+                    ${data.report.nonRelevantPapers && Array.isArray(data.report.nonRelevantPapers) && data.report.nonRelevantPapers.length > 0 ? `
                         <ul>
-                            ${data.report.nonRelevantPapers.map(paper => `
-                                <li>
-                                    <h4>${paper.title}</h4>
-                                    <p><strong>Authors:</strong> ${paper.authors.map(author => 
-                                        `${author.name} (H-index: ${author.hIndex})`).join(', ')}</p>
-                                    <p><strong>Why Not Relevant:</strong> ${paper.explanation}</p>
-                                    <p><strong>Content Reviewed:</strong> ${paper.content_type}</p>
-                                    <p><a href="${paper.link}" target="_blank">Read Paper</a></p>
-                                </li>
-                            `).join('')}
+                            ${data.report.nonRelevantPapers.map(paper => {
+                                const authorText = paper.authors && Array.isArray(paper.authors)
+                                    ? paper.authors.map(author => `${author.name} (H-index: ${author.hIndex || 0})`).join(', ')
+                                    : 'Authors not available';
+                                
+                                return `
+                                    <li>
+                                        <h4>${paper.title}</h4>
+                                        <p><strong>Authors:</strong> ${authorText}</p>
+                                        <p><strong>Why Not Relevant:</strong> ${paper.explanation || 'No explanation provided'}</p>
+                                        <p><strong>Content Reviewed:</strong> ${paper.content_type || 'Not specified'}</p>
+                                        <p><a href="${paper.link}" target="_blank">Read Paper</a></p>
+                                    </li>
+                                `;
+                            }).join('')}
                         </ul>
                     ` : '<p>No other papers were reviewed.</p>'}
                 </div>
@@ -104,17 +116,22 @@
             html += `
                 <h3>Inaccessible Papers:</h3>
                 <div class="inaccessible-papers">
-                    ${data.report.inaccessiblePapers && data.report.inaccessiblePapers.length > 0 ? `
+                    ${data.report.inaccessiblePapers && Array.isArray(data.report.inaccessiblePapers) && data.report.inaccessiblePapers.length > 0 ? `
                         <ul>
-                            ${data.report.inaccessiblePapers.map(paper => `
-                                <li>
-                                    <h4>${paper.title}</h4>
-                                    <p><strong>Authors:</strong> ${paper.authors.map(author => 
-                                        `${author.name}`).join(', ')}</p>
-                                    <p><strong>Reason:</strong> ${paper.reason}</p>
-                                    <p><a href="${paper.link}" target="_blank">Read Paper</a></p>
-                                </li>
-                            `).join('')}
+                            ${data.report.inaccessiblePapers.map(paper => {
+                                const authorText = paper.authors && Array.isArray(paper.authors)
+                                    ? paper.authors.map(author => author.name).join(', ')
+                                    : 'Authors not available';
+                                
+                                return `
+                                    <li>
+                                        <h4>${paper.title}</h4>
+                                        <p><strong>Authors:</strong> ${authorText}</p>
+                                        <p><strong>Reason:</strong> ${paper.reason || 'No reason provided'}</p>
+                                        <p><a href="${paper.link}" target="_blank">Read Paper</a></p>
+                                    </li>
+                                `;
+                            }).join('')}
                         </ul>
                     ` : '<p>No inaccessible papers were found.</p>'}
                 </div>
@@ -123,7 +140,10 @@
             // Add search queries
             html += `
                 <h3>Search Queries:</h3>
-                <ul>${data.report.searchQueries.map(query => `<li>${query}</li>`).join('')}</ul>
+                <ul>${Array.isArray(data.report.searchQueries) 
+                    ? data.report.searchQueries.map(query => `<li>${query}</li>`).join('')
+                    : '<li>No search queries available</li>'
+                }</ul>
             `;
 
             reportContent.innerHTML = html;
