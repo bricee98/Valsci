@@ -121,16 +121,30 @@ class OpenAIService:
             )
             tasks.append(task)
         
-        responses = await asyncio.gather(*tasks)
-        results = []
-        
-        for response, original_claim in zip(responses, claims):
-            self._update_token_usage(response.usage)
-            results.append({
-                'original': original_claim,
-                'enhanced': response.choices[0].message.content,
-                'is_valid': True,  # You might want to add validation logic here
-                'explanation': ''  # Add explanation if needed
-            })
-        
-        return results
+        try:
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            results = []
+            
+            for response, original_claim in zip(responses, claims):
+                if isinstance(response, Exception):
+                    print(f"Error processing claim: {str(response)}")
+                    results.append({
+                        'original': original_claim,
+                        'enhanced': original_claim,
+                        'is_valid': False,
+                        'explanation': f"Error: {str(response)}"
+                    })
+                    continue
+                    
+                self._update_token_usage(response.usage)
+                results.append({
+                    'original': original_claim,
+                    'enhanced': response.choices[0].message.content,
+                    'is_valid': True,
+                    'explanation': ''
+                })
+            
+            return results
+        except Exception as e:
+            print(f"Batch processing error: {str(e)}")
+            raise

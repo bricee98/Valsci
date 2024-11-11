@@ -343,34 +343,13 @@ def download_citations(claim_id):
 
     return jsonify({"error": "Claim not found"}), 404
 
-async def process_claims_in_batches(claims: List[str], batch_id: str) -> List[dict]:
-    openai_service = OpenAIService()
-    batch_size = 100
-    results = []
-    
-    # Process claims in batches of 100
-    for i in range(0, len(claims), batch_size):
-        batch = claims[i:i + batch_size]
-        batch_results = await openai_service.process_claims_batch(batch)
-        results.extend(batch_results)
-        
-        # Update progress
-        progress = {
-            "processed_claims": min(i + batch_size, len(claims)),
-            "total_claims": len(claims),
-            "status": "processing" if i + batch_size < len(claims) else "completed"
-        }
-        update_enhance_progress(batch_id, progress)
-    
-    return results
-
 def update_enhance_progress(batch_id: str, progress: dict):
     progress_file = os.path.join(SAVED_JOBS_DIR, batch_id, 'enhance_progress.json')
     with open(progress_file, 'w') as f:
         json.dump(progress, f)
 
 @api.route('/api/v1/enhance-batch', methods=['POST'])
-async def enhance_batch():
+def enhance_batch():
     if 'file' not in request.files:
         return jsonify({"error": "No file part"}), 400
     
@@ -395,21 +374,62 @@ async def enhance_batch():
     # Read claims
     claims = [line.strip() for line in file.stream.read().decode('utf-8').splitlines() if line.strip()]
     
-    # Process claims asynchronously
-    enhanced_claims = await process_claims_in_batches(claims, batch_id)
+    # Start background task
+    def process_in_background():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            # Process claims in batches
+            openai_service = OpenAIService()
+            batch_size = 100
+            all_results = []
+            
+            for i in range(0, len(claims), batch_size):
+                batch = claims[i:i + batch_size]
+                batch_results = loop.run_until_complete(openai_service.process_claims_batch(batch))
+                all_results.extend(batch_results)
+                
+                # Update progress
+                update_enhance_progress(batch_id, {
+                    "processed_claims": min(i + batch_size, len(claims)),
+                    "total_claims": len(claims),
+                    "status": "processing"
+                })
+            
+            # Save final results
+            results_file = os.path.join(batch_dir, 'enhanced_claims.json')
+            with open(results_file, 'w') as f:
+                json.dump({
+                    'claims': all_results,
+                    'timestamp': datetime.now().isoformat()
+                }, f, indent=2)
+            
+            # Update final progress
+            update_enhance_progress(batch_id, {
+                "processed_claims": len(claims),
+                "total_claims": len(claims),
+                "status": "completed"
+            })
+            
+        except Exception as e:
+            print(f"Error in background task: {str(e)}")
+            update_enhance_progress(batch_id, {
+                "processed_claims": 0,
+                "total_claims": len(claims),
+                "status": "error",
+                "error": str(e)
+            })
+        finally:
+            loop.close()
     
-    # Save results
-    results_file = os.path.join(batch_dir, 'enhanced_claims.json')
-    with open(results_file, 'w') as f:
-        json.dump({
-            'claims': enhanced_claims,
-            'timestamp': datetime.now().isoformat()
-        }, f, indent=2)
+    # Start processing in background
+    threading.Thread(target=process_in_background).start()
     
     return jsonify({
         "batch_id": batch_id,
-        "message": "Claims enhanced successfully"
-    }), 200
+        "message": "Processing started"
+    }), 202
 
 @api.route('/api/v1/enhance-batch/<batch_id>/progress', methods=['GET'])
 def get_enhance_progress(batch_id):
