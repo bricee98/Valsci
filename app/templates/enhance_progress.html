@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhancing Claims</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>Enhancing Claims</h1>
+        <div id="progressContainer">
+            <h2>Progress</h2>
+            <div id="progressStats"></div>
+            <div id="progressBar"></div>
+        </div>
+    </div>
+    <script>
+        const batchId = '{{ batch_id }}';
+
+        function updateProgress() {
+            fetch(`/api/v1/enhance-batch/${batchId}/progress`)
+                .then(response => response.json())
+                .then(data => {
+                    const progress = (data.processed_claims / data.total_claims) * 100;
+                    
+                    document.getElementById('progressStats').innerHTML = `
+                        <p>Processed ${data.processed_claims} out of ${data.total_claims} claims</p>
+                        <p>${progress.toFixed(2)}% complete</p>
+                    `;
+                    
+                    document.getElementById('progressBar').innerHTML = `
+                        <progress value="${data.processed_claims}" max="${data.total_claims}"></progress>
+                    `;
+
+                    if (data.status === 'completed') {
+                        setTimeout(() => {
+                            window.location.href = `/enhance-results?batch_id=${batchId}`;
+                        }, 2000);
+                    } else {
+                        setTimeout(updateProgress, 5000);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching progress:', error);
+                    document.getElementById('progressStats').innerHTML = '<p>Error fetching progress. Please wait...</p>';
+                    setTimeout(updateProgress, 5000);
+                });
+        }
+
+        updateProgress();
+    </script>
+</body>
+</html> 

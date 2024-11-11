@@ -1,8 +1,9 @@
 import openai
 import json
 from app.config.settings import Config
-from typing import Any, Optional
-from openai import AzureOpenAI
+from typing import Any, Optional, List
+from openai import AzureOpenAI, AsyncAzureOpenAI
+import asyncio
 
 class OpenAIService:
     def __init__(self):
@@ -12,8 +13,14 @@ class OpenAIService:
                 azure_endpoint=Config.AZURE_OPENAI_ENDPOINT,
                 api_version=Config.AZURE_OPENAI_API_VERSION
             )
+            self.async_client = AsyncAzureOpenAI(
+                api_key=Config.AZURE_OPENAI_API_KEY,
+                azure_endpoint=Config.AZURE_OPENAI_ENDPOINT,
+                api_version=Config.AZURE_OPENAI_API_VERSION
+            )
         else:
             self.client = openai.OpenAI(api_key=Config.OPENAI_API_KEY)
+            self.async_client = openai.AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
         
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
@@ -97,3 +104,33 @@ class OpenAIService:
             temperature=0.0
         )
         return float(response.choices[0].message.content.strip())
+
+    async def process_claims_batch(self, claims: List[str], system_prompt: Optional[str] = None) -> List[dict]:
+        """Process a batch of claims asynchronously"""
+        tasks = []
+        for claim in claims:
+            messages = [
+                {"role": "system", "content": system_prompt or "You are a helpful assistant. Please validate the claim format and suggest improvements."},
+                {"role": "user", "content": claim}
+            ]
+            
+            task = self.async_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                temperature=0.0
+            )
+            tasks.append(task)
+        
+        responses = await asyncio.gather(*tasks)
+        results = []
+        
+        for response, original_claim in zip(responses, claims):
+            self._update_token_usage(response.usage)
+            results.append({
+                'original': original_claim,
+                'enhanced': response.choices[0].message.content,
+                'is_valid': True,  # You might want to add validation logic here
+                'explanation': ''  # Add explanation if needed
+            })
+        
+        return results

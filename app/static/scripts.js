@@ -73,16 +73,40 @@ document.addEventListener('DOMContentLoaded', function() {
         enhanceClaim(claimText, password);
     });
 
-    enhanceBatchBtn.addEventListener('click', function() {
+    enhanceBatchBtn.addEventListener('click', async function(e) {
+        e.preventDefault();
+        
         const fileInput = document.getElementById('claimFile');
-        const file = fileInput.files[0];
-        if (!file) {
-            alert('Please select a file to enhance.');
+        const passwordInput = document.getElementById('batchPassword');
+        
+        if (!fileInput.files.length) {
+            alert('Please select a file first');
             return;
         }
         
-        const password = document.getElementById('batchPassword') ? document.getElementById('batchPassword').value : null;
-        enhanceBatch(file, password);
+        const formData = new FormData();
+        formData.append('file', fileInput.files[0]);
+        if (passwordInput) {
+            formData.append('password', passwordInput.value);
+        }
+        
+        try {
+            const response = await fetch('/api/v1/enhance-batch', {
+                method: 'POST',
+                body: formData
+            });
+            
+            const data = await response.json();
+            
+            if (response.ok) {
+                window.location.href = `/enhance-progress?batch_id=${data.batch_id}`;
+            } else {
+                alert(data.error || 'Error enhancing claims');
+            }
+        } catch (error) {
+            console.error('Error:', error);
+            alert('Error enhancing claims');
+        }
     });
 
     function submitFile(file) {

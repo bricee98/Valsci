@@ -8,6 +8,10 @@ from app.services.claim_processor import ClaimProcessor
 from app.models.claim import Claim
 from app.models.batch_job import BatchJob
 from datetime import datetime
+import asyncio
+from typing import List
+import math
+from app.services.openai_service import OpenAIService
 
 api = Blueprint('api', __name__)
 
@@ -339,21 +343,34 @@ def download_citations(claim_id):
 
     return jsonify({"error": "Claim not found"}), 404
 
-@api.route('/api/v1/enhance-claim', methods=['POST'])
-def enhance_claim():
-    data = request.json
-    if 'text' not in data:
-        return jsonify({"error": "Missing claim text"}), 400
+async def process_claims_in_batches(claims: List[str], batch_id: str) -> List[dict]:
+    openai_service = OpenAIService()
+    batch_size = 100
+    results = []
     
-    if not verify_password(data.get('password')):
-        return jsonify({"error": "Invalid password"}), 403
+    # Process claims in batches of 100
+    for i in range(0, len(claims), batch_size):
+        batch = claims[i:i + batch_size]
+        batch_results = await openai_service.process_claims_batch(batch)
+        results.extend(batch_results)
+        
+        # Update progress
+        progress = {
+            "processed_claims": min(i + batch_size, len(claims)),
+            "total_claims": len(claims),
+            "status": "processing" if i + batch_size < len(claims) else "completed"
+        }
+        update_enhance_progress(batch_id, progress)
     
-    claim_processor = ClaimProcessor()
-    validation_result = claim_processor.validate_claim_format(data['text'])
-    return jsonify(validation_result), 200
+    return results
+
+def update_enhance_progress(batch_id: str, progress: dict):
+    progress_file = os.path.join(SAVED_JOBS_DIR, batch_id, 'enhance_progress.json')
+    with open(progress_file, 'w') as f:
+        json.dump(progress, f)
 
 @api.route('/api/v1/enhance-batch', methods=['POST'])
-def enhance_batch():
+async def enhance_batch():
     if 'file' not in request.files:
         return jsonify({"error": "No file part"}), 400
     
@@ -368,24 +385,18 @@ def enhance_batch():
     batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
     os.makedirs(batch_dir, exist_ok=True)
     
-    # Save original claims
-    original_claims = []
-    enhanced_claims = []
+    # Initialize progress file
+    update_enhance_progress(batch_id, {
+        "processed_claims": 0,
+        "total_claims": 0,
+        "status": "initializing"
+    })
     
-    claim_processor = ClaimProcessor()
-
-    # Read and process claims
-    for line in file.stream.read().decode('utf-8').splitlines():
-        if line.strip():
-            original_claims.append(line.strip())
-            
-            validation_result = claim_processor.validate_claim_format(line.strip())
-            enhanced_claims.append({
-                'original': line.strip(),
-                'enhanced': validation_result['suggested'],
-                'is_valid': validation_result['is_valid'],
-                'explanation': validation_result['explanation']
-            })
+    # Read claims
+    claims = [line.strip() for line in file.stream.read().decode('utf-8').splitlines() if line.strip()]
+    
+    # Process claims asynchronously
+    enhanced_claims = await process_claims_in_batches(claims, batch_id)
     
     # Save results
     results_file = os.path.join(batch_dir, 'enhanced_claims.json')
@@ -399,6 +410,14 @@ def enhance_batch():
         "batch_id": batch_id,
         "message": "Claims enhanced successfully"
     }), 200
+
+@api.route('/api/v1/enhance-batch/<batch_id>/progress', methods=['GET'])
+def get_enhance_progress(batch_id):
+    progress_file = os.path.join(SAVED_JOBS_DIR, batch_id, 'enhance_progress.json')
+    if os.path.exists(progress_file):
+        with open(progress_file, 'r') as f:
+            return jsonify(json.load(f))
+    return jsonify({"error": "Batch not found"}), 404
 
 @api.route('/enhance-results', methods=['GET'])
 def enhance_results():
@@ -432,3 +451,10 @@ def download_enhanced_claims(batch_id):
         mimetype="text/plain",
         headers={"Content-disposition": f"attachment; filename=enhanced_claims_{batch_id}.txt"}
     )
+
+@api.route('/enhance-progress', methods=['GET'])
+def enhance_progress():
+    batch_id = request.args.get('batch_id')
+    if not batch_id:
+        return "No batch ID provided", 400
+    return render_template('enhance_progress.html', batch_id=batch_id)
