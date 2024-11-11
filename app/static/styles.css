@@ -517,3 +517,172 @@ input[type="password"]:focus {
     outline: none;
     border-color: var(--primary-color);
 }
+
+/* Add these new styles for the enhanced batch results page */
+
+.actions-bar {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 20px;
+    align-items: center;
+}
+
+.danger-button {
+    background-color: #dc3545;
+}
+
+.danger-button:hover {
+    background-color: #c82333;
+}
+
+.primary-button {
+    background-color: var(--primary-color);
+}
+
+.filter-input {
+    flex-grow: 1;
+    padding: 8px 12px;
+    border: 1px solid var(--secondary-color);
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+/* Tabulator customization */
+.tabulator {
+    background-color: white;
+    border: 1px solid var(--secondary-color);
+    border-radius: 8px;
+    overflow: hidden;
+    font-family: 'Roboto', sans-serif;
+}
+
+.tabulator-header {
+    background-color: var(--primary-color);
+    color: white;
+    font-weight: bold;
+}
+
+.tabulator-header-filter input {
+    padding: 4px 8px;
+    border: 1px solid var(--secondary-color);
+    border-radius: 4px;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.tabulator-row {
+    border-bottom: 1px solid #eee;
+}
+
+.tabulator-row:nth-child(even) {
+    background-color: #f8f9fa;
+}
+
+.tabulator-row:hover {
+    background-color: #f0f0f0;
+}
+
+.report-link {
+    color: var(--primary-color);
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.report-link:hover {
+    text-decoration: underline;
+}
+
+.error-message {
+    padding: 20px;
+    background-color: #fff3f3;
+    border: 1px solid #dc3545;
+    border-radius: 4px;
+    color: #dc3545;
+    text-align: center;
+    margin: 20px 0;
+}
+
+.total-price {
+    margin-top: 20px;
+    text-align: right;
+    font-size: 1.2em;
+    color: var(--primary-color);
+    background-color: white;
+    padding: 15px;
+    border-radius: 4px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Add these styles for wider table layout */
+.wide-container {
+    max-width: 1400px;  /* Increased from 800px */
+    width: 95%;         /* Use percentage instead of fixed width */
+    margin: 0 auto;     /* Center the container */
+}
+
+.tabulator {
+    width: 100%;        /* Ensure table uses full container width */
+    font-size: 14px;    /* Slightly larger font for better readability */
+}
+
+.tabulator-cell {
+    padding: 12px 8px;  /* More padding in cells for better readability */
+    white-space: normal;  /* Allow text to wrap */
+    word-break: break-word;  /* Break long words if necessary */
+}
+
+.tabulator-header-filter input {
+    min-width: 80px;    /* Ensure filter inputs are wide enough */
+}
+
+/* Ensure the table is scrollable on smaller screens */
+@media (max-width: 1400px) {
+    .wide-container {
+        width: 98%;
+        padding: 10px;
+    }
+    
+    .tabulator {
+        overflow-x: auto;
+    }
+}
+
+/* Add these styles for the enhanced claim rating display */
+.claim-rating {
+    padding: 25px;
+    border-radius: 12px;
+    margin: 20px 0;
+    text-align: center;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    transition: transform 0.2s ease;
+}
+
+.claim-rating:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+}
+
+.claim-rating h3 {
+    color: white;
+    margin: 0 0 15px 0;
+    font-size: 1.2em;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.rating-value {
+    font-size: 3em;
+    font-weight: bold;
+    color: white;
+    margin: 10px 0;
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.rating-text {
+    color: white;
+    font-size: 1.2em;
+    font-weight: 500;
+    margin-top: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}

@@ -5,76 +5,144 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Batch Results</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <!-- Add Tabulator for advanced table features -->
+    <link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator.min.css" rel="stylesheet">
+    <script type="text/javascript" src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js"></script>
 </head>
 <body>
-    <div class="container">
+    <div class="container wide-container">
         <h1>Batch Results</h1>
-        <button id="deleteBatchButton">Delete Batch</button>
-        <table id="resultsTable">
-            <thead>
-                <tr>
-                    <th>Claim</th>
-                    <th>Status</th>
-                    <th>Rating</th>
-                    <th>Price</th>
-                    <th>Report</th>
-                </tr>
-            </thead>
-            <tbody id="resultsBody">
-            </tbody>
-        </table>
-        <div id="totalPrice"></div>
+        <div class="actions-bar">
+            <button id="deleteBatchButton" class="danger-button">Delete Batch</button>
+            <button id="downloadCSV" class="primary-button">Download CSV</button>
+            <input type="text" id="filter-input" placeholder="Filter results..." class="filter-input">
+        </div>
+        
+        <div id="resultsTable"></div>
+        <div id="totalPrice" class="total-price"></div>
     </div>
+
     <script>
         const batchId = '{{ batch_id }}';
-        const resultsBody = document.getElementById('resultsBody');
-        const totalPriceDiv = document.getElementById('totalPrice');
+        let table;
         let totalBatchPrice = 0;
 
-        function loadBatchResults() {
-            fetch(`/api/v1/batch/${batchId}`)
-                .then(response => response.json())
-                .then(data => {
-                    data.claims.forEach(claim => {
-                        const row = document.createElement('tr');
-                        let report = 'N/A';
-                        let rating = 'N/A';
-                        let price = 'N/A';
-                        if (claim.status !== 'Error') {
-                            try {
-                                const reportData = JSON.parse(claim.additional_info);
-                                rating = reportData.claimRating || 'N/A';
-                                price = reportData.usage_stats ? `$${reportData.usage_stats.total_cost.toFixed(4)}` : 'N/A';
-                                report = `<a href="/results?claim_id=${claim.claim_id}">View Report</a>`;
-                                
-                                if (reportData.usage_stats && reportData.usage_stats.total_cost) {
-                                    totalBatchPrice += reportData.usage_stats.total_cost;
-                                }
-                            } catch (e) {
-                                console.error('Error parsing report:', e);
-                            }
-                        }
-                        row.innerHTML = `
-                            <td data-label="Claim">${claim.text || 'N/A'}</td>
-                            <td data-label="Status">${claim.status}</td>
-                            <td data-label="Rating">${rating}</td>
-                            <td data-label="Price">${price}</td>
-                            <td data-label="Report">${claim.status === 'Error' ? claim.additional_info : report}</td>
-                        `;
-                        resultsBody.appendChild(row);
-                    });
-                    
-                    // Display total batch price
-                    totalPriceDiv.innerHTML = `<h3>Total Batch Price: $${totalBatchPrice.toFixed(4)}</h3>`;
-                })
-                .catch(error => {
-                    console.error('Error fetching batch results:', error);
-                    resultsBody.innerHTML = '<tr><td colspan="5">Error fetching batch results. Please try again later.</td></tr>';
-                });
+        // Convert numerical rating to text description
+        function getRatingText(rating) {
+            if (rating === null || rating === undefined) return 'No Rating';
+            if (rating <= -7) return 'Contradicted';
+            if (rating <= -4) return 'Somewhat Refuted';
+            if (rating < 0) return 'Slightly Refuted';
+            if (rating === 0) return 'No Evidence';
+            if (rating <= 3) return 'Slightly Supported';
+            if (rating <= 6) return 'Reasonably Supported';
+            return 'Strongly Supported';
         }
 
-        loadBatchResults();
+        // Format numbers with commas
+        function numberWithCommas(x) {
+            return x.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+        }
 
+        function initializeTable(data) {
+            // Process the data to add derived columns
+            const tableData = data.claims.map(claim => {
+                let reportData = { claimRating: null, usage_stats: null };
+                let papersReviewed = 0;
+                let supportingPapers = 0;
+                
+                if (claim.status !== 'Error') {
+                    try {
+                        reportData = JSON.parse(claim.additional_info);
+                        papersReviewed = (reportData.supportingPapers || []).length + 
+                                       (reportData.nonRelevantPapers || []).length;
+                        supportingPapers = (reportData.supportingPapers || []).length;
+                    } catch (e) {
+                        console.error('Error parsing report:', e);
+                    }
+                }
+
+                return {
+                    text: claim.text || 'N/A',
+                    status: claim.status,
+                    rating: reportData.claimRating,
+                    ratingText: getRatingText(reportData.claimRating),
+                    price: reportData.usage_stats ? reportData.usage_stats.total_cost : 0,
+                    papersReviewed: papersReviewed,
+                    supportingPapers: supportingPapers,
+                    claim_id: claim.claim_id,
+                    report: claim.status === 'Error' ? claim.additional_info : 'View Report'
+                };
+            });
+
+            // Initialize Tabulator
+            table = new Tabulator("#resultsTable", {
+                data: tableData,
+                layout: "fitColumns",
+                responsiveLayout: "collapse",
+                pagination: "local",
+                paginationSize: 25,
+                paginationSizeSelector: [10, 25, 50, 100],
+                columns: [
+                    {title: "Claim", field: "text", sorter: "string", headerFilter: true, minWidth: 400, widthGrow: 3},
+                    {title: "Status", field: "status", sorter: "string", headerFilter: true, minWidth: 100},
+                    {title: "Rating", field: "rating", sorter: "number", headerFilter: true, minWidth: 100},
+                    {title: "Assessment", field: "ratingText", sorter: "string", headerFilter: true, minWidth: 150},
+                    {title: "Papers Reviewed", field: "papersReviewed", sorter: "number", headerFilter: true, minWidth: 150},
+                    {title: "Supporting Papers", field: "supportingPapers", sorter: "number", headerFilter: true, minWidth: 150},
+                    {
+                        title: "Price", 
+                        field: "price", 
+                        sorter: "number",
+                        minWidth: 120,
+                        formatter: function(cell) {
+                            const value = cell.getValue();
+                            return value ? `$${value.toFixed(4)}` : 'N/A';
+                        }
+                    },
+                    {
+                        title: "Report",
+                        field: "report",
+                        minWidth: 100,
+                        formatter: function(cell) {
+                            const value = cell.getValue();
+                            const claim_id = cell.getRow().getData().claim_id;
+                            return value === 'View Report' 
+                                ? `<a href="/results?claim_id=${claim_id}" class="report-link">View Report</a>`
+                                : value;
+                        },
+                        headerSort: false
+                    }
+                ],
+                initialSort: [
+                    {column: "rating", dir: "desc"}
+                ]
+            });
+
+            // Calculate and display total price
+            const totalPrice = tableData.reduce((sum, row) => sum + (row.price || 0), 0);
+            document.getElementById('totalPrice').innerHTML = 
+                `<h3>Total Batch Price: $${totalPrice.toFixed(4)}</h3>`;
+        }
+
+        // Load the data and initialize the table
+        fetch(`/api/v1/batch/${batchId}`)
+            .then(response => response.json())
+            .then(data => {
+                initializeTable(data);
+            })
+            .catch(error => {
+                console.error('Error fetching batch results:', error);
+                document.getElementById('resultsTable').innerHTML = 
+                    '<div class="error-message">Error fetching batch results. Please try again later.</div>';
+            });
+
+        // Download CSV handler
+        document.getElementById('downloadCSV').addEventListener('click', function() {
+            table.download("csv", `batch_results_${batchId}.csv`);
+        });
+
+        // Delete batch handler
         document.getElementById('deleteBatchButton').addEventListener('click', function() {
             if (confirm('Are you sure you want to delete this batch?')) {
                 fetch(`/api/v1/delete/batch/${batchId}`, { method: 'DELETE' })
@@ -88,6 +156,11 @@
                         alert('Error deleting batch. Please try again.');
                     });
             }
+        });
+
+        // Filter input handler
+        document.getElementById('filter-input').addEventListener('keyup', function(e) {
+            table.setFilter("text", "like", e.target.value);
         });
     </script>
 </body>

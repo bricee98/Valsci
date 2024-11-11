@@ -95,6 +95,10 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
 
+        const config = getSearchConfig();
+        formData.append('numQueries', config.numQueries);
+        formData.append('resultsPerQuery', config.resultsPerQuery);
+
         fetch('/api/v1/batch', {
             method: 'POST',
             body: formData,

@@ -101,6 +101,12 @@ def start_batch_job():
     if not verify_password(request.form.get('password')):
         return jsonify({"error": "Invalid password"}), 403
     
+    # Get search configuration
+    search_config = {
+        'num_queries': int(request.form.get('numQueries', 10)),
+        'results_per_query': int(request.form.get('resultsPerQuery', 1))
+    }
+    
     file = request.files['file']
     if file.filename == '':
         return jsonify({"error": "No selected file"}), 400
@@ -114,7 +120,14 @@ def start_batch_job():
         with open(file_path, 'r') as f:
             claims = [line.strip() for line in f if line.strip()]
         
-        batch_job = BatchJob(claims=[Claim(text=claim) for claim in claims])
+        # Create claims and set search config after initialization
+        batch_claims = []
+        for claim_text in claims:
+            claim = Claim(text=claim_text)
+            claim.search_config = search_config
+            batch_claims.append(claim)
+        
+        batch_job = BatchJob(claims=batch_claims)
         
         threading.Thread(target=process_batch_in_background, args=(batch_job, batch_id)).start()
         
@@ -411,13 +424,11 @@ def download_enhanced_claims(batch_id):
     with open(results_file, 'r') as f:
         results = json.load(f)
     
-    # Create CSV content
-    output = "Original Claim,Enhanced Claim,Is Valid,Explanation\n"
-    for claim in results['claims']:
-        output += f'"{claim["original"]}","{claim["enhanced"]}",{claim["is_valid"]},"{claim["explanation"]}"\n'
+    # Create text content with one enhanced claim per line
+    output = "\n".join(claim["enhanced"] for claim in results['claims'])
     
     return Response(
         output,
-        mimetype="text/csv",
-        headers={"Content-disposition": f"attachment; filename=enhanced_claims_{batch_id}.csv"}
+        mimetype="text/plain",
+        headers={"Content-disposition": f"attachment; filename=enhanced_claims_{batch_id}.txt"}
     )
