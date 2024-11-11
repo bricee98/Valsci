@@ -108,15 +108,51 @@ class OpenAIService:
     async def process_claims_batch(self, claims: List[str], system_prompt: Optional[str] = None) -> List[dict]:
         """Process a batch of claims asynchronously"""
         tasks = []
+        
+        # Use the same system prompt as in ClaimProcessor
+        default_system_prompt = """
+        You are an AI assistant tasked with evaluating scientific claims and optimizing them for search. 
+        Respond with a JSON object containing 'is_valid' (boolean), 'explanation' (string), and 'suggested' (string).
+        The 'is_valid' field should be true if the input is a proper scientific claim, and false otherwise. 
+        The 'explanation' field should provide a brief reason for your decision.
+        The 'suggested' field should always contain an optimized version of the claim, 
+        even if the original claim is invalid. For invalid claims, provide a corrected or improved version.
+
+        Examples of valid scientific claims (note: these may or may not be true, but they are properly formed claims):
+         1. "Increased consumption of processed foods is linked to higher rates of obesity in urban populations."
+         2. "The presence of certain gut bacteria can influence mood and cognitive function in humans."
+         3. "Exposure to blue light from electronic devices before bedtime does not disrupt the circadian rhythm."
+         4. "Regular meditation practice can lead to structural changes in the brain's gray matter."
+         5. "Higher levels of atmospheric CO2 have no effect on global average temperatures."
+         6. "Calcium channels are affected by AMP."
+         7. "People who drink soda are much healthier than those who don't."
+
+        Examples of non-claims (these are not valid scientific claims):
+         1. "The sky is beautiful." (This is an opinion, not a testable claim)
+         2. "What is the effect of exercise on heart health?" (This is a question, not a claim)
+         3. "Scientists should study climate change more." (This is a recommendation, not a claim)
+         4. "Drink more water!" (This is a command, not a claim),
+         5. "Investigating the cognitive effects of BRCA2 mutations on intelligence quotient (IQ) levels." (This doesn't make a claim about anything)
+
+        Reject claims that include ambiguous abbreviations or shorthand, unless it's clear to you what they mean. Remember, a valid scientific claim should be a specific, testable assertion about a phenomenon or relationship between variables. It doesn't have to be true, but it should be a testable assertion.
+
+        For the 'suggested' field, focus on using clear, concise language with relevant scientific terms that would be 
+        likely to appear in academic papers. Avoid colloquialisms and ensure the suggested version maintains the 
+        original meaning (even if you think it's not true) while being more search-friendly.
+        """
+
         for claim in claims:
+            prompt = f"Evaluate if the following is a valid scientific claim and suggest an optimized version for search:\n\n{claim}"
+            
             messages = [
-                {"role": "system", "content": system_prompt or "You are a helpful assistant. Please validate the claim format and suggest improvements."},
-                {"role": "user", "content": claim}
+                {"role": "system", "content": system_prompt or default_system_prompt},
+                {"role": "user", "content": prompt}
             ]
             
             task = self.async_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=messages,
+                response_format={"type": "json_object"},
                 temperature=0.0
             )
             tasks.append(task)
@@ -129,20 +165,15 @@ class OpenAIService:
                 if isinstance(response, Exception):
                     print(f"Error processing claim: {str(response)}")
                     results.append({
-                        'original': original_claim,
-                        'enhanced': original_claim,
                         'is_valid': False,
-                        'explanation': f"Error: {str(response)}"
+                        'explanation': f"Error: {str(response)}",
+                        'suggested': original_claim
                     })
                     continue
                     
                 self._update_token_usage(response.usage)
-                results.append({
-                    'original': original_claim,
-                    'enhanced': response.choices[0].message.content,
-                    'is_valid': True,
-                    'explanation': ''
-                })
+                result = json.loads(response.choices[0].message.content)
+                results.append(result)
             
             return results
         except Exception as e:
