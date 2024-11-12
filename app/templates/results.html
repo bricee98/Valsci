@@ -178,32 +178,42 @@
                 }</ul>
             `;
 
-            // Add timing stats
+            // Add timing stats with proper null checks
             const timingBreakdown = document.getElementById('timingBreakdown');
             let timingHtml = '';
             
-            if (data.report.timing_stats) {
+            if (data.report && data.report.timing_stats) {
+                const stats = data.report.timing_stats;
                 timingHtml = `
-                    <p><strong>Paper Search:</strong> ${data.report.timing_stats.search_papers.toFixed(2)}s</p>
-                    <p><strong>Paper Processing:</strong> ${data.report.timing_stats.paper_processing.toFixed(2)}s</p>
-                    <p><strong>Report Generation:</strong> ${data.report.timing_stats.report_generation.toFixed(2)}s</p>
-                    <p><strong>Total Time:</strong> ${data.report.timing_stats.total_time.toFixed(2)}s</p>
-                    
-                    <h4>Individual Paper Processing Times:</h4>
-                    <ul>
-                        ${data.report.supportingPapers.map(paper => `
-                            <li>
-                                <strong>${paper.title}</strong>
-                                <ul>
-                                    <li>Fetch Time: ${paper.timing_stats.fetch_time.toFixed(2)}s</li>
-                                    <li>Analysis Time: ${paper.timing_stats.analyze_time.toFixed(2)}s</li>
-                                    <li>Scoring Time: ${paper.timing_stats.score_time.toFixed(2)}s</li>
-                                    <li>Total Paper Time: ${paper.processing_time.toFixed(2)}s</li>
-                                </ul>
-                            </li>
-                        `).join('')}
-                    </ul>
+                    <p><strong>Paper Search:</strong> ${stats.search_papers ? stats.search_papers.toFixed(2) : 'N/A'}s</p>
+                    <p><strong>Paper Processing:</strong> ${stats.paper_processing ? stats.paper_processing.toFixed(2) : 'N/A'}s</p>
+                    <p><strong>Report Generation:</strong> ${stats.report_generation ? stats.report_generation.toFixed(2) : 'N/A'}s</p>
+                    <p><strong>Total Time:</strong> ${stats.total_time ? stats.total_time.toFixed(2) : 'N/A'}s</p>
                 `;
+
+                // Only add individual paper times if there are supporting papers
+                if (data.report.supportingPapers && data.report.supportingPapers.length > 0) {
+                    timingHtml += `
+                        <h4>Individual Paper Processing Times:</h4>
+                        <ul>
+                            ${data.report.supportingPapers.map(paper => {
+                                if (!paper.timing_stats) return '';
+                                const ts = paper.timing_stats;
+                                return `
+                                    <li>
+                                        <strong>${paper.title || 'Untitled Paper'}</strong>
+                                        <ul>
+                                            <li>Fetch Time: ${ts.fetch_time ? ts.fetch_time.toFixed(2) : 'N/A'}s</li>
+                                            <li>Analysis Time: ${ts.analyze_time ? ts.analyze_time.toFixed(2) : 'N/A'}s</li>
+                                            <li>Scoring Time: ${ts.score_time ? ts.score_time.toFixed(2) : 'N/A'}s</li>
+                                            <li>Total Paper Time: ${paper.processing_time ? paper.processing_time.toFixed(2) : 'N/A'}s</li>
+                                        </ul>
+                                    </li>
+                                `;
+                            }).join('')}
+                        </ul>
+                    `;
+                }
             } else {
                 timingHtml = '<p>Timing information not available</p>';
             }
