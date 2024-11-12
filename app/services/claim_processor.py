@@ -142,7 +142,6 @@ class ClaimProcessor:
                 "inaccessiblePapers": [
                     {
                         "title": ip['paper'].title,
-                        "content_type": ip['content_type'],
                         "authors": [
                             {
                                 "name": author['name'],
