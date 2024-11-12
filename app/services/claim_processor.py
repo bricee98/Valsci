@@ -316,7 +316,6 @@ class ClaimProcessor:
         inaccessible_papers_data = [
             {
                 "title": ip['paper'].title,
-                "content_type": ip['content_type'],
                 "authors": [
                     {
                         "name": author['name'],
