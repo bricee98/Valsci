@@ -173,6 +173,7 @@ class OpenAIService:
                     
                 self._update_token_usage(response.usage)
                 result = json.loads(response.choices[0].message.content)
+                result['original'] = original_claim
                 results.append(result)
             
             return results
