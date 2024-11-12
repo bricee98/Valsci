@@ -8,9 +8,9 @@ from app.services.evidence_scorer import EvidenceScorer
 from app.services.openai_service import OpenAIService
 import os
 import json
-import time
-from textwrap import dedent
+import time as time_module
 from time import time
+from textwrap import dedent
 from typing import Dict
 
 class ClaimProcessor:
@@ -59,7 +59,7 @@ class ClaimProcessor:
             paper_stats = {}
 
             self.update_claim_status(batch_id, claim_id, f"analyzing_paper_{i+1}_of_{total_papers}")
-            time.sleep(1)
+            time_module.sleep(1)
             
             fetch_start = time()
             paper_content, access_info = self.literature_searcher.fetch_paper_content(paper)
