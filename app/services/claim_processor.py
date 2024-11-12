@@ -10,6 +10,8 @@ import os
 import json
 import time
 from textwrap import dedent
+from time import time
+from typing import Dict
 
 class ClaimProcessor:
     def __init__(self):
@@ -17,11 +19,16 @@ class ClaimProcessor:
         self.paper_analyzer = PaperAnalyzer()
         self.evidence_scorer = EvidenceScorer()
         self.openai_service = OpenAIService()
+        self.timing_stats = {}  # Add timing stats dictionary
 
     def process_claim(self, claim: Claim, batch_id: str, claim_id: str) -> Claim:
-       
+        start_time = time()
+        timing_stats = {}
+
         # Search for relevant papers
+        search_start = time()
         relevant_papers = self.literature_searcher.search_papers(claim)
+        timing_stats['search_papers'] = time() - search_start
 
         # Check if no results were found
         if not relevant_papers:
@@ -29,21 +36,34 @@ class ClaimProcessor:
             claim.report = {
                 "supportingPapers": [],
                 "explanation": "No relevant papers were found for this claim.",
-                "claimRating": 0
+                "claimRating": 0,
+                "timing_stats": timing_stats  # Add timing stats to report
             }
             self.update_claim_status(batch_id, claim_id, "processed", json.dumps(claim.report))
+            timing_stats['total_time'] = time() - start_time
             return claim
 
         self.update_claim_status(batch_id, claim_id, "analyzing_papers")
+        
         # Process all relevant papers
         processed_papers = []
-        non_relevant_papers = []  # Local variable instead of instance variable
-        inaccessible_papers = []  # New list for tracking inaccessible papers
+        non_relevant_papers = []
+        inaccessible_papers = []
         total_papers = len(relevant_papers)
+        
+        paper_processing_start = time()
+        paper_timing_stats = []  # Track timing for each paper
+
         for i, paper in enumerate(relevant_papers):
+            paper_start = time()
+            paper_stats = {}
+
             self.update_claim_status(batch_id, claim_id, f"analyzing_paper_{i+1}_of_{total_papers}")
             time.sleep(1)
+            
+            fetch_start = time()
             paper_content, access_info = self.literature_searcher.fetch_paper_content(paper)
+            paper_stats['fetch_time'] = time() - fetch_start
             
             if not paper_content:
                 inaccessible_papers.append({
@@ -52,38 +72,50 @@ class ClaimProcessor:
                 })
                 continue
             
-            # Correctly unpack all five values
+            analyze_start = time()
             relevance, excerpts, explanations, non_relevant_explanation, excerpt_pages = self.paper_analyzer.analyze_relevance_and_extract(paper_content, claim)
+            paper_stats['analyze_time'] = time() - analyze_start
             
             if relevance >= 0.1:
-                print("Paper is relevant: ", paper.title)
+                score_start = time()
                 paper_score = self.evidence_scorer.calculate_paper_weight(paper)
+                paper_stats['score_time'] = time() - score_start
+                
                 processed_papers.append({
                     'paper': paper,
                     'relevance': relevance,
                     'excerpts': excerpts,
                     'score': paper_score,
                     'explanations': explanations,
-                    'content_type': access_info,  # 'full_text' or 'abstract_only'
-                    'excerpt_pages': excerpt_pages  # Use the captured excerpt pages
+                    'content_type': access_info,
+                    'excerpt_pages': excerpt_pages,
+                    'processing_time': time() - paper_start,
+                    'timing_stats': paper_stats
                 })
             else:
-                print("Paper is not relevant: ", paper.title)
-                paper_score = self.evidence_scorer.calculate_paper_weight(paper)
                 non_relevant_papers.append({
                     'paper': paper,
                     'explanation': non_relevant_explanation or "Paper was determined to be not relevant to the claim.",
                     'relevance': relevance,
-                    'score': paper_score,
-                    'content_type': access_info  # 'full_text' or 'abstract_only'
+                    'score': self.evidence_scorer.calculate_paper_weight(paper),
+                    'content_type': access_info,
+                    'processing_time': time() - paper_start,
+                    'timing_stats': paper_stats
                 })
 
-        self.update_claim_status(batch_id, claim_id, "generating_report")
+        timing_stats['paper_processing'] = time() - paper_processing_start
+        timing_stats['papers'] = paper_timing_stats
 
+        self.update_claim_status(batch_id, claim_id, "generating_report")
+        
         # Generate final report
+        report_start = time()
         if processed_papers:
             claim.report = self.generate_final_report(claim, processed_papers, non_relevant_papers, inaccessible_papers)
             claim.status = 'processed'
+            timing_stats['report_generation'] = time() - report_start
+            timing_stats['total_time'] = time() - start_time
+            claim.report['timing_stats'] = timing_stats
             self.update_claim_status(batch_id, claim_id, "processed", json.dumps(claim.report))
         else:
             claim.status = 'processed'
@@ -99,7 +131,8 @@ class ClaimProcessor:
                     for nrp in non_relevant_papers
                 ],
                 "explanation": "No relevant papers were found for this claim after analysis.",
-                "claimRating": 0
+                "claimRating": 0,
+                "timing_stats": timing_stats
             }
             self.update_claim_status(batch_id, claim_id, "processed", json.dumps(claim.report))
         return claim

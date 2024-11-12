@@ -112,6 +112,17 @@
                                 : value;
                         },
                         headerSort: false
+                    },
+                    {
+                        title: "Processing Time", 
+                        field: "processingTime", 
+                        sorter: "number",
+                        minWidth: 150,
+                        formatter: function(cell) {
+                            const value = cell.getValue();
+                            if (!value) return 'N/A';
+                            return `${value.toFixed(2)}s`;
+                        }
                     }
                 ],
                 initialSort: [
@@ -123,6 +134,13 @@
             const totalPrice = tableData.reduce((sum, row) => sum + (row.price || 0), 0);
             document.getElementById('totalPrice').innerHTML = 
                 `<h3>Total Batch Price: $${totalPrice.toFixed(4)}</h3>`;
+
+            // Calculate total batch processing time
+            const totalTime = tableData.reduce((sum, row) => sum + (row.processingTime || 0), 0);
+            
+            // Add total time to the page
+            document.getElementById('totalPrice').innerHTML += 
+                `<h3>Total Processing Time: ${totalTime.toFixed(2)} seconds</h3>`;
         }
 
         // Load the data and initialize the table

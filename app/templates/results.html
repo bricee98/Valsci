@@ -11,6 +11,32 @@
         <h1>Claim Report</h1>
         <div id="reportContent"></div>
         <div id="usageStats"></div>
+        <div id="timingStats">
+            <h3>Processing Time Breakdown:</h3>
+            <div class="timing-breakdown">
+                ${data.report.timing_stats ? `
+                    <p><strong>Paper Search:</strong> ${data.report.timing_stats.search_papers.toFixed(2)}s</p>
+                    <p><strong>Paper Processing:</strong> ${data.report.timing_stats.paper_processing.toFixed(2)}s</p>
+                    <p><strong>Report Generation:</strong> ${data.report.timing_stats.report_generation.toFixed(2)}s</p>
+                    <p><strong>Total Time:</strong> ${data.report.timing_stats.total_time.toFixed(2)}s</p>
+                    
+                    <h4>Individual Paper Processing Times:</h4>
+                    <ul>
+                        ${data.report.supportingPapers.map(paper => `
+                            <li>
+                                <strong>${paper.title}</strong>
+                                <ul>
+                                    <li>Fetch Time: ${paper.timing_stats.fetch_time.toFixed(2)}s</li>
+                                    <li>Analysis Time: ${paper.timing_stats.analyze_time.toFixed(2)}s</li>
+                                    <li>Scoring Time: ${paper.timing_stats.score_time.toFixed(2)}s</li>
+                                    <li>Total Paper Time: ${paper.processing_time.toFixed(2)}s</li>
+                                </ul>
+                            </li>
+                        `).join('')}
+                    </ul>
+                ` : '<p>Timing information not available</p>'}
+            </div>
+        </div>
         <button id="downloadReport">Download Report</button>
         <button id="downloadCitations">Download Citations</button>
         <button id="deleteClaimButton">Delete Claim</button>
