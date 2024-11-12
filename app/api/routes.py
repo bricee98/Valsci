@@ -464,7 +464,7 @@ def download_enhanced_claims(batch_id):
         results = json.load(f)
     
     # Create text content with one enhanced claim per line
-    output = "\n".join(claim["enhanced"] for claim in results['claims'])
+    output = "\n".join(claim["suggested"] for claim in results['claims'])
     
     return Response(
         output,
