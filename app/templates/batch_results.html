@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Batch Results</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
-    <!-- Add Tabulator for advanced table features -->
     <link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator.min.css" rel="stylesheet">
     <script type="text/javascript" src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js"></script>
 </head>
@@ -26,6 +25,39 @@
         const batchId = '{{ batch_id }}';
         let table;
         let totalBatchPrice = 0;
+
+        // Initialize Tabulator columns without the Processing Time column
+        const columns = [
+            {title: "Claim", field: "text", sorter: "string", headerFilter: true, minWidth: 400, widthGrow: 3},
+            {title: "Status", field: "status", sorter: "string", headerFilter: true, minWidth: 100},
+            {title: "Rating", field: "rating", sorter: "number", headerFilter: true, minWidth: 100},
+            {title: "Assessment", field: "ratingText", sorter: "string", headerFilter: true, minWidth: 150},
+            {title: "Papers Reviewed", field: "papersReviewed", sorter: "number", headerFilter: true, minWidth: 150},
+            {title: "Supporting Papers", field: "supportingPapers", sorter: "number", headerFilter: true, minWidth: 150},
+            {
+                title: "Price", 
+                field: "price", 
+                sorter: "number",
+                minWidth: 120,
+                formatter: function(cell) {
+                    const value = cell.getValue();
+                    return value ? `$${value.toFixed(4)}` : 'N/A';
+                }
+            },
+            {
+                title: "Report",
+                field: "report",
+                minWidth: 100,
+                formatter: function(cell) {
+                    const value = cell.getValue();
+                    const claim_id = cell.getRow().getData().claim_id;
+                    return value === 'View Report' 
+                        ? `<a href="/results?claim_id=${claim_id}" class="report-link">View Report</a>`
+                        : value;
+                },
+                headerSort: false
+            }
+        ];
 
         // Convert numerical rating to text description
         function getRatingText(rating) {
@@ -83,48 +115,7 @@
                 pagination: "local",
                 paginationSize: 25,
                 paginationSizeSelector: [10, 25, 50, 100],
-                columns: [
-                    {title: "Claim", field: "text", sorter: "string", headerFilter: true, minWidth: 400, widthGrow: 3},
-                    {title: "Status", field: "status", sorter: "string", headerFilter: true, minWidth: 100},
-                    {title: "Rating", field: "rating", sorter: "number", headerFilter: true, minWidth: 100},
-                    {title: "Assessment", field: "ratingText", sorter: "string", headerFilter: true, minWidth: 150},
-                    {title: "Papers Reviewed", field: "papersReviewed", sorter: "number", headerFilter: true, minWidth: 150},
-                    {title: "Supporting Papers", field: "supportingPapers", sorter: "number", headerFilter: true, minWidth: 150},
-                    {
-                        title: "Price", 
-                        field: "price", 
-                        sorter: "number",
-                        minWidth: 120,
-                        formatter: function(cell) {
-                            const value = cell.getValue();
-                            return value ? `$${value.toFixed(4)}` : 'N/A';
-                        }
-                    },
-                    {
-                        title: "Report",
-                        field: "report",
-                        minWidth: 100,
-                        formatter: function(cell) {
-                            const value = cell.getValue();
-                            const claim_id = cell.getRow().getData().claim_id;
-                            return value === 'View Report' 
-                                ? `<a href="/results?claim_id=${claim_id}" class="report-link">View Report</a>`
-                                : value;
-                        },
-                        headerSort: false
-                    },
-                    {
-                        title: "Processing Time", 
-                        field: "processingTime", 
-                        sorter: "number",
-                        minWidth: 150,
-                        formatter: function(cell) {
-                            const value = cell.getValue();
-                            if (!value) return 'N/A';
-                            return `${value.toFixed(2)}s`;
-                        }
-                    }
-                ],
+                columns: columns,
                 initialSort: [
                     {column: "rating", dir: "desc"}
                 ]
@@ -134,13 +125,6 @@
             const totalPrice = tableData.reduce((sum, row) => sum + (row.price || 0), 0);
             document.getElementById('totalPrice').innerHTML = 
                 `<h3>Total Batch Price: $${totalPrice.toFixed(4)}</h3>`;
-
-            // Calculate total batch processing time
-            const totalTime = tableData.reduce((sum, row) => sum + (row.processingTime || 0), 0);
-            
-            // Add total time to the page
-            document.getElementById('totalPrice').innerHTML += 
-                `<h3>Total Processing Time: ${totalTime.toFixed(2)} seconds</h3>`;
         }
 
         // Load the data and initialize the table
