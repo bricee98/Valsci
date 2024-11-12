@@ -124,11 +124,38 @@ class ClaimProcessor:
                 "nonRelevantPapers": [
                     {
                         "title": nrp['paper'].title,
-                        "authors": nrp['paper'].authors,
+                        "content_type": nrp['content_type'],
+                        "authors": [
+                            {
+                                "name": author['name'],
+                                "hIndex": self.evidence_scorer.author_h_indices.get(
+                                    (author.get('authorId', '')), 0
+                                )
+                            }
+                            for author in nrp['paper'].authors
+                        ],
                         "link": nrp['paper'].url,
                         "explanation": nrp['explanation']
                     }
                     for nrp in non_relevant_papers
+                ],
+                "inaccessiblePapers": [
+                    {
+                        "title": ip['paper'].title,
+                        "content_type": ip['content_type'],
+                        "authors": [
+                            {
+                                "name": author['name'],
+                                "hIndex": self.evidence_scorer.author_h_indices.get(
+                                    (author.get('authorId', '')), 0
+                                )
+                            }
+                            for author in ip['paper'].authors
+                        ],
+                        "link": ip['paper'].url,
+                        "reason": ip['reason']
+                    }
+                    for ip in inaccessible_papers
                 ],
                 "explanation": "No relevant papers were found for this claim after analysis.",
                 "claimRating": 0,
