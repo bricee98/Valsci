@@ -120,21 +120,30 @@ class EvidenceScorer:
         return author_id
 
     def get_journal_impact_factor(self, journal: str) -> dict:
-        url = "https://api.openalex.org/sources"  # Changed from venues to sources
+        # Clean and encode the journal name
+        cleaned_journal = journal.split(',')[0]  # Take only the first part before any comma
+        cleaned_journal = cleaned_journal.strip()
+        
+        url = "https://api.openalex.org/sources"
         params = {
-            "filter": f"display_name.search:{journal}", 
+            "filter": f"display_name.search:{cleaned_journal}", 
             "select": "id,display_name,summary_stats"
         }
-        response = self.make_api_request(url, params=params)
         
-        if response.status_code == 200:
-            data = response.json()
-            if data['results']:
-                source = data['results'][0]
-                journal_info = f"Journal: {source['display_name']}, OpenAlex ID: {source['id']}"
-                citation_count = source.get('summary_stats', {}).get('2yr_mean_citedness', 0)
-                return self.estimate_impact_factor(journal_info, citation_count)
-        return {'explanation': 'No data found.', 'impact_factor': 0}
+        try:
+            response = self.make_api_request(url, params=params)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data['results']:
+                    source = data['results'][0]
+                    journal_info = f"Journal: {source['display_name']}, OpenAlex ID: {source['id']}"
+                    citation_count = source.get('summary_stats', {}).get('2yr_mean_citedness', 0)
+                    return self.estimate_impact_factor(journal_info, citation_count)
+        except Exception as e:
+            logger.error(f"Error fetching journal impact factor: {str(e)}")
+            
+        return {'explanation': 'No data found or error occurred.', 'impact_factor': 0}
 
     def estimate_impact_factor(self, journal_info: str, citation_count: float) -> dict:
         system_prompt = "You are an expert in academic publishing and journal metrics. Your task is to estimate the impact factor of a journal based on its information and citation count. Provide your response as a valid JSON object with 'explanation' and 'impact_factor' fields."
