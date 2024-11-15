@@ -30,15 +30,6 @@ import chardet
 import brotli  # Make sure to install this: pip install brotli
 from brotli import error as BrotliError
 from urllib.parse import urljoin
-import subprocess
-from shutil import which
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException
-import base64
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -67,20 +58,6 @@ class LiteratureSearcher:
         self.setup_pdf_session()
 
         self.saved_search_queries = []
-
-        # Initialize Selenium options
-        self.chrome_options = Options()
-        self.chrome_options.add_argument('--headless')  # Run in headless mode
-        self.chrome_options.add_argument('--disable-gpu')
-        self.chrome_options.add_argument('--no-sandbox')
-        self.chrome_options.add_argument('--disable-dev-shm-usage')
-        self.chrome_options.add_argument(f'user-agent={self.user_agent.random}')
-        self.chrome_options.add_experimental_option('prefs', {
-            "download.default_directory": os.path.abspath("papers"),
-            "download.prompt_for_download": False,
-            "download.directory_upgrade": True,
-            "plugins.always_open_pdf_externally": True
-        })
 
     def setup_session(self):
         retries = Retry(total=5, backoff_factor=0.1, status_forcelist=[500, 502, 503, 504])
@@ -422,93 +399,84 @@ class LiteratureSearcher:
         }
 
     def download_pdf_with_redirect(self, url: str) -> Union[str, None]:
-        """Download PDF using Selenium for better handling of redirects and authentication."""
         try:
-            driver = webdriver.Chrome(options=self.chrome_options)
-            
-            try:
-                # Set page load timeout
-                driver.set_page_load_timeout(30)
-                
-                # Add random delay to mimic human behavior
-                time.sleep(random.uniform(2, 4))
-                
-                logger.info(f"Attempting to fetch PDF from {url}")
-                driver.get(url)
-                
-                # Wait for either PDF embed or download to complete
+            # Enhanced headers to mimic a real browser more closely
+            headers = {
+                'User-Agent': self.user_agent.random,
+                'Accept': 'text/html,application/pdf,application/x-pdf,application/octet-stream',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'DNT': '1',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'cross-site',
+                'Sec-Fetch-User': '?1',
+                'Pragma': 'no-cache',
+                'Cache-Control': 'no-cache',
+                'Referer': 'https://scholar.google.com/'
+            }
+
+            # Add random common browser headers
+            if random.random() < 0.5:
+                headers['Sec-Ch-Ua'] = '"Google Chrome";v="117", "Not;A=Brand";v="8", "Chromium";v="117"'
+                headers['Sec-Ch-Ua-Mobile'] = '?0'
+                headers['Sec-Ch-Ua-Platform'] = '"Windows"'
+
+            for attempt in range(3):
                 try:
-                    WebDriverWait(driver, 10).until(
-                        EC.presence_of_element_located((By.TAG_NAME, "embed"))
-                        or EC.presence_of_element_located((By.TAG_NAME, "iframe"))
+                    response = self.pdf_session.get(
+                        url, 
+                        headers=headers, 
+                        allow_redirects=True, 
+                        timeout=30,
+                        stream=True
                     )
-                except TimeoutException:
-                    # If no embed/iframe found, the PDF might have started downloading directly
-                    pass
+                    response.raise_for_status()
 
-                # Check if we're on a landing page
-                if not url.lower().endswith('.pdf'):
-                    # Look for PDF download links
-                    pdf_links = driver.find_elements(By.XPATH, "//a[contains(@href,'.pdf')]")
-                    for link in pdf_links:
-                        try:
-                            pdf_url = link.get_attribute('href')
-                            if pdf_url:
-                                # Try to download using requests with the same session cookies
-                                cookies = driver.get_cookies()
-                                for cookie in cookies:
-                                    self.pdf_session.cookies.set(cookie['name'], cookie['value'])
-                                
-                                response = self.pdf_session.get(
-                                    pdf_url,
-                                    headers={'User-Agent': self.user_agent.random},
-                                    allow_redirects=True,
-                                    timeout=30,
-                                    stream=True
-                                )
-                                
-                                if response.status_code == 200 and 'application/pdf' in response.headers.get('Content-Type', '').lower():
-                                    pdf_path = os.path.join('papers', f'{hash(pdf_url)}.pdf')
-                                    os.makedirs('papers', exist_ok=True)
-                                    
-                                    with open(pdf_path, 'wb') as f:
-                                        for chunk in response.iter_content(chunk_size=8192):
-                                            if chunk:
-                                                f.write(chunk)
-                                    
-                                    logger.info(f"Successfully downloaded PDF from {pdf_url}")
-                                    return pdf_path
-                        except Exception as e:
-                            logger.warning(f"Error downloading PDF from link: {str(e)}")
-                            continue
-
-                # If direct PDF URL or no download links found, try to get content directly
-                if url.lower().endswith('.pdf'):
-                    pdf_content = driver.execute_cdp_cmd('Page.printToPDF', {
-                        'printBackground': True,
-                        'preferCSSPageSize': True,
-                    })
-                    
-                    if pdf_content:
+                    content_type = response.headers.get('Content-Type', '').lower()
+                    if 'application/pdf' in content_type or url.lower().endswith('.pdf'):
                         pdf_path = os.path.join('papers', f'{hash(url)}.pdf')
                         os.makedirs('papers', exist_ok=True)
-                        
+
                         with open(pdf_path, 'wb') as f:
-                            f.write(base64.b64decode(pdf_content['data']))
-                        
-                        logger.info(f"Successfully downloaded PDF using CDP from {url}")
+                            for chunk in response.iter_content(chunk_size=8192):
+                                if chunk:
+                                    f.write(chunk)
+
+                        logger.info(f"Successfully downloaded PDF from {url}")
                         return pdf_path
+                    else:
+                        logger.warning(f"URL {url} returned content-type: {content_type}")
 
-                return None
+                        if 'text/html' in content_type:
+                            soup = BeautifulSoup(response.content, 'html.parser')
+                            # Look for PDF links
+                            for a in soup.find_all('a', href=True):
+                                href = a['href']
+                                if href.lower().endswith('.pdf'):
+                                    pdf_link = urljoin(url, href)
+                                    logger.info(f"Trying PDF link: {pdf_link}")
+                                    result = self.download_pdf_with_redirect(pdf_link)
+                                    if result:
+                                        return result
+                                    break
 
-            finally:
-                driver.quit()
+                        return None
 
-        except WebDriverException as e:
-            logger.error(f"Selenium error while downloading PDF from {url}: {str(e)}")
+                except requests.RequestException as e:
+                    logger.warning(f"Attempt {attempt + 1} failed for {url}: {str(e)}")
+                    if attempt < 2:
+                        headers['User-Agent'] = self.user_agent.random
+                        time.sleep(random.uniform(1, 3))
+                        continue
+                    raise
+
             return None
-        except Exception as e:
-            logger.error(f"Unexpected error while downloading PDF from {url}: {str(e)}")
+
+        except requests.RequestException as e:
+            logger.error(f"Error downloading PDF from {url}: {str(e)}")
             return None
 
     def extract_abstract_from_html(self, url: str) -> Union[str, None]:
@@ -588,45 +556,6 @@ class LiteratureSearcher:
         return None, 'inaccessible'
 
     def extract_text_from_pdf(self, pdf_path: str) -> str:
-        def extract_with_pdftotext():
-            try:
-                # Check if pdftotext is available
-                if which('pdftotext') is None:
-                    logger.warning("pdftotext not found in system PATH")
-                    return None
-                
-                # Create output path for the text file
-                txt_output = pdf_path.rsplit('.', 1)[0] + '_pdftotext.txt'
-                
-                # Run pdftotext with layout preservation (-layout)
-                result = subprocess.run(
-                    ['pdftotext', '-layout', pdf_path, txt_output],
-                    capture_output=True,
-                    text=True,
-                    timeout=30
-                )
-                
-                if result.returncode != 0:
-                    logger.error(f"pdftotext failed: {result.stderr}")
-                    return None
-                
-                # Read the extracted text
-                with open(txt_output, 'r', encoding='utf-8') as f:
-                    text = f.read()
-                
-                if not text.strip():
-                    return None
-                    
-                logger.info(f"Successfully extracted text from {pdf_path} using pdftotext")
-                return text
-                
-            except subprocess.TimeoutExpired:
-                logger.warning(f"pdftotext timed out for {pdf_path}")
-                return None
-            except Exception as e:
-                logger.error(f"Error extracting text with pdftotext from {pdf_path}: {str(e)}")
-                return None
-
         def extract_with_pymupdf4llm():
             try:
                 return pymupdf4llm.to_markdown(pdf_path)
@@ -648,12 +577,7 @@ class LiteratureSearcher:
             return result[0]
 
         try:
-            # Try pdftotext first
-            full_text = extract_with_pdftotext()
-            if full_text:
-                return full_text
-
-            # If pdftotext fails, try pymupdf4llm with a 45-second timeout
+            # Try pymupdf4llm first with a 45-second timeout
             full_text = extract_with_timeout(45)
 
             if full_text:
