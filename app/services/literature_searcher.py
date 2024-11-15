@@ -520,7 +520,26 @@ class LiteratureSearcher:
         content can be None if paper is inaccessible
         access_info describes how the content was accessed or why it wasn't accessible
         """
-        # Try to get full text first
+        # Check if we should only use abstracts
+        if hasattr(paper, 'search_config') and paper.search_config.get('abstractsOnly', True):
+            # Try to get abstract in order of preference
+            if paper.abstract:
+                return paper.abstract, 'abstract_only'
+            
+            if paper.id:
+                abstract = self.fetch_paper_abstract(paper.id)
+                if abstract:
+                    return abstract, 'openalex_abstract'
+            
+            if paper.url:
+                abstract = self.extract_abstract_from_html(paper.url)
+                if abstract:
+                    return abstract, 'extracted_abstract'
+            
+            logger.warning(f"Paper {paper.title} is inaccessible")
+            return None, 'inaccessible'
+
+        # If not abstracts only, proceed with full text attempt
         if paper.url:
             try:
                 pdf_path = self.download_pdf_with_redirect(paper.url)
@@ -535,22 +554,19 @@ class LiteratureSearcher:
             except Exception as e:
                 logger.error(f"Error accessing paper {paper.title}: {str(e)}")
         
-        # Check for existing abstract
+        # Fall back to abstract if full text fails
         if paper.abstract:
-            logger.info(f"Using existing abstract for paper: {paper.title}")
             return paper.abstract, 'abstract_only'
         
-        # Try to extract abstract from HTML page
-        if paper.url:
-            abstract = self.extract_abstract_from_html(paper.url)
-            if abstract:
-                return abstract, 'extracted_abstract'
-        
-        # Try to fetch abstract from OpenAlex if we have paper ID
         if paper.id:
             abstract = self.fetch_paper_abstract(paper.id)
             if abstract:
                 return abstract, 'openalex_abstract'
+        
+        if paper.url:
+            abstract = self.extract_abstract_from_html(paper.url)
+            if abstract:
+                return abstract, 'extracted_abstract'
         
         logger.warning(f"Paper {paper.title} is inaccessible")
         return None, 'inaccessible'

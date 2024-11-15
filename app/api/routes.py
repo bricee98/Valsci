@@ -52,11 +52,13 @@ def upload_claim():
     search_config = data.get('searchConfig', {})
     num_queries = search_config.get('numQueries', 10)
     results_per_query = search_config.get('resultsPerQuery', 1)
+    abstracts_only = search_config.get('abstractsOnly', True)
     
     claim = Claim(text=data['text'], source=data.get('source', 'user'))
     claim.search_config = {
         'num_queries': num_queries,
-        'results_per_query': results_per_query
+        'results_per_query': results_per_query,
+        'abstractsOnly': abstracts_only
     }
     
     batch_id = str(uuid.uuid4())[:8]
@@ -108,7 +110,8 @@ def start_batch_job():
     # Get search configuration
     search_config = {
         'num_queries': int(request.form.get('numQueries', 10)),
-        'results_per_query': int(request.form.get('resultsPerQuery', 1))
+        'results_per_query': int(request.form.get('resultsPerQuery', 1)),
+        'abstractsOnly': request.form.get('abstractsOnly', 'true').lower() == 'true'
     }
     
     file = request.files['file']

@@ -9,7 +9,8 @@ document.addEventListener('DOMContentLoaded', function() {
     function getSearchConfig() {
         return {
             numQueries: parseInt(document.getElementById('numQueries').value) || 10,
-            resultsPerQuery: parseInt(document.getElementById('resultsPerQuery').value) || 1
+            resultsPerQuery: parseInt(document.getElementById('resultsPerQuery').value) || 1,
+            abstractsOnly: document.getElementById('abstractsOnly').checked
         };
     }
 
@@ -122,6 +123,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const config = getSearchConfig();
         formData.append('numQueries', config.numQueries);
         formData.append('resultsPerQuery', config.resultsPerQuery);
+        formData.append('abstractsOnly', config.abstractsOnly);
 
         fetch('/api/v1/batch', {
             method: 'POST',
