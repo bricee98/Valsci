@@ -14,6 +14,10 @@ Valsci is designed to validate scientific claims by leveraging a combination of 
 - **Web Interface**: User-friendly web interface for submitting claims, checking status, and browsing results.
 - **API Access**: RESTful API for programmatic access to claim validation and batch processing.
 
+## Note
+
+Valsci is not a scraper, and is not meant to be used as one - it's designed to be a tool used by a human to more efficiently conduct their literature review process. Please do not leverage Valsci for generalized scraping and storing of papers.
+
 ## Getting Started
 
 ### Prerequisites
