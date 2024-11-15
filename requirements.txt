@@ -14,3 +14,5 @@ pymupdf
 bs4
 python-dateutil
 typing-extensions
+selenium>=4.0.0
+webdriver_manager>=3.8.0
