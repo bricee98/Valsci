@@ -37,7 +37,7 @@ class ClaimProcessor:
                 "supportingPapers": [],
                 "explanation": "No relevant papers were found for this claim.",
                 "claimRating": 0,
-                "timing_stats": timing_stats  # Add timing stats to report
+                "timing_stats": timing_stats
             }
             self.update_claim_status(batch_id, claim_id, "processed", json.dumps(claim.report))
             timing_stats['total_time'] = time() - start_time
@@ -52,7 +52,7 @@ class ClaimProcessor:
         total_papers = len(relevant_papers)
         
         paper_processing_start = time()
-        paper_timing_stats = []  # Track timing for each paper
+        paper_timing_stats = []
 
         for i, paper in enumerate(relevant_papers):
             paper_start = time()
@@ -62,7 +62,7 @@ class ClaimProcessor:
             time_module.sleep(1)
             
             fetch_start = time()
-            paper_content, access_info = self.literature_searcher.fetch_paper_content(paper)
+            paper_content, access_info = self.literature_searcher.fetch_paper_content(paper, claim)
             paper_stats['fetch_time'] = time() - fetch_start
             
             if not paper_content:

@@ -514,14 +514,17 @@ class LiteratureSearcher:
             logger.error(f"Error extracting abstract from HTML at {url}: {str(e)}")
             return None
 
-    def fetch_paper_content(self, paper: Paper) -> Tuple[Union[str, None], str]:
+    def fetch_paper_content(self, paper: Paper, claim: Claim) -> Tuple[Union[str, None], str]:
         """
         Attempts to fetch paper content, returns tuple of (content, access_info)
         content can be None if paper is inaccessible
         access_info describes how the content was accessed or why it wasn't accessible
         """
-        # Check if we should only use abstracts
-        if hasattr(paper, 'search_config') and paper.search_config.get('abstractsOnly', True):
+        # Get abstracts_only setting from claim's search_config
+        abstracts_only = claim.search_config.get('abstractsOnly', True)
+        
+        if abstracts_only:
+            logger.info(f"Only using abstracts for paper: {paper.title}")
             # Try to get abstract in order of preference
             if paper.abstract:
                 return paper.abstract, 'abstract_only'
@@ -541,6 +544,7 @@ class LiteratureSearcher:
 
         # If not abstracts only, proceed with full text attempt
         if paper.url:
+            logger.info(f"Attempting to download PDF from {paper.url}")
             try:
                 pdf_path = self.download_pdf_with_redirect(paper.url)
                 if pdf_path:

@@ -22,6 +22,7 @@ class EvidenceScorer:
     def calculate_paper_weight(self, paper: Paper) -> float:
         print("There are ", len(paper.authors), " authors")
         print("The authors are: ", paper.authors)
+        print("Journal name: ", paper.journal)
         print("Using first 4 authors")
         paper.authors = paper.authors[:4]
 
@@ -120,6 +121,11 @@ class EvidenceScorer:
         return author_id
 
     def get_journal_impact_factor(self, journal: str) -> dict:
+        # Handle case where journal is None
+        if not journal:
+            logger.warning("No journal name provided. Returning default impact factor data.")
+            return {'explanation': 'No journal name available.', 'impact_factor': 0}
+
         # Clean and encode the journal name
         cleaned_journal = journal.split(',')[0]  # Take only the first part before any comma
         cleaned_journal = cleaned_journal.strip()
