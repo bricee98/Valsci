@@ -27,6 +27,14 @@ class Config:
     AZURE_OPENAI_API_VERSION = env_vars.get('AZURE_OPENAI_API_VERSION', '2024-06-01')
     USE_AZURE_OPENAI = env_vars.get('USE_AZURE_OPENAI', 'false').lower() == 'true'
 
+    # Email notification configuration
+    ENABLE_EMAIL_NOTIFICATIONS = env_vars.get('ENABLE_EMAIL_NOTIFICATIONS', 'false').lower() == 'true'
+    EMAIL_SENDER = env_vars.get('EMAIL_SENDER')  # Gmail address
+    EMAIL_APP_PASSWORD = env_vars.get('EMAIL_APP_PASSWORD')  # Gmail app password
+    SMTP_SERVER = env_vars.get('SMTP_SERVER', 'smtp.gmail.com')
+    SMTP_PORT = int(env_vars.get('SMTP_PORT', '587'))
+    BASE_URL = env_vars.get('BASE_URL', 'NO URL SET')
+
     # Add password configuration
     REQUIRE_PASSWORD = env_vars.get('REQUIRE_PASSWORD', 'false').lower() == 'true'
     ACCESS_PASSWORD = env_vars.get('ACCESS_PASSWORD')
@@ -42,6 +50,10 @@ class Config:
         # Add password validation
         if cls.REQUIRE_PASSWORD and not cls.ACCESS_PASSWORD:
             required_keys.append('ACCESS_PASSWORD')
+
+        # Add email notification validation
+        if cls.ENABLE_EMAIL_NOTIFICATIONS:
+            required_keys.extend(['EMAIL_SENDER', 'EMAIL_APP_PASSWORD'])
 
         missing_keys = [key for key in required_keys if getattr(cls, key) is None]
         if missing_keys:

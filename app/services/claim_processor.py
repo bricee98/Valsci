@@ -12,6 +12,7 @@ import time as time_module
 from time import time
 from textwrap import dedent
 from typing import Dict
+from datetime import datetime
 
 class ClaimProcessor:
     def __init__(self):
@@ -25,12 +26,12 @@ class ClaimProcessor:
         start_time = time()
         timing_stats = {}
 
+        self.update_claim_status(batch_id, claim_id, "searching_papers")
         # Search for relevant papers
         search_start = time()
         relevant_papers = self.literature_searcher.search_papers(claim)
         timing_stats['search_papers'] = time() - search_start
 
-        # Check if no results were found
         if not relevant_papers:
             claim.status = 'processed'
             claim.report = {
@@ -39,7 +40,7 @@ class ClaimProcessor:
                 "claimRating": 0,
                 "timing_stats": timing_stats
             }
-            self.update_claim_status(batch_id, claim_id, "processed", json.dumps(claim.report))
+            self.update_claim_status(batch_id, claim_id, "processed", claim.report, review_type="regular")
             timing_stats['total_time'] = time() - start_time
             return claim
 
@@ -116,7 +117,7 @@ class ClaimProcessor:
             timing_stats['report_generation'] = time() - report_start
             timing_stats['total_time'] = time() - start_time
             claim.report['timing_stats'] = timing_stats
-            self.update_claim_status(batch_id, claim_id, "processed", json.dumps(claim.report))
+            self.update_claim_status(batch_id, claim_id, "processed", claim.report, review_type="regular")
         else:
             claim.status = 'processed'
             claim.report = {
@@ -158,20 +159,24 @@ class ClaimProcessor:
                 ],
                 "explanation": "No relevant papers were found for this claim after analysis.",
                 "claimRating": 0,
-                "timing_stats": timing_stats
+                "timing_stats": timing_stats,
+                "searchQueries": self.literature_searcher.saved_search_queries
             }
-            self.update_claim_status(batch_id, claim_id, "processed", json.dumps(claim.report))
+            self.update_claim_status(batch_id, claim_id, "processed", claim.report, review_type="regular")
         return claim
 
-    def update_claim_status(self, batch_id: str, claim_id: str, status: str, additional_info: str = "", suggested_claim: str = ""):
+    def update_claim_status(self, batch_id: str, claim_id: str, status: str, additional_info: dict = None, suggested_claim: str = "", review_type: str = "regular"):
         file_path = os.path.join('saved_jobs', batch_id, f"{claim_id}.txt")
         with open(file_path, 'r+') as f:
             content = json.load(f)
             content['status'] = status
-            if additional_info:
+            if additional_info is not None:
                 content['additional_info'] = additional_info
             if suggested_claim:
                 content['suggested_claim'] = suggested_claim
+            content['review_type'] = review_type
+            if status == "processed":  # Only add timestamp when processing is complete
+                content['timestamp'] = datetime.now().isoformat()
             f.seek(0)
             json.dump(content, f, indent=2)
             f.truncate()

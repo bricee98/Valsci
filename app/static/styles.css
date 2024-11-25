@@ -23,7 +23,7 @@ body {
 .container {
     width: 100%;
     max-width: 800px;
-    padding: 40px;
+    padding: 20px;
     box-sizing: border-box;
 }
 
@@ -135,23 +135,6 @@ button:active {
 .rating-value {
     font-size: 2em;
     font-weight: bold;
-}
-
-#reportContent ul {
-    list-style-type: none;
-    padding: 0;
-}
-
-#reportContent li {
-    margin-bottom: 20px;
-    padding: 20px;
-    background-color: #f9f9f9;
-    border-radius: 4px;
-    transition: background-color 0.3s ease;
-}
-
-#reportContent li:hover {
-    background-color: #f0f0f0;
 }
 
 #reportContent a {
@@ -483,24 +466,29 @@ input[type="password"]:focus {
     border: none;
     padding: 30px;
     border-radius: 8px;
-    margin-bottom: 20px;
+    margin: 20px 0;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
 
 .config-panel h3 {
     color: var(--primary-color);
-    border-bottom: 2px solid var(--secondary-color);
-    padding-bottom: 10px;
+    margin-bottom: 8px;
+}
+
+.config-panel .subtext {
+    color: #666;
+    font-size: 0.9em;
     margin-bottom: 20px;
+    line-height: 1.4;
 }
 
 .config-group {
-    margin-bottom: 10px;
+    margin-bottom: 20px;
 }
 
 .config-group label {
     display: block;
-    margin-bottom: 5px;
+    margin-bottom: 10px;
     color: var(--accent-color);
     font-weight: 500;
 }
@@ -516,6 +504,83 @@ input[type="password"]:focus {
 .config-group input:focus {
     outline: none;
     border-color: var(--primary-color);
+}
+
+/* Add these new styles for radio buttons */
+.radio-group {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 8px 0;
+}
+
+.radio-label {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    margin: 0;
+    cursor: pointer;
+    font-weight: normal;
+    border-radius: 6px;
+    transition: background-color 0.2s ease;
+    user-select: none;
+}
+
+.radio-label:hover {
+    background-color: #f5f5f5;
+}
+
+.radio-label input[type="radio"] {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--secondary-color);
+    border-radius: 50%;
+    margin: 0;
+    position: relative;
+    transition: all 0.2s ease;
+}
+
+.radio-label input[type="radio"]:checked {
+    border-color: var(--primary-color);
+    background-color: var(--primary-color);
+    box-shadow: 0 0 0 2px white inset;
+}
+
+.radio-label input[type="radio"]:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px white inset, 0 0 0 2px var(--primary-color);
+}
+
+.radio-label input[type="radio"]:disabled {
+    border-color: #ccc;
+    background-color: #f0f0f0;
+    cursor: not-allowed;
+}
+
+.radio-label input[type="radio"]:disabled + span {
+    color: #999;
+    cursor: not-allowed;
+}
+
+/* Add a subtle animation for the radio selection */
+@keyframes radio-fade {
+    from { transform: scale(0.8); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+}
+
+.radio-label input[type="radio"]:checked {
+    animation: radio-fade 0.2s ease-out;
+}
+
+/* Add a description text style */
+.radio-description {
+    display: block;
+    font-size: 0.85em;
+    color: #666;
+    margin-top: 2px;
 }
 
 /* Add these new styles for the enhanced batch results page */
@@ -593,13 +658,13 @@ input[type="password"]:focus {
 }
 
 .error-message {
-    padding: 20px;
     background-color: #fff3f3;
     border: 1px solid #dc3545;
     border-radius: 4px;
     color: #dc3545;
+    margin: 1rem 0;
+    padding: 1rem;
     text-align: center;
-    margin: 20px 0;
 }
 
 .total-price {
@@ -648,6 +713,838 @@ input[type="password"]:focus {
 }
 
 /* Add these styles for the enhanced claim rating display */
+.claim-rating {
+    padding: 25px;
+    border-radius: 12px;
+    margin: 20px 0;
+    text-align: center;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    transition: transform 0.2s ease;
+}
+
+.claim-rating:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+}
+
+.claim-rating h3 {
+    color: white;
+    margin: 0 0 15px 0;
+    font-size: 1.2em;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.rating-value {
+    font-size: 3em;
+    font-weight: bold;
+    color: white;
+    margin: 10px 0;
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.rating-text {
+    color: white;
+    font-size: 1.2em;
+    font-weight: 500;
+    margin-top: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Add these styles for mechanism sections */
+.mechanism-section {
+    background-color: white;
+    border-radius: 8px;
+    padding: 20px;
+    margin: 20px 0;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    border-left: 4px solid var(--primary-color);
+}
+
+.mechanism-section.contradicting {
+    border-left-color: #dc3545;
+}
+
+.mechanism-section h4 {
+    color: var(--primary-color);
+    margin-top: 0;
+    font-size: 1.2em;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 10px;
+}
+
+.mechanism-explanation {
+    font-size: 1.1em;
+    line-height: 1.5;
+    margin: 15px 0;
+}
+
+.mechanism-details {
+    display: grid;
+    gap: 20px;
+    margin-top: 20px;
+}
+
+.mechanism-plausibility {
+    background-color: #f8f9fa;
+    padding: 15px;
+    border-radius: 6px;
+}
+
+.plausibility-reasoning {
+    margin-top: 10px;
+    font-style: italic;
+    color: #666;
+}
+
+/* Style for the lists section */
+.lists-section {
+    display: flex;
+    gap: 30px;
+    margin: 15px 0;
+}
+
+.lists-section > div {
+    flex: 1;
+}
+
+/* Responsive design for lists section */
+@media (max-width: 768px) {
+    .lists-section {
+        flex-direction: column;
+        gap: 15px;
+    }
+}
+
+/* Add these new styles after your existing CSS */
+
+.staging-area {
+    background-color: white;
+    border-radius: 8px;
+    padding: 20px;
+    margin: 20px 0;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.staged-claims {
+    min-height: 100px;
+    max-height: 400px;
+    overflow-y: auto;
+    margin: 15px 0;
+    padding: 10px 0;
+    scrollbar-width: thin;
+    scrollbar-color: var(--secondary-color) #f0f0f0;
+}
+
+.staged-claims::-webkit-scrollbar {
+    width: 8px;
+}
+
+.staged-claims::-webkit-scrollbar-track {
+    background: #f0f0f0;
+    border-radius: 4px;
+}
+
+.staged-claims::-webkit-scrollbar-thumb {
+    background-color: var(--secondary-color);
+    border-radius: 4px;
+    border: 2px solid #f0f0f0;
+}
+
+.staged-claim {
+    display: flex;
+    align-items: center;
+    padding: 15px;
+    margin: 10px;
+    background-color: #f8f9fa;
+    border-radius: 6px;
+    border-left: 4px solid var(--primary-color);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    width: calc(100% - 20px);
+    box-sizing: border-box;
+}
+
+.staged-claim:hover {
+    transform: translateX(5px);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.claim-text {
+    flex: 1;
+    margin-right: 20px;
+    line-height: 1.4;
+}
+
+.claim-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.action-button {
+    padding: 8px 12px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background-color 0.2s ease;
+}
+
+.edit-button {
+    background-color: #ffd700;
+    color: #333;
+}
+
+.enhance-button {
+    background-color: var(--secondary-color);
+    color: white;
+}
+
+.delete-button {
+    background-color: #dc3545;
+    color: white;
+}
+
+.add-claim-section {
+    background-color: white;
+    border-radius: 8px;
+    padding: 20px;
+    margin: 20px 0;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.claim-input-container {
+    margin: 15px 0;
+}
+
+textarea#newClaimText {
+    width: 90%;
+    padding: 12px;
+    border: 1px solid var(--secondary-color);
+    border-radius: 4px;
+    font-size: 16px;
+    resize: vertical;
+    min-height: 80px;
+    margin-bottom: 10px;
+}
+
+.file-upload-section {
+    margin: 20px 0;
+}
+
+.file-upload-label {
+    display: inline-block;
+    padding: 12px 20px;
+    background-color: var(--primary-color);
+    color: white;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+.file-upload-label:hover {
+    background-color: var(--accent-color);
+}
+
+.file-upload-label input[type="file"] {
+    display: none;
+}
+
+.file-name {
+    margin-left: 10px;
+    color: var(--accent-color);
+}
+
+.batch-actions {
+    display: flex;
+    gap: 15px;
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid #eee;
+}
+
+.email-notification {
+    background-color: white;
+    border-radius: 8px;
+    padding: 20px;
+    margin: 20px 0;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.email-input-group {
+    margin-top: 15px;
+}
+
+.email-input-group input[type="email"] {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid var(--secondary-color);
+    border-radius: 4px;
+    font-size: 16px;
+    margin-bottom: 10px;
+}
+
+.checkbox-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.checkbox-group input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+}
+
+.checkbox-group label {
+    margin: 0;
+    cursor: pointer;
+}
+
+/* Update existing button styles */
+.primary-button {
+    background-color: var(--primary-color);
+    color: white;
+    border: none;
+    padding: 12px 20px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 16px;
+    transition: background-color 0.3s ease;
+}
+
+.primary-button:disabled {
+    background-color: #ccc;
+    cursor: not-allowed;
+}
+
+.primary-button:not(:disabled):hover {
+    background-color: var(--accent-color);
+}
+
+/* Add these styles for the new processing options section */
+.processing-options {
+    background-color: white;
+    border-radius: 8px;
+    padding: 20px;
+    margin: 20px 0;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.review-type-selection {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.review-type-selection .radio-group {
+    border: 1px solid #eee;
+    border-radius: 8px;
+    padding: 15px;
+    background-color: #f8f9fa;
+}
+
+.review-type-selection .radio-label {
+    background-color: white;
+    border: 1px solid #eee;
+    padding: 15px;
+    border-radius: 8px;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.review-type-selection .radio-label:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.review-type-selection .radio-label input[type="radio"]:checked + div {
+    color: var(--primary-color);
+}
+
+.review-type-selection button#processAllBtn {
+    width: 100%;
+    margin-top: 20px;
+    padding: 15px 30px;
+    font-size: 1.1em;
+    font-weight: 500;
+}
+
+/* Update existing styles to ensure consistency */
+.container {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.config-section,
+.email-notification,
+.add-claim-section,
+.staging-area {
+    background-color: white;
+    border-radius: 8px;
+    padding: 20px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+/* Ensure proper spacing between sections */
+.config-section,
+.email-notification,
+.add-claim-section,
+.staging-area,
+.processing-options {
+    margin: 10px 0;
+}
+
+/* Make the browse link more prominent */
+.browse-link {
+    display: inline-block;
+    padding: 12px 24px;
+    background-color: var(--secondary-color);
+    color: white;
+    text-decoration: none;
+    border-radius: 8px;
+    margin: 20px 0;
+    text-align: center;
+    transition: background-color 0.3s ease, transform 0.2s ease;
+}
+
+.browse-link:hover {
+    background-color: var(--accent-color);
+    transform: translateY(-2px);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .container {
+        padding: 20px;
+    }
+
+    .review-type-selection {
+        gap: 15px;
+    }
+
+    .review-type-selection .radio-label {
+        padding: 12px;
+    }
+
+    .review-type-selection button#processAllBtn {
+        width: 100%;
+        padding: 12px 20px;
+    }
+}
+
+/* Update container and input styles */
+.container {
+    width: 100%;
+    max-width: 800px;
+    padding: 20px;
+    box-sizing: border-box;
+}
+
+.batch-results-container {
+    width: 100%;
+    max-width: 1200px;
+    padding: 20px;
+    box-sizing: border-box;
+}
+
+.config-group input[type="number"],
+.config-group input[type="text"],
+.email-input-group input[type="email"] {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    padding: 8px 12px;
+}
+
+/* Make all sections consistent width */
+.config-section,
+.email-notification,
+.add-claim-section,
+.staging-area,
+.processing-options {
+    width: 100%;
+    box-sizing: border-box;
+    margin: 10px 0;
+}
+
+.password-field {
+    margin: 15px 0;
+}
+
+.password-field input {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.password-field input:focus {
+    outline: none;
+    border-color: #007bff;
+    box-shadow: 0 0 0 2px rgba(0,123,255,0.25);
+}
+
+.enhancement-feedback {
+    margin-top: 10px;
+    padding: 8px;
+    background-color: #f0f8ff;
+    border-left: 4px solid #4CAF50;
+    border-radius: 4px;
+    animation: fadeIn 0.3s ease-in;
+}
+
+.feedback-content {
+    font-size: 0.9em;
+    color: #333;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Update spinner styles */
+.spinner {
+    display: none;
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    border-top-color: #fff;
+    animation: spin 1s linear infinite;
+    margin-left: 8px;
+}
+
+.enhance-spinner {
+    width: 14px;
+    height: 14px;
+    border-width: 2px;
+    margin-left: 6px;
+}
+
+/* Update action button styles to accommodate spinner */
+.action-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-width: 80px;
+}
+
+.action-button:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Update enhancement feedback animation */
+.enhancement-feedback {
+    animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Add styles for the enhance all button */
+#enhanceAllBtn {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-width: 150px;
+}
+
+#enhanceAllBtn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+#enhanceAllBtn .spinner {
+    margin-left: 8px;
+}
+
+/* Update the batch actions container */
+.batch-actions {
+    position: relative;
+}
+
+/* Position the enhancement feedback for batch operations */
+.batch-actions .enhancement-feedback {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    margin-top: 10px;
+    z-index: 1;
+}
+
+/* Add progress animation */
+@keyframes progress {
+    0% { background-position: 0 0; }
+    100% { background-position: 30px 0; }
+}
+
+.enhancing {
+    background-image: linear-gradient(
+        45deg,
+        rgba(255, 255, 255, 0.15) 25%,
+        transparent 25%,
+        transparent 50%,
+        rgba(255, 255, 255, 0.15) 50%,
+        rgba(255, 255, 255, 0.15) 75%,
+        transparent 75%,
+        transparent
+    );
+    background-size: 30px 30px;
+    animation: progress 1s linear infinite;
+}
+
+#notificationEmail.invalid {
+    border-color: #ff4444;
+    background-color: #fff8f8;
+}
+
+#notificationEmail.invalid:focus {
+    outline-color: #ff4444;
+}
+
+.email-input-group input[type="email"]:invalid {
+    border-color: #ff4444;
+    background-color: #fff8f8;
+}
+
+/* Add styles for the instructions section */
+.instructions {
+    background-color: #ffffff;
+    border-radius: 8px;
+    padding: 25px;
+    margin-bottom: 30px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.instructions h2 {
+    color: var(--primary-color);
+    margin-bottom: 15px;
+    font-size: 1.8em;
+}
+
+.instructions > p {
+    font-size: 1.1em;
+    color: #444;
+    line-height: 1.5;
+    margin-bottom: 25px;
+}
+
+.instruction-step {
+    margin-bottom: 25px;
+    padding-left: 15px;
+    border-left: 3px solid var(--secondary-color);
+}
+
+.instruction-step:last-child {
+    margin-bottom: 0;
+}
+
+.instruction-step h3 {
+    color: var(--primary-color);
+    font-size: 1.3em;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.instruction-step p {
+    color: #555;
+    line-height: 1.6;
+    margin-bottom: 10px;
+}
+
+.instruction-step ul {
+    list-style-type: none;
+    padding-left: 20px;
+    margin-top: 8px;
+}
+
+.instruction-step ul li {
+    position: relative;
+    padding-left: 20px;
+    margin-bottom: 8px;
+    line-height: 1.5;
+    color: #555;
+}
+
+.instruction-step ul li::before {
+    content: "•";
+    color: var(--secondary-color);
+    position: absolute;
+    left: 0;
+    font-size: 1.2em;
+}
+
+.optional-tag {
+    font-size: 0.7em;
+    background-color: #e9ecef;
+    color: #666;
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-weight: normal;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .instructions {
+        padding: 20px;
+    }
+
+    .instruction-step {
+        padding-left: 12px;
+    }
+
+    .instruction-step h3 {
+        font-size: 1.2em;
+    }
+}
+
+/* Add these styles for the instructions toggle */
+.instructions-container {
+    margin-bottom: 30px;
+}
+
+.toggle-button {
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 15px 20px;
+    background-color: var(--primary-color);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 1.1em;
+    transition: background-color 0.3s ease;
+}
+
+.toggle-button:hover {
+    background-color: var(--accent-color);
+}
+
+.toggle-icon {
+    transition: transform 0.3s ease;
+}
+
+.toggle-button.active .toggle-icon {
+    transform: rotate(180deg);
+}
+
+/* Update processing options styles for consistency */
+.processing-options h3 {
+    color: var(--primary-color);
+    font-size: 1.8em;
+    margin-bottom: 20px;
+}
+
+.processing-options h4 {
+    color: var(--primary-color);
+    font-size: 1.3em;
+    margin-bottom: 15px;
+    font-weight: 500;
+}
+
+/* Update the radio group spacing */
+.radio-group {
+    margin-top: 10px;
+}
+
+/* Add these new styles for the enhanced paper sections */
+.papers-section {
+    margin: 20px 0;
+}
+
+.paper-details {
+    margin-top: 15px;
+}
+
+.paper-content {
+    background-color: #f8f9fa;
+    padding: 15px;
+    border-radius: 6px;
+    margin: 15px 0;
+}
+
+.content-list {
+    list-style-type: none;
+    padding-left: 0;
+    margin: 10px 0;
+}
+
+.content-list li {
+    padding: 8px 0;
+    border-bottom: 1px solid #eee;
+}
+
+.content-list li:last-child {
+    border-bottom: none;
+}
+
+.paper-type {
+    margin: 15px 0;
+    color: #666;
+}
+
+.paper-link {
+    display: inline-block;
+    padding: 8px 16px;
+    background-color: var(--primary-color);
+    color: white !important;
+    text-decoration: none;
+    border-radius: 4px;
+    transition: background-color 0.3s ease;
+}
+
+.paper-link:hover {
+    background-color: var(--accent-color);
+    text-decoration: none;
+    color: white !important;
+}
+
+/* Update existing mechanism-section styles */
+.mechanism-section {
+    background-color: white;
+    border-radius: 8px;
+    padding: 20px;
+    margin: 20px 0;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    border-left: 4px solid var(--primary-color);
+}
+
+.mechanism-section h4 {
+    color: var(--primary-color);
+    margin-top: 0;
+    font-size: 1.2em;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 10px;
+}
+
+/* Update claim rating styles */
 .claim-rating {
     padding: 25px;
     border-radius: 12px;

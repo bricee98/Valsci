@@ -20,6 +20,12 @@
         const searchButton = document.getElementById('searchButton');
         const batchesContainer = document.getElementById('batchesContainer');
 
+        function formatTimestamp(timestamp) {
+            if (!timestamp || timestamp === '1970-01-01T00:00:00') return 'Unknown date';
+            const date = new Date(timestamp);
+            return date.toLocaleString();
+        }
+
         function loadBatches(searchTerm = '') {
             fetch(`/api/v1/browse?search=${encodeURIComponent(searchTerm)}`)
                 .then(response => response.json())
@@ -30,6 +36,7 @@
                         batchElement.className = 'batch-preview';
                         batchElement.innerHTML = `
                             <h2>Batch ID: ${batch.batch_id}</h2>
+                            <p>Created: ${formatTimestamp(batch.timestamp)}</p>
                             <p>Total Claims: ${batch.total_claims}</p>
                             <h3>Preview:</h3>
                             <table>

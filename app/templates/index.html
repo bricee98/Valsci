@@ -10,75 +10,165 @@
     <div class="container">
         <h1>Valsci</h1>
         
-        <!-- Add config section -->
-        <div class="config-section">
-            <button type="button" id="configToggle" class="config-toggle">
-                Show Configuration
+        <!-- 0. Instructions section -->
+        <div class="instructions-container">
+            <button id="toggleInstructions" class="toggle-button">
+                <span class="toggle-text">Show Instructions</span>
+                <span class="toggle-icon">▼</span>
             </button>
-            <div id="configPanel" class="config-panel" style="display: none;">
-                <h3>Search Configuration</h3>
-                <div class="config-group">
-                    <label for="numQueries">Number of Search Queries:</label>
-                    <input type="number" id="numQueries" name="numQueries" min="1" max="20" value="10">
+            <div class="instructions" style="display: none;">
+                <h2>How to Use Valsci</h2>
+                <p>Valsci helps you conduct automated literature reviews by analyzing scientific claims. Follow these simple steps:</p>
+                
+                <div class="instruction-step">
+                    <h3>1. Add Your Claims</h3>
+                    <p>You can add claims in two ways:</p>
+                    <ul>
+                        <li>Type individual claims into the text box below</li>
+                        <li>Upload a .txt file containing multiple claims (one per line)</li>
+                    </ul>
                 </div>
-                <div class="config-group">
-                    <label for="resultsPerQuery">Results Per Query:</label>
-                    <input type="number" id="resultsPerQuery" name="resultsPerQuery" min="1" max="10" value="1">
+
+                <div class="instruction-step">
+                    <h3>2. Enhance Your Claims <span class="optional-tag">Optional</span></h3>
+                    <p>Use our AI-powered enhancement feature to rephrase your claims for optimal searchability.</p>
                 </div>
-                <div class="config-group">
-                    <label for="abstractsOnly">
-                        <input type="checkbox" id="abstractsOnly" name="abstractsOnly" checked>
-                        Abstracts Only
-                    </label>
+
+                <div class="instruction-step">
+                    <h3>3. Configure Processing Options</h3>
+                    <p>Choose your preferred review type:</p>
+                    <ul>
+                        <li><strong>Full Review:</strong> Comprehensive analysis using complete paper texts</li>
+                        <li><strong>Abstracts Only:</strong> Quick analysis using paper abstracts</li>
+                        <li><strong>LLM Screen:</strong> Rapid AI-powered screening</li>
+                    </ul>
+                </div>
+
+                <div class="instruction-step">
+                    <h3>4. Submit and Track</h3>
+                    <p>Submit your batch for processing. Add your email to receive notifications when your results are ready.</p>
                 </div>
             </div>
         </div>
 
-        <!-- Existing forms -->
-        <form id="claimForm">
-            <label for="claimText">Enter a Claim:</label>
-            <div class="claim-input-group">
-                <input type="text" id="claimText" name="claimText" placeholder="Type your claim here...">
-                <button type="button" id="enhanceClaimBtn">
-                    <span>Enhance Claim</span>
-                    <div class="spinner" id="enhanceSpinner"></div>
+        <!-- 2. Email notification (now conditional) -->
+        {% if config.ENABLE_EMAIL_NOTIFICATIONS %}
+        <div class="email-notification">
+            <h3>Email Notifications</h3>
+            <div class="email-input-group">
+                <input 
+                    type="email" 
+                    id="notificationEmail" 
+                    placeholder="Enter your email for completion notification"
+                    pattern="[^@\s]+@[^@\s]+\.[^@\s]+"
+                    title="Please enter a valid email address">
+                <div class="checkbox-group">
+                    <input type="checkbox" id="emailNotification" checked>
+                    <label for="emailNotification">Notify me about the status of my batch</label>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- 3. Add claim form -->
+        <div class="add-claim-section">
+            <h3>Add Claim</h3>
+            <div class="claim-input-container">
+                <textarea id="newClaimText" placeholder="Type your claim here..." rows="3"></textarea>
+                <div class="claim-actions">
+                    <button type="button" id="addClaimBtn">Add Claim</button>
+                    <button type="button" id="enhanceClaimBtn">
+                        <span>Enhance & Add</span>
+                        <div class="spinner" id="enhanceSpinner"></div>
+                    </button>
+                </div>
+            </div>
+
+            <div class="file-upload-section">
+                <label for="claimFile" class="file-upload-label">
+                    <span>Upload Claims File</span>
+                    <input type="file" id="claimFile" accept=".txt">
+                </label>
+                <span class="file-name" id="fileName"></span>
+            </div>
+        </div>
+
+        <!-- 4. Staging area -->
+        <div class="staging-area">
+            <h2>Staged Claims</h2>
+            <div id="stagedClaims" class="staged-claims">
+                <!-- Claims will be added here dynamically -->
+            </div>
+            <div class="batch-actions">
+                <button type="button" id="enhanceAllBtn" class="primary-button" disabled>
+                    Enhance All Claims
                 </button>
             </div>
-            {% if config.REQUIRE_PASSWORD %}
-            <input type="password" id="claimPassword" name="password" placeholder="Enter access password">
-            {% endif %}
-            <button type="submit">Submit Claim</button>
-        </form>
-        <form id="fileForm" enctype="multipart/form-data">
-            <label for="claimFile">Upload Claims File:</label>
-            <input type="file" id="claimFile" name="file" accept=".txt">
-            {% if config.REQUIRE_PASSWORD %}
-            <input type="password" id="batchPassword" name="password" placeholder="Enter access password">
-            {% endif %}
-            <div class="button-group">
-                <button type="submit">Submit File</button>
-                <button type="button" id="enhanceBatchBtn">Enhance Claims</button>
+        </div>
+
+        <!-- 5. Processing Options section -->
+        <div class="processing-options">
+            <h3>Processing Options</h3>
+            <div class="review-type-selection">
+                <h4>Review Type</h4>
+                <div class="radio-group">
+                    <label class="radio-label">
+                        <input type="radio" name="reviewType" value="full" id="fullReview">
+                        <div>
+                            <span>Full Review</span>
+                            <span class="radio-description">Analyze full text of papers for comprehensive evaluation</span>
+                        </div>
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="reviewType" value="abstracts" id="abstractsOnly">
+                        <div>
+                            <span>Abstracts Only Review</span>
+                            <span class="radio-description">Quick analysis using paper abstracts only</span>
+                        </div>
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="reviewType" value="llm" id="llmScreen" checked>
+                        <div>
+                            <span>LLM Screen</span>
+                            <span class="radio-description">AI-powered rapid screening</span>
+                        </div>
+                    </label>
+                </div>
+                
+                <!-- Move configuration settings here -->
+                <div id="configPanel" class="config-panel" style="display: none;">
+                    <h3>Literature Review Search Options</h3>
+                    <p class="subtext">Valsci will break your claims up into OpenAlex searches to retrieve relevant papers. You can modify how many searches are conducted, and how many papers from each search are reviewed.</p>
+                    <div class="config-group">
+                        <label for="numQueries">Number of Search Queries:</label>
+                        <input type="number" id="numQueries" name="numQueries" min="1" max="20" value="5">
+                    </div>
+                    <div class="config-group">
+                        <label for="resultsPerQuery">Results Per Query:</label>
+                        <input type="number" id="resultsPerQuery" name="resultsPerQuery" min="1" max="10" value="5">
+                    </div>
+                </div>
+
+                <!-- Add password field if required -->
+                {% if config.REQUIRE_PASSWORD %}
+                <div class="password-field">
+                    <input type="password" id="accessPassword" placeholder="Enter access password">
+                </div>
+                {% endif %}
+
+                <button type="button" id="processAllBtn" class="primary-button" disabled>
+                    Process Batch
+                </button>
             </div>
-        </form>
-        <form id="referenceForm">
-            <label for="claimReferenceID">Enter Claim or Batch Reference ID:</label>
-            <input type="text" id="claimReferenceID" name="claimReferenceID" placeholder="Enter reference ID...">
-            <button type="submit">Check Status</button>
-        </form>
+        </div>
+
+        <!-- 6. Browse Results link -->
         {% if saved_jobs_exist %}
         <a href="/browser" class="browse-link">Browse Results</a>
         {% endif %}
     </div>
     <script>
         const requirePassword = {{ 'true' if config.REQUIRE_PASSWORD else 'false' }};
-        
-        // Add configuration panel toggle
-        document.getElementById('configToggle').addEventListener('click', function() {
-            const panel = document.getElementById('configPanel');
-            const isHidden = panel.style.display === 'none';
-            panel.style.display = isHidden ? 'block' : 'none';
-            this.textContent = isHidden ? 'Hide Configuration' : 'Show Configuration';
-        });
     </script>
     <script src="{{ url_for('static', filename='scripts.js') }}"></script>
 </body>
