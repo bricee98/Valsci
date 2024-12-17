@@ -1,14 +1,9 @@
 import logging
-import requests
-import time
-import random
-from typing import List, Dict
+from typing import Dict, List
 from app.models.paper import Paper
 from app.services.openai_service import OpenAIService
-from requests.exceptions import RequestException
 from textwrap import dedent
 from app.config.settings import Config
-import urllib.parse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -16,161 +11,111 @@ logger = logging.getLogger(__name__)
 class EvidenceScorer:
     def __init__(self):
         self.openai_service = OpenAIService()
-        self.email = Config.USER_EMAIL
-        self.author_h_indices = {}  # New dictionary to store h-indices
 
     def calculate_paper_weight(self, paper: Paper) -> float:
-        print("There are ", len(paper.authors), " authors")
-        print("The authors are: ", paper.authors)
-        print("Journal name: ", paper.journal)
-        print("Using first 4 authors")
-        paper.authors = paper.authors[:4]
-
-        if not paper.authors:
-            logger.warning("No authors found for the paper. Returning weight of 0.")
-            return 0.0  # Default weight when there are no authors
-
-        max_h_index = max(self.get_author_h_index(author) for author in paper.authors)
-        impact_factor_data = self.get_journal_impact_factor(paper.journal)
-        
-        impact_factor = impact_factor_data.get('impact_factor', 0) if isinstance(impact_factor_data, dict) else 0
-        
-        normalized_h_index = min(max_h_index / 50, 1)
-        normalized_impact_factor = min(impact_factor / 20, 1)
-
-        print("Normalized h-index: ", normalized_h_index)
-        print("Normalized impact factor: ", normalized_impact_factor)
-        print("Weight: ", (normalized_h_index + normalized_impact_factor) / 2)
-        
-        return (normalized_h_index + normalized_impact_factor) / 2
-
-    def make_api_request(self, url: str, params: dict = None, headers: dict = None, method: str = 'get', max_retries: int = 7) -> requests.Response:
-        if params is None:
-            params = {}
-        params['email'] = self.email
-
-        # Construct the full URL with parameters
-        full_url = url
-        if params:
-            query_string = urllib.parse.urlencode(params, doseq=True)
-            full_url = f"{url}?{query_string}"
-
-        for attempt in range(max_retries):
-            try:
-                logger.info(f"Making API request to {full_url} at {time.strftime('%Y-%m-%d %H:%M:%S')}")
-                if method.lower() == 'get':
-                    response = requests.get(url, params=params, headers=headers)
-                elif method.lower() == 'post':
-                    response = requests.post(url, json=params, headers=headers)
-                else:
-                    raise ValueError(f"Unsupported HTTP method: {method}")
-                
-                response.raise_for_status()
-
-                if response.status_code == 429:
-                    wait_time = min(15, max(5, (2 ** attempt) + (random.randint(0, 1000) / 1000)))
-                    logger.warning(f"Rate limit reached for {full_url}. Status code: {response.status_code}. Waiting for {wait_time:.2f} seconds before retrying.")
-                    time.sleep(wait_time)
-                    continue
-                
-                time.sleep(0.1)  # Wait 0.1 seconds between requests
-                return response
-            except RequestException as e:
-                if attempt == max_retries - 1:
-                    status_code = e.response.status_code if hasattr(e, 'response') and e.response is not None else 'Unknown'
-                    logger.error(f"Max retries reached for {full_url}. Status code: {status_code}. Error: {str(e)}")
-                    raise e
-                wait_time = min(60, (2 ** attempt) + (random.randint(0, 1000) / 1000))
-                status_code = e.response.status_code if hasattr(e, 'response') and e.response is not None else 'Unknown'
-                logger.warning(f"Request to {full_url} failed. Status code: {status_code}. Retrying in {wait_time:.2f} seconds...")
-                time.sleep(wait_time)
-
-    def get_author_h_index(self, author: Dict[str, str]) -> float:
-        author_id = author.get('authorId')
-        if not author_id:
-            logger.warning(f"No author ID found for {author.get('name')}. Returning h-index of 0.")
-            return 0
-
-        # Normalize the author_id to ensure consistent formatting
-        author_id = self.normalize_author_id(author_id)
-        
-        # Check if we've already looked up this author's h-index
-        if author_id in self.author_h_indices:
-            logger.info(f"Retrieved cached h-index for author {author.get('name')}: {self.author_h_indices[author_id]}")
-            return self.author_h_indices[author_id]
-
-        url = f"https://api.openalex.org/authors/{author_id}"
-        params = {"select": "summary_stats"}
-        response = self.make_api_request(url, params=params)
-        
-        if response.status_code == 200:
-            data = response.json()
-            h_index = data.get('summary_stats', {}).get('h_index', 0)
-            logger.info(f"Retrieved h-index for author {author.get('name')}: {h_index}")
-            # Store the h-index for future use
-            self.author_h_indices[author_id] = h_index
-            return h_index
-        else:
-            logger.warning(f"Failed to retrieve h-index for author {author.get('name')}. Returning 0.")
-            return 0
-
-    def normalize_author_id(self, author_id: str) -> str:
-        # Remove the OpenAlex URL prefix if present
-        if author_id.startswith('https://openalex.org/'):
-            author_id = author_id.replace('https://openalex.org/', '')
-        return author_id
-
-    def get_journal_impact_factor(self, journal: str) -> dict:
-        # Handle case where journal is None
-        if not journal:
-            logger.warning("No journal name provided. Returning default impact factor data.")
-            return {'explanation': 'No journal name available.', 'impact_factor': 0}
-
-        # Clean and encode the journal name
-        cleaned_journal = journal.split(',')[0]  # Take only the first part before any comma
-        cleaned_journal = cleaned_journal.strip()
-        
-        url = "https://api.openalex.org/sources"
-        params = {
-            "filter": f"display_name.search:{cleaned_journal}", 
-            "select": "id,display_name,summary_stats"
-        }
-        
+        """Calculate the weight/reliability score for a paper."""
         try:
-            response = self.make_api_request(url, params=params)
+            # Get metrics
+            max_h_index = self._get_max_author_h_index(paper.authors)
+            citation_impact = self._calculate_citation_impact(paper)
+            venue_impact = self._calculate_venue_impact(paper)
             
-            if response.status_code == 200:
-                data = response.json()
-                if data['results']:
-                    source = data['results'][0]
-                    journal_info = f"Journal: {source['display_name']}, OpenAlex ID: {source['id']}"
-                    citation_count = source.get('summary_stats', {}).get('2yr_mean_citedness', 0)
-                    return self.estimate_impact_factor(journal_info, citation_count)
+            # Normalize scores
+            normalized_h_index = min(max_h_index / 100, 1.0)  # S2 h-indices can be higher than OpenAlex
+            normalized_citation_impact = min(citation_impact / 1000, 1.0)
+            normalized_venue_impact = min(venue_impact / 10, 1.0)
+            
+            # Calculate weighted average
+            weights = {
+                'author_impact': 0.4,
+                'citation_impact': 0.4,
+                'venue_impact': 0.2
+            }
+            
+            score = (
+                normalized_h_index * weights['author_impact'] +
+                normalized_citation_impact * weights['citation_impact'] +
+                normalized_venue_impact * weights['venue_impact']
+            )
+            
+            logger.info(f"""
+                Paper weight calculation for {paper.title}:
+                - Max h-index: {max_h_index} (normalized: {normalized_h_index:.2f})
+                - Citation impact: {citation_impact} (normalized: {normalized_citation_impact:.2f})
+                - Venue impact: {venue_impact} (normalized: {normalized_venue_impact:.2f})
+                - Final score: {score:.2f}
+            """)
+            
+            return score
+
         except Exception as e:
-            logger.error(f"Error fetching journal impact factor: {str(e)}")
-            
-        return {'explanation': 'No data found or error occurred.', 'impact_factor': 0}
+            logger.error(f"Error calculating paper weight for {paper.title}: {str(e)}")
+            return 0.0
 
-    def estimate_impact_factor(self, journal_info: str, citation_count: float) -> dict:
-        system_prompt = "You are an expert in academic publishing and journal metrics. Your task is to estimate the impact factor of a journal based on its information and citation count. Provide your response as a valid JSON object with 'explanation' and 'impact_factor' fields."
-        
-        prompt = dedent(f"""
-        Given the following journal information and citation count, estimate the impact factor and provide a brief explanation. The impact factor should be a single number, typically ranging from 0 to 50 or more. Consider factors such as the journal's reputation, field of study, and historical impact.
-
-        Journal information: {journal_info}
-        2-year mean citedness: {citation_count}
-
-        Respond with a valid JSON object in the following format:
-        {{
-            "explanation": "Your explanation here",
-            "impact_factor": 0.0
-        }}
-        """).strip()
-
-        response = self.openai_service.generate_json(prompt, system_prompt=system_prompt)
+    def _get_max_author_h_index(self, authors: List[Dict]) -> float:
+        """Get the maximum h-index among the paper's authors."""
         try:
-            explanation = response.get('explanation', 'No explanation provided.')
-            impact_factor = float(response.get('impact_factor', 0))
-            return {'explanation': explanation, 'impact_factor': impact_factor}
-        except (ValueError, TypeError, KeyError):
-            return {'explanation': 'Error in processing response.', 'impact_factor': 0}
+            h_indices = [
+                author.get('hIndex', 0) 
+                for author in authors 
+                if isinstance(author.get('hIndex'), (int, float))
+            ]
+            return max(h_indices) if h_indices else 0
+        except Exception as e:
+            logger.error(f"Error getting max h-index: {str(e)}")
+            return 0
+
+    def _calculate_citation_impact(self, paper: Paper) -> float:
+        """Calculate citation impact score."""
+        try:
+            # Get citation count
+            citation_count = paper.citation_count or 0
+            
+            # Calculate years since publication
+            current_year = 2024  # TODO: Get dynamically
+            years_since_pub = max(1, current_year - (paper.year or current_year))
+            
+            # Calculate citations per year
+            citations_per_year = citation_count / years_since_pub
+            
+            return citations_per_year
+            
+        except Exception as e:
+            logger.error(f"Error calculating citation impact: {str(e)}")
+            return 0
+
+    def _calculate_venue_impact(self, paper: Paper) -> float:
+        """Calculate venue impact using GPT to estimate journal/conference quality."""
+        if not paper.journal:
+            return 0.0
+
+        try:
+            system_prompt = """
+            You are an expert in academic publishing and research venues. 
+            Estimate the impact/prestige of an academic venue on a scale of 0-10.
+            Consider factors like:
+            - Venue reputation in the field
+            - Publication standards and peer review
+            - Typical citation rates
+            - Publisher reputation
+            
+            Return only a number between 0 and 10.
+            """
+
+            prompt = f"""
+            Rate the academic impact and prestige of this venue:
+            Venue: {paper.journal}
+            
+            Return only a number between 0 and 10, where:
+            0-2: Low impact or predatory venues
+            3-5: Legitimate but lower impact venues
+            6-8: Well-respected, mainstream venues
+            9-10: Top venues in the field
+            """
+
+            score = self.openai_service.generate_number(prompt, system_prompt)
+            return float(score)
+
+        except Exception as e:
+            logger.error(f"Error calculating venue impact for {paper.journal}: {str(e)}")
+            return 0.0

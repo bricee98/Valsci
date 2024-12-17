@@ -109,57 +109,29 @@
         <!-- 5. Processing Options section -->
         <div class="processing-options">
             <h3>Processing Options</h3>
-            <div class="review-type-selection">
-                <h4>Review Type</h4>
-                <div class="radio-group">
-                    <label class="radio-label">
-                        <input type="radio" name="reviewType" value="full" id="fullReview">
-                        <div>
-                            <span>Full Review</span>
-                            <span class="radio-description">Analyze full text of papers for comprehensive evaluation</span>
-                        </div>
-                    </label>
-                    <label class="radio-label">
-                        <input type="radio" name="reviewType" value="abstracts" id="abstractsOnly">
-                        <div>
-                            <span>Abstracts Only Review</span>
-                            <span class="radio-description">Quick analysis using paper abstracts only</span>
-                        </div>
-                    </label>
-                    <label class="radio-label">
-                        <input type="radio" name="reviewType" value="llm" id="llmScreen" checked>
-                        <div>
-                            <span>LLM Screen</span>
-                            <span class="radio-description">AI-powered rapid screening</span>
-                        </div>
-                    </label>
+            <div class="config-panel">
+                <h3>Literature Review Search Options</h3>
+                <p class="subtext">Valsci will search Semantic Scholar to find and analyze relevant papers for your claims.</p>
+                <div class="config-group">
+                    <label for="numQueries">Number of Search Queries:</label>
+                    <input type="number" id="numQueries" name="numQueries" min="1" max="20" value="5">
                 </div>
-                
-                <!-- Move configuration settings here -->
-                <div id="configPanel" class="config-panel" style="display: none;">
-                    <h3>Literature Review Search Options</h3>
-                    <p class="subtext">Valsci will break your claims up into OpenAlex searches to retrieve relevant papers. You can modify how many searches are conducted, and how many papers from each search are reviewed.</p>
-                    <div class="config-group">
-                        <label for="numQueries">Number of Search Queries:</label>
-                        <input type="number" id="numQueries" name="numQueries" min="1" max="20" value="5">
-                    </div>
-                    <div class="config-group">
-                        <label for="resultsPerQuery">Results Per Query:</label>
-                        <input type="number" id="resultsPerQuery" name="resultsPerQuery" min="1" max="10" value="5">
-                    </div>
+                <div class="config-group">
+                    <label for="resultsPerQuery">Results Per Query:</label>
+                    <input type="number" id="resultsPerQuery" name="resultsPerQuery" min="1" max="10" value="5">
                 </div>
-
-                <!-- Add password field if required -->
-                {% if config.REQUIRE_PASSWORD %}
-                <div class="password-field">
-                    <input type="password" id="accessPassword" placeholder="Enter access password">
-                </div>
-                {% endif %}
-
-                <button type="button" id="processAllBtn" class="primary-button" disabled>
-                    Process Batch
-                </button>
             </div>
+
+            <!-- Add password field if required -->
+            {% if config.REQUIRE_PASSWORD %}
+            <div class="password-field">
+                <input type="password" id="accessPassword" placeholder="Enter access password">
+            </div>
+            {% endif %}
+
+            <button type="button" id="processAllBtn" class="primary-button" disabled>
+                Process Batch
+            </button>
         </div>
 
         <!-- 6. Browse Results link -->

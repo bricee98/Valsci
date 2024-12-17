@@ -39,17 +39,12 @@ def save_claim_to_file(claim, batch_id, claim_id):
         }, f, indent=2)
 
 def process_claim_in_background(claim, batch_id, claim_id):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     try:
-        if claim.search_config.get('reviewType') == 'llm':
-            llm_screener = LLMClaimScreener()
-            loop.run_until_complete(llm_screener.screen_claim(claim, batch_id, claim_id, loop=loop))
-        else:
-            claim_processor = ClaimProcessor()
-            claim_processor.process_claim(claim, batch_id, claim_id)
-    finally:
-        loop.close()
+        claim_processor = ClaimProcessor()
+        claim_processor.process_claim(claim, batch_id, claim_id)
+    except Exception as e:
+        logger.error(f"Error processing claim: {str(e)}")
+        logger.error(traceback.format_exc())
 
 def verify_password(password):
     if current_app.config['REQUIRE_PASSWORD']:
@@ -69,21 +64,15 @@ def upload_claim():
     
     # Get search configuration
     search_config = data.get('searchConfig', {})
-    num_queries = search_config.get('numQueries', 10)
-    results_per_query = search_config.get('resultsPerQuery', 1)
+    num_queries = search_config.get('numQueries', 5)
+    results_per_query = search_config.get('resultsPerQuery', 5)
     
-    # Handle both old and new review type parameters
-    review_type = search_config.get('reviewType', 'abstracts')
-    abstracts_only = True if review_type == 'abstracts' else False
-    
-    # Ensure text is stored as a string
+    # Create claim object
     claim_text = data['text'][0] if isinstance(data['text'], list) else data['text']
     claim = Claim(text=claim_text, source=data.get('source', 'user'))
     claim.search_config = {
         'num_queries': num_queries,
-        'results_per_query': results_per_query,
-        'abstractsOnly': abstracts_only,
-        'reviewType': review_type
+        'results_per_query': results_per_query
     }
     
     batch_id = str(uuid.uuid4())[:8]
@@ -91,9 +80,17 @@ def upload_claim():
     
     save_claim_to_file(claim, batch_id, claim_id)
     
-    threading.Thread(target=process_claim_in_background, args=(claim, batch_id, claim_id)).start()
+    # Start processing in background
+    threading.Thread(
+        target=process_claim_in_background, 
+        args=(claim, batch_id, claim_id)
+    ).start()
     
-    return jsonify({"claim_id": claim_id, "batch_id": batch_id, "status": "queued"}), 202
+    return jsonify({
+        "claim_id": claim_id, 
+        "batch_id": batch_id, 
+        "status": "queued"
+    }), 202
 
 @api.route('/api/v1/claims/<claim_id>', methods=['GET'])
 def get_claim_status(claim_id):
@@ -133,9 +130,8 @@ def start_batch_job():
         return jsonify({"error": "Invalid password"}), 403
     
     # Get search configuration
-    num_queries = int(request.form.get('numQueries', 10))
-    results_per_query = int(request.form.get('resultsPerQuery', 1))
-    review_type = request.form.get('reviewType', 'abstracts')
+    num_queries = int(request.form.get('numQueries', 5))
+    results_per_query = int(request.form.get('resultsPerQuery', 5))
     
     # Get email notification settings
     notification_email = request.form.get('email')
@@ -148,35 +144,34 @@ def start_batch_job():
         batch_id = str(uuid.uuid4())[:8]
         batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
         os.makedirs(batch_dir, exist_ok=True)
+        
+        # Save claims file
         file_path = os.path.join(batch_dir, 'claims.txt')
         file.save(file_path)
         
-        # Read claims from file and filter out empty lines
+        # Read claims
         with open(file_path, 'r', encoding='utf-8') as f:
             claims = [line.strip() for line in f if line.strip()]
         
-        # Create claims and set search config
+        # Create claims with search config
         batch_claims = []
         for claim_text in claims:
             claim = Claim(text=claim_text)
             claim.search_config = {
                 'num_queries': num_queries,
-                'results_per_query': results_per_query,
-                'abstractsOnly': review_type == 'abstracts',
-                'reviewType': review_type
+                'results_per_query': results_per_query
             }
             batch_claims.append(claim)
         
         batch_job = BatchJob(claims=batch_claims)
         
-        # Save notification email if provided
+        # Save notification settings
         if notification_email:
             notification_file = os.path.join(batch_dir, 'notification.json')
             with open(notification_file, 'w') as f:
                 json.dump({
                     'email': notification_email,
-                    'num_claims': len(claims),
-                    'review_type': review_type
+                    'num_claims': len(claims)
                 }, f)
         
         # Send start notification if email provided
@@ -184,21 +179,21 @@ def start_batch_job():
             EmailService.send_batch_start_notification(
                 notification_email,
                 batch_id,
-                len(claims),
-                review_type
+                len(claims)
             )
         
-        # Get the current app
+        # Start processing
         app = current_app._get_current_object()
-        
-        # Start the background thread with the app context
         thread = threading.Thread(
-            target=process_batch_in_background, 
+            target=process_batch_in_background,
             args=(app, batch_job, batch_id)
         )
         thread.start()
         
-        return jsonify({"batch_id": batch_id, "status": "processing"}), 202
+        return jsonify({
+            "batch_id": batch_id,
+            "status": "processing"
+        }), 202
 
 def process_batch_in_background(app, batch_job: BatchJob, batch_id: str):
     batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)

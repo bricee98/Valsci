@@ -17,29 +17,11 @@ document.addEventListener('DOMContentLoaded', function() {
     // Show or hide configuration settings based on review type selection
     const reviewTypeRadios = document.querySelectorAll('input[name="reviewType"]');
 
-    function updateConfigPanelVisibility() {
-        const selectedReviewType = document.querySelector('input[name="reviewType"]:checked').value;
-        if (selectedReviewType === 'full' || selectedReviewType === 'abstracts') {
-            configPanel.style.display = 'block';
-        } else {
-            configPanel.style.display = 'none';
-        }
-    }
-
-    // Initialize config panel visibility
-    updateConfigPanelVisibility();
-
-    // Add event listeners to review type radio buttons
-    reviewTypeRadios.forEach(radio => {
-        radio.addEventListener('change', updateConfigPanelVisibility);
-    });
-
     // Helper function to get search configuration
     function getSearchConfig() {
         return {
             numQueries: parseInt(document.getElementById('numQueries').value) || 5,
-            resultsPerQuery: parseInt(document.getElementById('resultsPerQuery').value) || 5,
-            reviewType: document.querySelector('input[name="reviewType"]:checked').value
+            resultsPerQuery: parseInt(document.getElementById('resultsPerQuery').value) || 5
         };
     }
 
@@ -297,7 +279,6 @@ document.addEventListener('DOMContentLoaded', function() {
             // Add configuration to formData
             formData.append('numQueries', config.numQueries);
             formData.append('resultsPerQuery', config.resultsPerQuery);
-            formData.append('reviewType', config.reviewType);
 
             const response = await fetch('/api/v1/batch', {
                 method: 'POST',

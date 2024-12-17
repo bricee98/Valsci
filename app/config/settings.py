@@ -16,6 +16,7 @@ except json.JSONDecodeError:
 
 class Config:
     SECRET_KEY = env_vars.get('FLASK_SECRET_KEY')
+    SEMANTIC_SCHOLAR_API_KEY = env_vars.get('SEMANTIC_SCHOLAR_API_KEY')
     OPENAI_API_KEY = env_vars.get('OPENAI_API_KEY')
     ANTHROPIC_API_KEY = env_vars.get('ANTHROPIC_API_KEY')
     USER_EMAIL = env_vars.get('USER_EMAIL')
@@ -41,7 +42,7 @@ class Config:
 
     @classmethod
     def validate_config(cls):
-        required_keys = ['SECRET_KEY', 'USER_EMAIL']
+        required_keys = ['SECRET_KEY', 'USER_EMAIL', 'SEMANTIC_SCHOLAR_API_KEY']
         if cls.USE_AZURE_OPENAI:
             required_keys.extend(['AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_ENDPOINT'])
         else:
