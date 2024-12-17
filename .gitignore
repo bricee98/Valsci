@@ -172,3 +172,5 @@ cookies/
 *.pdf
 
 semantic_scholar/
+
+venv/
