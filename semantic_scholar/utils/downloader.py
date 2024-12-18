@@ -49,7 +49,7 @@ class S2DatasetDownloader:
         # Use project root for base directory
         self.base_dir = Path(project_root) / "semantic_scholar/datasets"
         self.session = requests.Session()
-        self.rate_limiter = RateLimiter(requests_per_second=1.0)
+        self.rate_limiter = RateLimiter(requests_per_second=0.5)  # Reduced to 1 request per 2 seconds
         
         self.api_key = os.getenv('SEMANTIC_SCHOLAR_API_KEY') or Config.SEMANTIC_SCHOLAR_API_KEY
         if not self.api_key:
@@ -109,20 +109,12 @@ class S2DatasetDownloader:
                     time.sleep(wait_time)
                     continue
                 elif response.status_code == 403:  # Expired credentials
-                    console.print("[yellow]URL expired. Refreshing dataset info...[/yellow]")
-                    # Re-fetch the dataset info to get fresh pre-signed URLs
-                    if hasattr(self, '_current_dataset'):
-                        dataset_info = self.get_dataset_info(self._current_dataset, self._current_release)
-                        if 'files' in dataset_info:
-                            # Find matching new URL
-                            old_filename = self.get_filename_from_url(url)
-                            for new_url in dataset_info['files']:
-                                if isinstance(new_url, dict):  # Handle S2ORC case
-                                    new_url = new_url['url']
-                                if self.get_filename_from_url(new_url) == old_filename:
-                                    console.print("[green]Got fresh URL, retrying...[/green]")
-                                    return self.make_request(new_url, method, max_retries-attempt, **kwargs)
-                    raise
+                    if attempt < max_retries - 1:  # Only retry if we have attempts left
+                        console.print("[yellow]URL expired, retrying with fresh URL...[/yellow]")
+                        time.sleep(1)  # Brief pause before retry
+                        continue
+                    else:
+                        console.print("[red]Max retries reached for expired URL[/red]")
                 
                 response.raise_for_status()
                 return response
@@ -421,55 +413,34 @@ class S2DatasetDownloader:
             if not dataset_info:
                 return False
             
+            # Save metadata immediately to avoid re-fetching
             dataset_dir = self.base_dir / release_id / dataset_name
             os.makedirs(dataset_dir, exist_ok=True)
             
-            # Save metadata
             metadata_path = dataset_dir / 'metadata.json'
-            if not metadata_path.exists():
-                with open(metadata_path, 'w') as f:
-                    json.dump(dataset_info, f, indent=2)
+            with open(metadata_path, 'w') as f:
+                json.dump(dataset_info, f, indent=2)
 
             downloaded_files = []
-
-            # Handle S2ORC differently
+            
+            # Use saved dataset info instead of re-fetching
             if dataset_name == 's2orc':
-                files = dataset_info['files']
-                if mini:
-                    files = files[:1]  # Get only first shard for mini download
-                
-                # Download files
+                files = dataset_info['files'][:1] if mini else dataset_info['files']
                 for file_info in files:
                     url = file_info['url']
                     shard = file_info['shard']
                     output_path = dataset_dir / f"{shard}.json"
                     
                     if not output_path.exists():
-                        # Get fresh URL just before download
-                        fresh_info = self.get_dataset_info(dataset_name, release_id)
-                        if fresh_info:
-                            for fresh_file in fresh_info['files']:
-                                if fresh_file['shard'] == shard:
-                                    url = fresh_file['url']
-                                    break
-                        
                         if self.download_file(url, dataset_dir, f"Downloading S2ORC shard {shard}"):
                             downloaded_files.append(output_path)
                     else:
                         downloaded_files.append(output_path)
             else:
-                # Standard dataset handling
                 files_to_download = dataset_info['files'][:1] if mini else dataset_info['files']
-                
-                # Download files
-                for i, file_url in enumerate(files_to_download):
+                for file_url in files_to_download:
                     output_path = dataset_dir / self.get_filename_from_url(file_url).replace('.gz', '.json')
                     if not output_path.exists():
-                        # Get fresh URL just before download
-                        fresh_info = self.get_dataset_info(dataset_name, release_id)
-                        if fresh_info:
-                            file_url = fresh_info['files'][i]
-                        
                         success, path = self.download_file(file_url, dataset_dir)
                         if success and path:
                             downloaded_files.append(path)
