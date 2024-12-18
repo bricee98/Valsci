@@ -427,26 +427,34 @@ class S2DatasetDownloader:
             # Use saved dataset info instead of re-fetching
             if dataset_name == 's2orc':
                 files = dataset_info['files'][:1] if mini else dataset_info['files']
+                console.print(f"\n[bold]Checking {len(files)} files for {dataset_name}...[/bold]")
                 for file_info in files:
                     url = file_info['url']
                     shard = file_info['shard']
                     output_path = dataset_dir / f"{shard}.json"
                     
-                    if not output_path.exists():
+                    if output_path.exists():
+                        size = output_path.stat().st_size / (1024 * 1024)  # Convert to MB
+                        console.print(f"[green]✓ Already exists ({size:.1f} MB): {output_path.name}[/green]")
+                        downloaded_files.append(output_path)
+                    else:
+                        console.print(f"[yellow]→ Needs download: {output_path.name}[/yellow]")
                         if self.download_file(url, dataset_dir, f"Downloading S2ORC shard {shard}"):
                             downloaded_files.append(output_path)
-                    else:
-                        downloaded_files.append(output_path)
             else:
                 files_to_download = dataset_info['files'][:1] if mini else dataset_info['files']
+                console.print(f"\n[bold]Checking {len(files_to_download)} files for {dataset_name}...[/bold]")
                 for file_url in files_to_download:
                     output_path = dataset_dir / self.get_filename_from_url(file_url).replace('.gz', '.json')
-                    if not output_path.exists():
+                    if output_path.exists():
+                        size = output_path.stat().st_size / (1024 * 1024)  # Convert to MB
+                        console.print(f"[green]✓ Already exists ({size:.1f} MB): {output_path.name}[/green]")
+                        downloaded_files.append(output_path)
+                    else:
+                        console.print(f"[yellow]→ Needs download: {output_path.name}[/yellow]")
                         success, path = self.download_file(file_url, dataset_dir)
                         if success and path:
                             downloaded_files.append(path)
-                    else:
-                        downloaded_files.append(output_path)
 
             if index:
                 self.index_dataset(dataset_name, release_id, downloaded_files)
