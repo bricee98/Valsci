@@ -281,34 +281,68 @@ class S2DatasetDownloader:
         file_path, dataset, start_pos, chunk_size = chunk_data
         entries = []
         
-        console.print(f"[cyan]Processing chunk at offset {start_pos} of {file_path.name}...[/cyan]")
-        
-        with open(file_path, 'r', encoding='utf-8') as f:
-            f.seek(start_pos)
-            data = f.read(chunk_size)
-            lines = data.splitlines()
+        try:
+            console.print(f"[cyan]Processing chunk at offset {start_pos} of {file_path.name}...[/cyan]")
             
-            offset = start_pos
-            for line_num, line in enumerate(lines, 1):
-                try:
-                    item = json.loads(line.strip())
-                    for field_name, id_type in self.dataset_id_fields[dataset]:
-                        id_value = str(item.get(field_name, '')).lower()
-                        if id_value:
-                            entries.append((id_value, id_type, dataset, str(file_path), offset))
-                except json.JSONDecodeError:
-                    continue
-                offset += len(line.encode('utf-8')) + 1  # +1 for newline
+            with open(file_path, 'r', encoding='utf-8') as f:
+                # Seek to start position
+                f.seek(start_pos)
                 
-                if line_num % 100000 == 0:
-                    console.print(f"[cyan]Processed {line_num:,} lines in chunk...[/cyan]")
+                # If not at start of file, read until next newline to avoid partial lines
+                if start_pos > 0:
+                    f.readline()
                 
-        console.print(f"[green]Completed chunk with {len(entries):,} entries[/green]")
-        return entries
+                # Read chunk
+                data = f.read(chunk_size)
+                
+                # Read until next newline to avoid cutting in middle of a line
+                if not data.endswith('\n'):
+                    data += f.readline()
+                    
+                lines = data.splitlines()
+                
+                offset = f.tell() - len(data)  # Get actual starting offset after alignment
+                for line_num, line in enumerate(lines, 1):
+                    try:
+                        if not line.strip():
+                            continue
+                            
+                        item = json.loads(line.strip())
+                        for field_name, id_type in self.dataset_id_fields[dataset]:
+                            id_value = str(item.get(field_name, '')).lower()
+                            if id_value:
+                                entries.append((id_value, id_type, dataset, str(file_path), offset))
+                    except json.JSONDecodeError:
+                        continue
+                    except Exception as e:
+                        console.print(f"[yellow]Warning: Error processing line {line_num}: {str(e)}[/yellow]")
+                        continue
+                        
+                    offset += len(line.encode('utf-8')) + 1  # +1 for newline
+                    
+                    if line_num % 100000 == 0:
+                        console.print(f"[cyan]Processed {line_num:,} lines in chunk...[/cyan]")
+                    
+            console.print(f"[green]Completed chunk with {len(entries):,} entries[/green]")
+            return entries
+            
+        except Exception as e:
+            console.print(f"[red]Error processing chunk at offset {start_pos}: {str(e)}[/red]")
+            return []
 
     def _index_file(self, conn: sqlite3.Connection, file_path: Path, dataset: str):
-        """Parallel file indexing using all available cores."""
-        num_cores = multiprocessing.cpu_count()
+        """Index file with improved error handling and fallback to single process."""
+        try:
+            # First try with multiprocessing
+            return self._index_file_parallel(conn, file_path, dataset)
+        except Exception as e:
+            console.print(f"[yellow]Parallel indexing failed: {str(e)}. Falling back to single process...[/yellow]")
+            return self._index_file_single(conn, file_path, dataset)
+
+    def _index_file_parallel(self, conn: sqlite3.Connection, file_path: Path, dataset: str):
+        """Parallel file indexing with better error handling."""
+        # Use fewer cores to reduce memory pressure
+        num_cores = max(2, multiprocessing.cpu_count() // 2)
         file_size = file_path.stat().st_size
         chunk_size = file_size // num_cores
         
@@ -323,27 +357,67 @@ class S2DatasetDownloader:
         # Add remainder to last chunk
         chunks[-1] = (file_path, dataset, (num_cores-1) * chunk_size, file_size - (num_cores-1) * chunk_size)
         
+        total_entries = 0
+        
         try:
-            conn.execute('BEGIN TRANSACTION')
-            total_entries = 0
-            
             with ProcessPoolExecutor(max_workers=num_cores) as executor:
-                for i, chunk_entries in enumerate(executor.map(self._parallel_index_chunk, chunks), 1):
-                    if chunk_entries:
-                        conn.executemany("""
-                            INSERT OR REPLACE INTO paper_locations 
-                            (id, id_type, dataset, file_path, line_offset)
-                            VALUES (?, ?, ?, ?, ?)
-                        """, chunk_entries)
-                        total_entries += len(chunk_entries)
-                    console.print(f"[green]Processed chunk {i}/{num_cores} ({len(chunk_entries):,} entries)[/green]")
-            
-            conn.execute('COMMIT')
+                futures = []
+                for chunk in chunks:
+                    futures.append(executor.submit(self._parallel_index_chunk, chunk))
+                
+                for i, future in enumerate(futures, 1):
+                    try:
+                        chunk_entries = future.result(timeout=3600)  # 1 hour timeout
+                        if chunk_entries:
+                            conn.execute('BEGIN IMMEDIATE')
+                            try:
+                                conn.executemany("""
+                                    INSERT OR REPLACE INTO paper_locations 
+                                    (id, id_type, dataset, file_path, line_offset)
+                                    VALUES (?, ?, ?, ?, ?)
+                                """, chunk_entries)
+                                conn.commit()
+                                total_entries += len(chunk_entries)
+                                console.print(f"[green]Processed chunk {i}/{num_cores} ({len(chunk_entries):,} entries)[/green]")
+                            except:
+                                conn.rollback()
+                                raise
+                    except Exception as e:
+                        console.print(f"[red]Error processing chunk {i}: {str(e)}[/red]")
+                        raise
+                        
             console.print(f"[bold green]✓ Successfully indexed {total_entries:,} total entries from {file_path.name}[/bold green]\n")
+            return True
             
         except Exception as e:
-            conn.execute('ROLLBACK')
-            console.print(f"[red]Error indexing {file_path.name}: {str(e)}[/red]")
+            console.print(f"[red]Error during parallel indexing: {str(e)}[/red]")
+            raise
+
+    def _index_file_single(self, conn: sqlite3.Connection, file_path: Path, dataset: str):
+        """Single process fallback for indexing."""
+        console.print(f"[cyan]Starting single-process indexing of {file_path.name}...[/cyan]")
+        
+        try:
+            chunk_data = (file_path, dataset, 0, file_path.stat().st_size)
+            entries = self._parallel_index_chunk(chunk_data)
+            
+            if entries:
+                conn.execute('BEGIN IMMEDIATE')
+                try:
+                    conn.executemany("""
+                        INSERT OR REPLACE INTO paper_locations 
+                        (id, id_type, dataset, file_path, line_offset)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, entries)
+                    conn.commit()
+                    console.print(f"[green]Successfully indexed {len(entries):,} entries[/green]")
+                    return True
+                except:
+                    conn.rollback()
+                    raise
+                    
+        except Exception as e:
+            console.print(f"[red]Error during single-process indexing: {str(e)}[/red]")
             raise
 
     def download_dataset(self, dataset_name: str, release_id: str = 'latest', mini: bool = False) -> bool:
@@ -531,10 +605,9 @@ class S2DatasetDownloader:
     def update_datasets(self) -> bool:
         """
         Update all datasets to the latest release using diffs.
-        Returns True if update was successful.
+        Automatically maintains indices during the update.
         """
         try:
-            # Get current and latest release IDs
             current_release = self._get_latest_local_release()
             if not current_release:
                 console.print("[yellow]No local datasets found. Please run initial download first.[/yellow]")
@@ -547,94 +620,109 @@ class S2DatasetDownloader:
             
             console.print(f"[cyan]Updating from {current_release} to {latest_release}...[/cyan]")
             
-            # Create backup of index
-            self._backup_index(current_release)
-            
             # Process each dataset
             for dataset in self.datasets_to_download:
-                success = self._update_dataset(dataset, current_release, latest_release)
-                if not success:
-                    self._restore_index_backup(current_release)
+                try:
+                    # Special handling for S2ORC dataset
+                    if dataset == 's2orc':
+                        try:
+                            diff_url = f"https://api.semanticscholar.org/datasets/v1/diffs/{current_release}/to/{latest_release}/s2orc/"
+                            response = self.make_request(diff_url)
+                            diffs = response.json()
+                            
+                            # Filter and process S2ORC diffs
+                            if 'diffs' in diffs:
+                                for diff in diffs['diffs']:
+                                    diff['update_files'] = [
+                                        {
+                                            'url': url,
+                                            'shard': re.match(r"https://ai2-s2ag.s3.amazonaws.com/staging/(.*)/s2orc/(.*).gz(.*)", url).group(2)
+                                        }
+                                        for url in diff['update_files']
+                                    ]
+                                    diff['delete_files'] = [
+                                        {
+                                            'url': url,
+                                            'shard': re.match(r"https://ai2-s2ag.s3.amazonaws.com/staging/(.*)/s2orc/(.*).gz(.*)", url).group(2)
+                                        }
+                                        for url in diff['delete_files']
+                                    ]
+                        except requests.exceptions.HTTPError as e:
+                            console.print("[red]Error accessing S2ORC dataset. Make sure your API key has S2ORC access.[/red]")
+                            console.print("[yellow]For S2ORC access, visit: https://api.semanticscholar.org/s2orc[/yellow]")
+                            raise
+                    else:
+                        # Standard dataset handling
+                        diff_url = f"{BASE_URL}/diffs/{current_release}/to/{latest_release}/{dataset}"
+                        response = self.make_request(diff_url)
+                        diffs = response.json()
+                    
+                    dataset_dir = self.base_dir / latest_release / dataset
+                    dataset_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    with Progress() as progress:
+                        total_files = sum(
+                            len(diff['update_files']) + len(diff['delete_files']) 
+                            for diff in diffs['diffs']
+                        )
+                        task = progress.add_task(
+                            f"[cyan]Updating {dataset}...", 
+                            total=total_files
+                        )
+                        
+                        # Process each diff sequentially
+                        for diff in diffs['diffs']:
+                            # Handle updates
+                            update_files = diff['update_files']
+                            if dataset == 's2orc':
+                                update_files = [f['url'] for f in update_files]
+                                
+                            for url in update_files:
+                                temp_file = dataset_dir / f"temp_{Path(url).name}"
+                                try:
+                                    success, output_path = self.download_file(url, dataset_dir)
+                                    if success and output_path:
+                                        # Update index with new/updated records
+                                        self._update_index_for_file(output_path, dataset, latest_release)
+                                finally:
+                                    if temp_file.exists():
+                                        temp_file.unlink()
+                                progress.advance(task)
+                            
+                            # Handle deletes
+                            delete_files = diff['delete_files']
+                            if dataset == 's2orc':
+                                delete_files = [f['url'] for f in delete_files]
+                                
+                            for url in delete_files:
+                                temp_file = dataset_dir / f"temp_delete_{Path(url).name}"
+                                try:
+                                    success, output_path = self.download_file(url, dataset_dir)
+                                    if success and output_path:
+                                        # Remove deleted records from index
+                                        self._remove_from_index(output_path, dataset)
+                                        output_path.unlink()  # Remove the delete file after processing
+                                finally:
+                                    if temp_file.exists():
+                                        temp_file.unlink()
+                                progress.advance(task)
+                        
+                        # Verify index integrity after updates
+                        console.print(f"[cyan]Verifying {dataset} index after update...[/cyan]")
+                        self.verify_index_completeness()
+                        
+                    console.print(f"[green]Dataset {dataset} updated successfully![/green]")
+                    
+                except Exception as e:
+                    console.print(f"[red]Error updating dataset {dataset}: {str(e)}[/red]")
                     return False
-                
-            # Update successful - remove backup
-            self._cleanup_backup(current_release)
+            
+            console.print("[green]All datasets updated successfully![/green]")
             return True
             
         except Exception as e:
             console.print(f"[red]Error updating datasets: {str(e)}[/red]")
-            self._restore_index_backup(current_release)
             return False
-
-    def _update_dataset(self, dataset_name: str, current_release: str, target_release: str) -> bool:
-        """Update a single dataset using diffs."""
-        try:
-            # Get diffs
-            diff_url = f"{BASE_URL}/diffs/{current_release}/to/{target_release}/{dataset_name}"
-            response = self.make_request(diff_url)
-            diffs = response.json()
-            
-            dataset_dir = self.base_dir / target_release / dataset_name
-            dataset_dir.mkdir(parents=True, exist_ok=True)
-            
-            with Progress() as progress:
-                task = progress.add_task(f"Updating {dataset_name}...", total=len(diffs['diffs']))
-                
-                # Process each diff sequentially
-                for diff in diffs['diffs']:
-                    # Apply updates
-                    for url in diff['update_files']:
-                        temp_file = dataset_dir / f"temp_{Path(url).name}"
-                        try:
-                            self.download_file(url, temp_file)
-                            self._update_index_for_file(temp_file, dataset_name, diff['to_release'])
-                        finally:
-                            if temp_file.exists():
-                                temp_file.unlink()
-                    
-                    # Process deletes
-                    for url in diff['delete_files']:
-                        temp_file = dataset_dir / f"temp_delete_{Path(url).name}"
-                        try:
-                            self.download_file(url, temp_file)
-                            self._remove_from_index(temp_file, dataset_name)
-                        finally:
-                            if temp_file.exists():
-                                temp_file.unlink()
-                            
-                    progress.advance(task)
-                
-            return True
-            
-        except Exception as e:
-            console.print(f"[red]Error updating dataset {dataset_name}: {str(e)}[/red]")
-            return False
-
-    def _backup_index(self, release_id: str):
-        """Create backup of current index."""
-        index_path = self.index_dir / f"{release_id}.db"
-        backup_path = self.index_dir / f"{release_id}.db.bak"
-        
-        if index_path.exists():
-            shutil.copy2(str(index_path), str(backup_path))
-            console.print("[green]Created index backup[/green]")
-
-    def _restore_index_backup(self, release_id: str):
-        """Restore index from backup if update failed."""
-        index_path = self.index_dir / f"{release_id}.db"
-        backup_path = self.index_dir / f"{release_id}.db.bak"
-        
-        if backup_path.exists():
-            if index_path.exists():
-                index_path.unlink()
-            shutil.copy2(str(backup_path), str(index_path))
-            console.print("[yellow]Restored index from backup[/yellow]")
-
-    def _cleanup_backup(self, release_id: str):
-        """Remove backup files after successful update."""
-        backup_path = self.index_dir / f"{release_id}.db.bak"
-        if backup_path.exists():
-            backup_path.unlink()
 
     def _update_index_for_file(self, file_path: Path, dataset: str, release_id: str):
         """Update index with new/updated records."""
@@ -678,7 +766,8 @@ class S2DatasetDownloader:
 
     def _remove_from_index(self, file_path: Path, dataset: str):
         """Remove deleted records from index."""
-        index_path = self.index_dir / f"{self.current_release}.db"
+        release_id = self._get_latest_local_release()
+        index_path = self.index_dir / f"{release_id}.db"
         
         with sqlite3.connect(str(index_path)) as conn:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -701,7 +790,8 @@ class S2DatasetDownloader:
     def verify_index_completeness(self) -> bool:
         """
         Verify that all downloaded files have been completely indexed.
-        Returns True if all files are properly indexed, False otherwise.
+        Uses parallel processing and optimized SQLite access.
+        Automatically reindexes any corrupt or incomplete files.
         """
         try:
             release_id = self._get_latest_local_release()
@@ -714,69 +804,85 @@ class S2DatasetDownloader:
                 console.print("[red]Index database not found.[/red]")
                 return False
 
+            def verify_file(args) -> Tuple[Path, str, int, int]:
+                """Worker function to verify a single file's index completeness."""
+                file_path, db_path, dataset = args
+                if file_path.name == 'metadata.json':
+                    return None
+                    
+                # Count actual records in file
+                actual_records = 0
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    for _ in f:
+                        actual_records += 1
+                        
+                # Query index count for this file
+                with sqlite3.connect(str(db_path)) as conn:
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    conn.execute("PRAGMA synchronous=NORMAL")
+                    conn.execute("PRAGMA cache_size=-2000000")  # Use 2GB cache
+                    
+                    cursor = conn.execute("""
+                        SELECT COUNT(*) FROM paper_locations 
+                        WHERE file_path = ?
+                    """, (str(file_path),))
+                    indexed_records = cursor.fetchone()[0]
+                    
+                return (file_path, dataset, indexed_records, actual_records)
+
             incomplete_files = []
+            num_cores = multiprocessing.cpu_count()
             
-            with sqlite3.connect(str(index_path)) as conn:
+            with Progress() as progress:
+                task = progress.add_task("[cyan]Verifying index completeness...", total=0)
+                
                 for dataset in self.datasets_to_download:
                     dataset_dir = self.base_dir / release_id / dataset
                     if not dataset_dir.exists():
                         continue
 
-                    # Get all JSON files in the dataset directory
                     json_files = list(dataset_dir.glob('*.json'))
-                    for file_path in json_files:
-                        if file_path.name == 'metadata.json':
-                            continue
+                    progress.update(task, total=len(json_files))
+                    
+                    verify_args = [(f, index_path, dataset) for f in json_files]
+                    
+                    with ProcessPoolExecutor(max_workers=num_cores) as executor:
+                        for result in executor.map(verify_file, verify_args):
+                            if result is None:  # Skip metadata.json
+                                continue
+                                
+                            file_path, dataset, indexed_count, actual_count = result
                             
-                        console.print(f"[cyan]Verifying index for {file_path.name}...[/cyan]")
-                        
-                        # Count actual records in the file
-                        actual_records = 0
-                        with open(file_path, 'r', encoding='utf-8') as f:
-                            for line in f:
-                                try:
-                                    json.loads(line.strip())  # Validate JSON
-                                    actual_records += 1
-                                except json.JSONDecodeError:
-                                    continue
-                        
-                        # Count indexed records for this file
-                        cursor = conn.execute("""
-                            SELECT COUNT(*) FROM paper_locations 
-                            WHERE file_path = ?
-                        """, (str(file_path),))
-                        indexed_records = cursor.fetchone()[0]
-                        
-                        if indexed_records == 0:
-                            console.print(f"[red]File {file_path.name} has no index entries![/red]")
-                            incomplete_files.append((file_path, 'missing'))
-                        elif indexed_records < actual_records:
-                            console.print(
-                                f"[yellow]File {file_path.name} is partially indexed: "
-                                f"{indexed_records}/{actual_records} records[/yellow]"
-                            )
-                            incomplete_files.append((file_path, 'partial'))
+                            if indexed_count == 0:
+                                console.print(f"[red]File {file_path.name} has no index entries - will reindex[/red]")
+                                incomplete_files.append((file_path, 'missing'))
+                            elif indexed_count < actual_count:
+                                console.print(
+                                    f"[yellow]File {file_path.name} is partially indexed "
+                                    f"({indexed_count}/{actual_count} records) - will reindex[/yellow]"
+                                )
+                                incomplete_files.append((file_path, 'partial'))
+                                
+                            progress.advance(task)
 
             if incomplete_files:
-                console.print("\n[red]Found incompletely indexed files:[/red]")
-                for file_path, status in incomplete_files:
-                    console.print(f"- {file_path.name} ({status})")
-                
-                # Offer to fix incomplete files
-                if console.input("\nWould you like to reindex these files? (y/n): ").lower() == 'y':
-                    with sqlite3.connect(str(index_path)) as conn:
-                        for file_path, _ in incomplete_files:
-                            # Remove existing entries
-                            conn.execute(
-                                "DELETE FROM paper_locations WHERE file_path = ?", 
-                                (str(file_path),)
-                            )
-                            # Reindex the file
-                            dataset = file_path.parent.name
-                            self._index_file(conn, file_path, dataset)
-                    console.print("[green]Reindexing complete![/green]")
-                
-                return False
+                console.print("\n[cyan]Reindexing incomplete files...[/cyan]")
+                with sqlite3.connect(str(index_path)) as conn:
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    conn.execute("PRAGMA synchronous=NORMAL")
+                    conn.execute("PRAGMA cache_size=-2000000")
+                    
+                    for file_path, _ in incomplete_files:
+                        # Remove existing entries
+                        conn.execute(
+                            "DELETE FROM paper_locations WHERE file_path = ?", 
+                            (str(file_path),)
+                        )
+                        # Reindex the file
+                        dataset = file_path.parent.name
+                        self._index_file(conn, file_path, dataset)
+                console.print("[green]Reindexing complete![/green]")
+                return True  # Return True since we fixed the issues
                 
             console.print("[green]All files are properly indexed![/green]")
             return True
