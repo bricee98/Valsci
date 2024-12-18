@@ -415,6 +415,8 @@ class S2DatasetDownloader:
             self._current_dataset = dataset_name
             self._current_release = release_id
             
+            # Get fresh dataset info once at the start
+            console.print(f"\n[cyan]Getting dataset info for {dataset_name}...[/cyan]")
             dataset_info = self.get_dataset_info(dataset_name, release_id)
             if not dataset_info:
                 return False
@@ -443,6 +445,14 @@ class S2DatasetDownloader:
                     output_path = dataset_dir / f"{shard}.json"
                     
                     if not output_path.exists():
+                        # Get fresh URL just before download
+                        fresh_info = self.get_dataset_info(dataset_name, release_id)
+                        if fresh_info:
+                            for fresh_file in fresh_info['files']:
+                                if fresh_file['shard'] == shard:
+                                    url = fresh_file['url']
+                                    break
+                        
                         if self.download_file(url, dataset_dir, f"Downloading S2ORC shard {shard}"):
                             downloaded_files.append(output_path)
                     else:
@@ -452,9 +462,14 @@ class S2DatasetDownloader:
                 files_to_download = dataset_info['files'][:1] if mini else dataset_info['files']
                 
                 # Download files
-                for file_url in files_to_download:
+                for i, file_url in enumerate(files_to_download):
                     output_path = dataset_dir / self.get_filename_from_url(file_url).replace('.gz', '.json')
                     if not output_path.exists():
+                        # Get fresh URL just before download
+                        fresh_info = self.get_dataset_info(dataset_name, release_id)
+                        if fresh_info:
+                            file_url = fresh_info['files'][i]
+                        
                         success, path = self.download_file(file_url, dataset_dir)
                         if success and path:
                             downloaded_files.append(path)
