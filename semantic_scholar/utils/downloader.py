@@ -360,8 +360,8 @@ class S2DatasetDownloader:
             console.print(f"[red]Error indexing {file_path.name}: {str(e)}[/red]")
             raise
 
-    def download_dataset(self, dataset_name: str, release_id: str = 'latest', mini: bool = False) -> bool:
-        """Download a specific dataset and build index."""
+    def download_dataset(self, dataset_name: str, release_id: str = 'latest', mini: bool = False, index: bool = True) -> bool:
+        """Download a specific dataset and optionally build index."""
         if release_id == 'latest':
             release_id = self.get_latest_release()
         
@@ -383,6 +383,51 @@ class S2DatasetDownloader:
                 with open(metadata_path, 'w') as f:
                     json.dump(dataset_info, f, indent=2)
 
+            downloaded_files = []
+
+            # Handle S2ORC differently
+            if dataset_name == 's2orc':
+                files = dataset_info['files']
+                if mini:
+                    files = files[:1]  # Get only first shard for mini download
+                
+                # Download files
+                for file_info in files:
+                    url = file_info['url']
+                    shard = file_info['shard']
+                    output_path = dataset_dir / f"{shard}.json"
+                    
+                    if not output_path.exists():
+                        if self.download_file(url, dataset_dir, f"Downloading S2ORC shard {shard}"):
+                            downloaded_files.append(output_path)
+                    else:
+                        downloaded_files.append(output_path)
+            else:
+                # Standard dataset handling
+                files_to_download = dataset_info['files'][:1] if mini else dataset_info['files']
+                
+                # Download files
+                for file_url in files_to_download:
+                    output_path = dataset_dir / self.get_filename_from_url(file_url).replace('.gz', '.json')
+                    if not output_path.exists():
+                        success, path = self.download_file(file_url, dataset_dir)
+                        if success and path:
+                            downloaded_files.append(path)
+                    else:
+                        downloaded_files.append(output_path)
+
+            if index:
+                self.index_dataset(dataset_name, release_id, downloaded_files)
+                
+            return True
+                
+        except Exception as e:
+            console.print(f"[red]Error downloading dataset {dataset_name}: {str(e)}[/red]")
+            return False
+
+    def index_dataset(self, dataset_name: str, release_id: str, files: List[Path] = None, repair: bool = False) -> bool:
+        """Index all files for a specific dataset."""
+        try:
             # Initialize SQLite index
             index_dir = self.base_dir / "indices"
             index_dir.mkdir(exist_ok=True)
@@ -392,91 +437,79 @@ class S2DatasetDownloader:
             self._init_sqlite_db(index_path)
             
             with sqlite3.connect(str(index_path)) as conn:
-                # Get list of already processed files
-                processed_files = set()
-                cursor = conn.execute(
-                    "SELECT DISTINCT file_path FROM paper_locations WHERE dataset = ?", 
-                    (dataset_name,)
-                )
-                for (file_path,) in cursor:
-                    processed_files.add(Path(file_path).name)
+                # Get list of processed files and their entry counts
+                processed_files = {}
+                cursor = conn.execute("""
+                    SELECT file_path, COUNT(*) as entry_count 
+                    FROM paper_locations 
+                    WHERE dataset = ?
+                    GROUP BY file_path
+                """, (dataset_name,))
+                for file_path, count in cursor:
+                    processed_files[Path(file_path).name] = count
 
-                # Handle S2ORC differently
-                if dataset_name == 's2orc':
-                    files = dataset_info['files']
-                    if mini:
-                        files = files[:1]  # Get only first shard for mini download
-                    
-                    # Filter out already processed files
-                    remaining_files = [
-                        f for f in files 
-                        if not (dataset_dir / f"{f['shard']}.json").exists() and
-                        f"{f['shard']}.json" not in processed_files
+                # If no files specified, find all JSON files in dataset directory
+                if files is None:
+                    dataset_dir = self.base_dir / release_id / dataset_name
+                    files = [
+                        f for f in dataset_dir.glob("*.json")
+                        if f.name != 'metadata.json'
                     ]
-                    
-                    if not remaining_files:
-                        console.print(f"[green]All files already downloaded for {dataset_name}[/green]")
-                        return True
-                    
-                    console.print(f"[cyan]Downloading {len(remaining_files)} files for {dataset_name}...[/cyan]")
-                    
-                    for file_info in remaining_files:
-                        url = file_info['url']
-                        shard = file_info['shard']
-                        output_path = dataset_dir / f"{shard}.json"
-                        
-                        if self.download_file(url, dataset_dir, f"Downloading S2ORC shard {shard}"):
-                            self._index_file(conn, output_path, dataset_name)
-                else:
-                    # Standard dataset handling
-                    files_to_download = dataset_info['files'][:1] if mini else dataset_info['files']
-                    
-                    # Filter out already processed files
-                    remaining_files = [
-                        url for url in files_to_download
-                        if not (dataset_dir / self.get_filename_from_url(url).replace('.gz', '.json')).exists() and
-                        self.get_filename_from_url(url).replace('.gz', '.json') not in processed_files
-                    ]
-                    
-                    if not remaining_files:
-                        console.print(f"[green]All files already downloaded for {dataset_name}[/green]")
-                        return True
-                    
-                    console.print(f"[cyan]Downloading {len(remaining_files)} files for {dataset_name}...[/cyan]")
-                    
-                    for file_url in remaining_files:
-                        success, output_path = self.download_file(file_url, dataset_dir)
-                        if success and output_path:
-                            self._index_file(conn, output_path, dataset_name)
-                    
-                    conn.commit()
+
+                files_to_index = []
+                for f in files:
+                    if f.name not in processed_files:
+                        # File never indexed
+                        files_to_index.append(f)
+                    elif repair:
+                        # Check if file needs repair
+                        entry_count = processed_files[f.name]
+                        if entry_count < 100:  # Arbitrary threshold for suspicious count
+                            console.print(f"[yellow]File {f.name} has suspiciously low entry count ({entry_count}), will re-index[/yellow]")
+                            # Delete existing entries for this file
+                            conn.execute("DELETE FROM paper_locations WHERE file_path = ?", (str(f),))
+                            files_to_index.append(f)
+                        else:
+                            console.print(f"[green]File {f.name} appears complete ({entry_count} entries)[/green]")
+
+                if not files_to_index:
+                    console.print(f"[green]All files already indexed for {dataset_name}[/green]")
+                    return True
+
+                console.print(f"[cyan]Indexing {len(files_to_index)} files for {dataset_name}...[/cyan]")
+                
+                for file_path in files_to_index:
+                    try:
+                        self._index_file(conn, file_path, dataset_name)
+                    except Exception as e:
+                        console.print(f"[red]Error indexing {file_path.name}: {str(e)}[/red]")
+                        if not repair:
+                            raise
+                
+                conn.commit()
                 return True
                 
         except Exception as e:
-            console.print(f"[red]Error downloading dataset {dataset_name}: {str(e)}[/red]")
+            console.print(f"[red]Error indexing dataset {dataset_name}: {str(e)}[/red]")
             return False
 
-    def download_all_datasets(self, release_id: str = 'latest', mini: bool = False) -> bool:
-        """Download all specified datasets."""
+    def download_all_datasets(self, release_id: str = 'latest', mini: bool = False):
+        """Download all datasets first, then index them all."""
         if release_id == 'latest':
             release_id = self.get_latest_release()
         
-        console.print(f"[cyan]Downloading datasets for release {release_id}[/cyan]")
-        console.print(f"[cyan]Files will be saved to: {self.base_dir}[/cyan]")
+        console.print(f"[bold cyan]Downloading all datasets for release {release_id}...[/bold cyan]")
         
-        success = True
+        # First download all datasets without indexing
         for dataset in self.datasets_to_download:
-            console.print(f"\n[cyan]Downloading {dataset} dataset...[/cyan]")
-            if not self.download_dataset(dataset, release_id, mini):
-                success = False
-                console.print(f"[red]Failed to download {dataset} dataset[/red]")
+            console.print(f"\n[bold]Downloading {dataset}...[/bold]")
+            self.download_dataset(dataset, release_id, mini, index=False)
         
-        if success:
-            console.print("\n[green]All datasets downloaded successfully![/green]")
-        else:
-            console.print("\n[red]Some datasets failed to download[/red]")
-        
-        return success
+        # Then index all datasets
+        console.print(f"\n[bold cyan]Indexing all datasets...[/bold cyan]")
+        for dataset in self.datasets_to_download:
+            console.print(f"\n[bold]Indexing {dataset}...[/bold]")
+            self.index_dataset(dataset, release_id)
 
     def verify_downloads(self, mini: bool = True) -> bool:
         """Verify that all datasets were downloaded correctly."""
@@ -931,6 +964,74 @@ class S2DatasetDownloader:
         
         console.print(table)
 
+    def count_indices(self, release_id: str = 'latest'):
+        """Print detailed index counts for each file."""
+        if release_id == 'latest':
+            release_id = self.get_latest_release()
+        
+        console.print(f"\n[bold cyan]Index counts for release {release_id}...[/bold cyan]")
+        
+        # Get index database
+        index_path = self.base_dir / "indices" / f"{release_id}.db"
+        if not index_path.exists():
+            console.print("[red]No index database found for this release[/red]")
+            return
+        
+        with sqlite3.connect(str(index_path)) as conn:
+            # Get total count
+            cursor = conn.execute("SELECT COUNT(*) FROM paper_locations")
+            total_count = cursor.fetchone()[0]
+            console.print(f"\nTotal index entries: [bold cyan]{total_count:,}[/bold cyan]\n")
+            
+            # Get counts by dataset
+            table = Table(
+                "Dataset",
+                "File",
+                "Index Count",
+                "File Size",
+                "Entries/MB",
+                title="Index Counts by File"
+            )
+            
+            cursor = conn.execute("""
+                SELECT 
+                    dataset,
+                    file_path,
+                    COUNT(*) as entry_count
+                FROM paper_locations 
+                GROUP BY dataset, file_path
+                ORDER BY dataset, file_path
+            """)
+            
+            current_dataset = None
+            for dataset, file_path, count in cursor:
+                # Add separator between datasets
+                if current_dataset != dataset:
+                    if current_dataset is not None:
+                        table.add_row("", "", "", "", "")
+                    current_dataset = dataset
+                
+                # Get file size if file exists
+                path = Path(file_path)
+                if path.exists():
+                    size_mb = path.stat().st_size / (1024 * 1024)  # Convert to MB
+                    density = count / size_mb
+                    size_str = f"{size_mb:.1f} MB"
+                    density_str = f"{density:.1f}"
+                else:
+                    size_str = "[red]Missing[/red]"
+                    density_str = "N/A"
+                
+                table.add_row(
+                    dataset,
+                    path.name,
+                    f"{count:,}",
+                    size_str,
+                    density_str
+                )
+        
+            console.print(table)
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Download Semantic Scholar datasets')
@@ -939,16 +1040,24 @@ def main():
     parser.add_argument('--verify', action='store_true', help='Verify downloaded datasets')
     parser.add_argument('--verify-index', action='store_true', help='Verify index completeness')
     parser.add_argument('--audit', action='store_true', help='Audit datasets and indexing status')
+    parser.add_argument('--index-only', action='store_true', help='Only run indexing on downloaded files')
+    parser.add_argument('--repair', action='store_true', help='Repair/resume incomplete indexes')
+    parser.add_argument('--count', action='store_true', help='Show detailed index counts for each file')
     args = parser.parse_args()
     
     downloader = S2DatasetDownloader()
     
-    if args.audit:
+    if args.count:
+        downloader.count_indices(args.release)
+    elif args.audit:
         downloader.audit_datasets(args.release)
     elif args.verify_index:
         downloader.verify_index_completeness()
     elif args.verify:
         downloader.verify_downloads(args.release)
+    elif args.index_only:
+        for dataset in downloader.datasets_to_download:
+            downloader.index_dataset(dataset, args.release, repair=args.repair)
     else:
         downloader.download_all_datasets(args.release, args.mini)
 
