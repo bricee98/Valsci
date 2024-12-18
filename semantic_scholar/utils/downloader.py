@@ -289,7 +289,7 @@ class S2DatasetDownloader:
             
             entries = []
             total_lines = 0
-            file_size = file_path.stat().size
+            file_size = file_path.stat().st_size
             
             with open(file_path, 'r', encoding='utf-8') as f, \
                  Progress() as progress:
