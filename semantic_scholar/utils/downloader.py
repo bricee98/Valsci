@@ -281,10 +281,25 @@ class S2DatasetDownloader:
         console.print(f"\n[cyan]Starting indexing of {file_path.name}...[/cyan]")
         
         try:
+            # Optimize SQLite for bulk inserts
+            conn.execute("PRAGMA synchronous = OFF")
+            conn.execute("PRAGMA journal_mode = MEMORY")
+            conn.execute("PRAGMA temp_store = MEMORY")
+            conn.execute("PRAGMA cache_size = -2000000")  # Use 2GB memory for cache
+            
             entries = []
             total_lines = 0
+            file_size = file_path.stat().size
             
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, 'r', encoding='utf-8') as f, \
+                 Progress() as progress:
+                
+                # Add progress bar
+                task = progress.add_task(
+                    f"[cyan]Indexing {file_path.name}...", 
+                    total=file_size
+                )
+                
                 offset = 0
                 for line_num, line in enumerate(f, 1):
                     try:
@@ -303,11 +318,13 @@ class S2DatasetDownloader:
                         console.print(f"[yellow]Warning: Error processing line {line_num}: {str(e)}[/yellow]")
                         continue
                     
-                    offset += len(line.encode('utf-8'))
+                    line_size = len(line.encode('utf-8'))
+                    offset += line_size
                     total_lines += 1
+                    progress.update(task, advance=line_size)
                     
-                    # Batch insert every 100k entries to avoid memory issues
-                    if len(entries) >= 100000:
+                    # Batch insert every 500k entries to avoid memory issues
+                    if len(entries) >= 500000:
                         conn.execute('BEGIN IMMEDIATE')
                         try:
                             conn.executemany("""
@@ -317,13 +334,13 @@ class S2DatasetDownloader:
                             """, entries)
                             conn.commit()
                             console.print(f"[green]Processed {total_lines:,} lines ({len(entries):,} entries)[/green]")
-                            entries = []
+                            entries = []  # Python will handle the memory cleanup automatically
                         except:
                             conn.rollback()
                             raise
                     
-                    # Progress update
-                    if line_num % 100000 == 0:
+                    # Progress update every 500k lines
+                    if line_num % 500000 == 0:
                         console.print(f"[cyan]Processed {line_num:,} lines...[/cyan]")
             
             # Insert any remaining entries
@@ -339,6 +356,10 @@ class S2DatasetDownloader:
                 except:
                     conn.rollback()
                     raise
+            
+            # Restore SQLite settings
+            conn.execute("PRAGMA synchronous = NORMAL")
+            conn.execute("PRAGMA journal_mode = WAL")
             
             console.print(f"[bold green]✓ Successfully indexed {total_lines:,} total lines from {file_path.name}[/bold green]\n")
             return True
