@@ -1041,6 +1041,7 @@ def main():
     parser.add_argument('--verify-index', action='store_true', help='Verify index completeness')
     parser.add_argument('--audit', action='store_true', help='Audit datasets and indexing status')
     parser.add_argument('--index-only', action='store_true', help='Only run indexing on downloaded files')
+    parser.add_argument('--download-only', action='store_true', help='Only download files without indexing')
     parser.add_argument('--repair', action='store_true', help='Repair/resume incomplete indexes')
     parser.add_argument('--count', action='store_true', help='Show detailed index counts for each file')
     args = parser.parse_args()
@@ -1058,6 +1059,10 @@ def main():
     elif args.index_only:
         for dataset in downloader.datasets_to_download:
             downloader.index_dataset(dataset, args.release, repair=args.repair)
+    elif args.download_only:
+        # Download all datasets without indexing
+        for dataset in downloader.datasets_to_download:
+            downloader.download_dataset(dataset, args.release, args.mini, index=False)
     else:
         downloader.download_all_datasets(args.release, args.mini)
 
