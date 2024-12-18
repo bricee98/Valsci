@@ -194,26 +194,16 @@ class S2DatasetDownloader:
         return os.path.basename(path)
 
     def _parallel_extract_gzip(self, input_path: Path, output_path: Path):
-        """Parallel gzip extraction using multiple cores."""
-        num_cores = multiprocessing.cpu_count()
-        chunk_size = 64 * 1024 * 1024  # 64MB chunks
-        
-        console.print(f"Extracting {input_path.name} using {num_cores} cores...")
-        
-        with gzip.open(input_path, 'rb') as gz:
-            with open(output_path, 'wb') as out:
-                with ProcessPoolExecutor(max_workers=num_cores) as executor:
-                    # Read and decompress chunks in parallel
-                    futures = []
-                    while True:
-                        chunk = gz.read(chunk_size)
-                        if not chunk:
-                            break
-                        futures.append(executor.submit(gzip.decompress, chunk))
-                    
-                    # Write decompressed chunks in order
-                    for future in futures:
-                        out.write(future.result())
+        """Revert to single-thread gzip extraction to avoid misalignment issues."""
+        try:
+            console.print(f"Extracting {input_path.name} without parallelization...")
+
+            with gzip.open(input_path, 'rb') as gz_in, open(output_path, 'wb') as out:
+                shutil.copyfileobj(gz_in, out)
+
+        except Exception as e:
+            console.print(f"[red]Error extracting {input_path.name}: {str(e)}[/red]")
+            raise
 
     def download_file(self, url: str, output_dir: Path, desc: str = None) -> Tuple[bool, Optional[Path]]:
         """Download a file with progress bar. Returns (success, output_path)."""
