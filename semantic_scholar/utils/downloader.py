@@ -17,6 +17,9 @@ import time
 from urllib.parse import urlparse, unquote
 import re
 import sqlite3
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor
+from functools import partial
 
 # Add project root to path
 project_root = str(Path(__file__).parent.parent.parent)
@@ -24,7 +27,7 @@ sys.path.append(project_root)
 from app.config.settings import Config
 
 BASE_URL = "https://api.semanticscholar.org/datasets/v1"
-console = Console(force_terminal=True, force_interactive=True)
+console = Console()
 
 class RateLimiter:
     def __init__(self, requests_per_second: float = 1.0):
@@ -69,6 +72,21 @@ class S2DatasetDownloader:
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.index_dir = self.base_dir / "indices"
         self.index_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Define which IDs to index for each dataset
+        self.dataset_id_fields = {
+            'papers': [
+                ('paperId', 'paper_id'),
+                ('corpusid', 'corpus_id')
+            ],
+            'abstracts': [('corpusid', 'corpus_id')],
+            's2orc': [('corpusid', 'corpus_id')],
+            'citations': [
+                ('citingcorpusid', 'corpus_id'),
+                ('citedcorpusid', 'corpus_id')
+            ],
+            'authors': [('authorid', 'author_id')]
+        }
 
     def make_request(self, url: str, method: str = 'get', max_retries: int = 5, **kwargs) -> requests.Response:
         """Make a request with retry logic for rate limits and expired credentials."""
@@ -87,11 +105,11 @@ class S2DatasetDownloader:
                 # Handle different error cases
                 if response.status_code == 429:  # Rate limit
                     wait_time = min(30, (2 ** attempt) + 1)
-                    console.print(f"[yellow]Rate limited. Waiting {wait_time} seconds...[/yellow]", flush=True)
+                    console.print(f"[yellow]Rate limited. Waiting {wait_time} seconds...[/yellow]")
                     time.sleep(wait_time)
                     continue
                 elif response.status_code == 400:  # Bad request - likely expired credentials
-                    console.print("[yellow]Credentials expired. Refreshing dataset info...[/yellow]", flush=True)
+                    console.print("[yellow]Credentials expired. Refreshing dataset info...[/yellow]")
                     # Re-fetch the dataset info to get fresh pre-signed URLs
                     if hasattr(self, '_current_dataset'):
                         dataset_info = self.get_dataset_info(self._current_dataset, self._current_release)
@@ -110,7 +128,7 @@ class S2DatasetDownloader:
                 if attempt == max_retries - 1:
                     raise
                 wait_time = min(30, (2 ** attempt) + 1)
-                console.print(f"[yellow]Request failed. Retrying in {wait_time} seconds...[/yellow]", flush=True)
+                console.print(f"[yellow]Request failed. Retrying in {wait_time} seconds...[/yellow]")
                 time.sleep(wait_time)
 
     def get_latest_release(self) -> str:
@@ -138,8 +156,8 @@ class S2DatasetDownloader:
                     ]
                 return data
             except requests.exceptions.HTTPError as e:
-                console.print("[red]Error accessing S2ORC dataset. Make sure your API key has S2ORC access.[/red]", flush=True)
-                console.print("[yellow]For S2ORC access, visit: https://api.semanticscholar.org/s2orc[/yellow]", flush=True)
+                console.print("[red]Error accessing S2ORC dataset. Make sure your API key has S2ORC access.[/red]")
+                console.print("[yellow]For S2ORC access, visit: https://api.semanticscholar.org/s2orc[/yellow]")
                 raise
         else:
             # Standard dataset handling
@@ -172,6 +190,28 @@ class S2DatasetDownloader:
         path = unquote(parsed_url.path)
         return os.path.basename(path)
 
+    def _parallel_extract_gzip(self, input_path: Path, output_path: Path):
+        """Parallel gzip extraction using multiple cores."""
+        num_cores = multiprocessing.cpu_count()
+        chunk_size = 64 * 1024 * 1024  # 64MB chunks
+        
+        console.print(f"Extracting {input_path.name} using {num_cores} cores...")
+        
+        with gzip.open(input_path, 'rb') as gz:
+            with open(output_path, 'wb') as out:
+                with ProcessPoolExecutor(max_workers=num_cores) as executor:
+                    # Read and decompress chunks in parallel
+                    futures = []
+                    while True:
+                        chunk = gz.read(chunk_size)
+                        if not chunk:
+                            break
+                        futures.append(executor.submit(gzip.decompress, chunk))
+                    
+                    # Write decompressed chunks in order
+                    for future in futures:
+                        out.write(future.result())
+
     def download_file(self, url: str, output_dir: Path, desc: str = None) -> bool:
         """Download a file with progress bar."""
         try:
@@ -188,41 +228,36 @@ class S2DatasetDownloader:
                 unit='iB',
                 unit_scale=True,
                 unit_divisor=1024,
-                mininterval=0.1,
-                force=True,
             ) as pbar:
                 for data in response.iter_content(chunk_size=1024):
                     size = f.write(data)
                     pbar.update(size)
                 
-            # If file is gzipped, extract it
+            # If file is gzipped, extract it using parallel processing
             if filename.endswith('.gz'):
-                console.print(f"Extracting {filename}...", flush=True)
+                console.print(f"Extracting {filename}...")
                 base_name = filename.replace('.gz', '')
                 if not base_name.endswith('.json'):
                     base_name += '.json'
                 
-                with gzip.open(output_path, 'rt', encoding='utf-8') as f_in:
-                    with open(output_dir / base_name, 'w', encoding='utf-8') as f_out:
-                        shutil.copyfileobj(f_in, f_out)
+                output_json_path = output_dir / base_name
+                self._parallel_extract_gzip(output_path, output_json_path)
                 os.remove(output_path)  # Remove the gzipped file
                 
             return True
             
         except Exception as e:
-            console.print(f"[red]Error downloading {url}: {str(e)}[/red]", flush=True)
+            console.print(f"[red]Error downloading {url}: {str(e)}[/red]")
             return False
 
     def _init_sqlite_db(self, index_path: Path):
         """Initialize SQLite database with proper schema and indices."""
         with sqlite3.connect(str(index_path)) as conn:
-            # Increase cache size and page size for better write performance
-            conn.execute("PRAGMA cache_size = -2000000")  # Use 2GB memory for caching
-            conn.execute("PRAGMA page_size = 4096")
-            
-            # Enable WAL mode for better write performance
+            # Enable WAL mode for better concurrent access
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA cache_size = -2000000")
+            conn.execute("PRAGMA page_size = 4096")
             
             # Create tables with proper indices
             conn.execute("""
@@ -247,90 +282,64 @@ class S2DatasetDownloader:
                 ON paper_locations(dataset)
             """)
 
-    def _index_file(self, conn: sqlite3.Connection, file_path: Path, dataset: str):
-        """Build index for a downloaded file with optimized batch processing."""
-        console.print(f"[cyan]Indexing {file_path.name}...[/cyan]", flush=True)
+    def _parallel_index_chunk(self, chunk_data: Tuple[Path, str, int, int]) -> List[Tuple]:
+        """Process a chunk of a file and return index entries."""
+        file_path, dataset, start_pos, chunk_size = chunk_data
+        entries = []
         
-        # Define which IDs to index for each dataset
-        dataset_id_fields = {
-            'papers': [
-                ('paperId', 'paper_id'),
-                ('corpusid', 'corpus_id')
-            ],
-            'abstracts': [('corpusid', 'corpus_id')],
-            's2orc': [('corpusid', 'corpus_id')],
-            'citations': [
-                ('citingcorpusid', 'corpus_id'),
-                ('citedcorpusid', 'corpus_id')
-            ],
-            'authors': [('authorid', 'author_id')]
-        }
+        with open(file_path, 'r', encoding='utf-8') as f:
+            f.seek(start_pos)
+            data = f.read(chunk_size)
+            lines = data.splitlines()
+            
+            offset = start_pos
+            for line in lines:
+                try:
+                    item = json.loads(line.strip())
+                    for field_name, id_type in self.dataset_id_fields[dataset]:
+                        id_value = str(item.get(field_name, '')).lower()
+                        if id_value:
+                            entries.append((id_value, id_type, dataset, str(file_path), offset))
+                except json.JSONDecodeError:
+                    continue
+                offset += len(line.encode('utf-8')) + 1  # +1 for newline
+                
+        return entries
 
-        id_fields = dataset_id_fields.get(dataset, [])
-        if not id_fields:
-            console.print(f"[yellow]Warning: No ID fields defined for dataset {dataset}[/yellow]", flush=True)
-            return
-
+    def _index_file(self, conn: sqlite3.Connection, file_path: Path, dataset: str):
+        """Parallel file indexing using all available cores."""
+        num_cores = multiprocessing.cpu_count()
+        file_size = file_path.stat().st_size
+        chunk_size = file_size // num_cores
+        
+        chunks = [
+            (file_path, dataset, i * chunk_size, chunk_size)
+            for i in range(num_cores)
+        ]
+        
+        # Add remainder to last chunk
+        chunks[-1] = (file_path, dataset, (num_cores-1) * chunk_size, file_size - (num_cores-1) * chunk_size)
+        
+        console.print(f"[cyan]Indexing {file_path.name} using {num_cores} cores...[/cyan]")
+        
         try:
-            # Start a transaction
             conn.execute('BEGIN TRANSACTION')
             
-            # Prepare the insert statement once
-            insert_stmt = """
-                INSERT OR REPLACE INTO paper_locations 
-                (id, id_type, dataset, file_path, line_offset)
-                VALUES (?, ?, ?, ?, ?)
-            """
+            with ProcessPoolExecutor(max_workers=num_cores) as executor:
+                for chunk_entries in executor.map(self._parallel_index_chunk, chunks):
+                    if chunk_entries:
+                        conn.executemany("""
+                            INSERT OR REPLACE INTO paper_locations 
+                            (id, id_type, dataset, file_path, line_offset)
+                            VALUES (?, ?, ?, ?, ?)
+                        """, chunk_entries)
             
-            # Increase batch size for better performance
-            batch_size = 200000  # Much larger batch size for better performance
-            batch = []
-            total_lines = 0
+            conn.execute('COMMIT')
+            console.print(f"[green]Successfully indexed {file_path.name}[/green]")
             
-            with open(file_path, 'r', encoding='utf-8') as f:
-                offset = 0
-                for line_num, line in enumerate(f, 1):
-                    try:
-                        item = json.loads(line.strip())
-                        
-                        # Index all relevant IDs for this dataset
-                        for field_name, id_type in id_fields:
-                            id_value = str(item.get(field_name, '')).lower()
-                            if id_value:
-                                batch.append((
-                                    id_value, 
-                                    id_type, 
-                                    dataset, 
-                                    str(file_path), 
-                                    offset
-                                ))
-                                
-                    except json.JSONDecodeError:
-                        console.print(f"[yellow]Warning: Invalid JSON at line {line_num}[/yellow]", flush=True)
-                        
-                    offset += len(line.encode('utf-8'))
-                    
-                    # Execute batch insert when batch is full
-                    if len(batch) >= batch_size:
-                        conn.executemany(insert_stmt, batch)
-                        total_lines += len(batch)
-                        batch = []
-                        if total_lines % 100000 == 0:  # Report progress less frequently
-                            console.print(f"[green]Indexed {total_lines:,} records[/green]", flush=True)
-                
-                # Insert any remaining records
-                if batch:
-                    conn.executemany(insert_stmt, batch)
-                    total_lines += len(batch)
-                
-                # Commit the transaction
-                conn.execute('COMMIT')
-                console.print(f"[green]Successfully indexed {total_lines:,} total records[/green]", flush=True)
-                
         except Exception as e:
-            # Rollback transaction on error
             conn.execute('ROLLBACK')
-            console.print(f"[red]Error indexing {file_path.name}: {str(e)}[/red]", flush=True)
+            console.print(f"[red]Error indexing {file_path.name}: {str(e)}[/red]")
             raise
 
     def download_dataset(self, dataset_name: str, release_id: str = 'latest', mini: bool = False) -> bool:
@@ -388,7 +397,7 @@ class S2DatasetDownloader:
                     ]
                     
                     if not remaining_files:
-                        console.print(f"[green]All files already downloaded for {dataset_name}[/green]", flush=True)
+                        console.print(f"[green]All files already downloaded for {dataset_name}[/green]")
                         return True
                     
                     with Progress() as progress:
@@ -418,7 +427,7 @@ class S2DatasetDownloader:
                     ]
                     
                     if not remaining_files:
-                        console.print(f"[green]All files already downloaded for {dataset_name}[/green]", flush=True)
+                        console.print(f"[green]All files already downloaded for {dataset_name}[/green]")
                         return True
                     
                     with Progress() as progress:
@@ -438,7 +447,7 @@ class S2DatasetDownloader:
                 return True
                 
         except Exception as e:
-            console.print(f"[red]Error downloading dataset {dataset_name}: {str(e)}[/red]", flush=True)
+            console.print(f"[red]Error downloading dataset {dataset_name}: {str(e)}[/red]")
             return False
 
     def download_all_datasets(self, release_id: str = 'latest', mini: bool = False) -> bool:
@@ -446,20 +455,20 @@ class S2DatasetDownloader:
         if release_id == 'latest':
             release_id = self.get_latest_release()
         
-        console.print(f"[cyan]Downloading datasets for release {release_id}[/cyan]", flush=True)
-        console.print(f"[cyan]Files will be saved to: {self.base_dir}[/cyan]", flush=True)
+        console.print(f"[cyan]Downloading datasets for release {release_id}[/cyan]")
+        console.print(f"[cyan]Files will be saved to: {self.base_dir}[/cyan]")
         
         success = True
         for dataset in self.datasets_to_download:
-            console.print(f"\n[cyan]Downloading {dataset} dataset...[/cyan]", flush=True)
+            console.print(f"\n[cyan]Downloading {dataset} dataset...[/cyan]")
             if not self.download_dataset(dataset, release_id, mini):
                 success = False
-                console.print(f"[red]Failed to download {dataset} dataset[/red]", flush=True)
+                console.print(f"[red]Failed to download {dataset} dataset[/red]")
         
         if success:
-            console.print("\n[green]All datasets downloaded successfully![/green]", flush=True)
+            console.print("\n[green]All datasets downloaded successfully![/green]")
         else:
-            console.print("\n[red]Some datasets failed to download[/red]", flush=True)
+            console.print("\n[red]Some datasets failed to download[/red]")
         
         return success
 
@@ -476,7 +485,7 @@ class S2DatasetDownloader:
                     
                 dataset_dir = self.base_dir / release_id / dataset
                 if not dataset_dir.exists():
-                    console.print(f"[red]Missing dataset directory: {dataset}[/red]", flush=True)
+                    console.print(f"[red]Missing dataset directory: {dataset}[/red]")
                     continue
                 
                 # Get expected files
@@ -503,15 +512,15 @@ class S2DatasetDownloader:
                     missing_files[dataset] = missing
                     
             if missing_files:
-                console.print("\nVerifying downloads for release {}...".format(release_id), flush=True)
+                console.print("\nVerifying downloads for release {}...".format(release_id))
                 for dataset, missing in missing_files.items():
-                    console.print(f"Missing files in {dataset}: {missing}", flush=True)
+                    console.print(f"Missing files in {dataset}: {missing}")
                 return False
                 
             return True
             
         except Exception as e:
-            console.print(f"[red]Error verifying downloads: {str(e)}[/red]", flush=True)
+            console.print(f"[red]Error verifying downloads: {str(e)}[/red]")
             raise
 
     def update_datasets(self) -> bool:
@@ -523,15 +532,15 @@ class S2DatasetDownloader:
             # Get current and latest release IDs
             current_release = self._get_latest_local_release()
             if not current_release:
-                console.print("[yellow]No local datasets found. Please run initial download first.[/yellow]", flush=True)
+                console.print("[yellow]No local datasets found. Please run initial download first.[/yellow]")
                 return False
             
             latest_release = self.get_latest_release()
             if current_release == latest_release:
-                console.print("[green]Datasets already at latest release.[/green]", flush=True)
+                console.print("[green]Datasets already at latest release.[/green]")
                 return True
             
-            console.print(f"[cyan]Updating from {current_release} to {latest_release}...[/cyan]", flush=True)
+            console.print(f"[cyan]Updating from {current_release} to {latest_release}...[/cyan]")
             
             # Create backup of index
             self._backup_index(current_release)
@@ -548,7 +557,7 @@ class S2DatasetDownloader:
             return True
             
         except Exception as e:
-            console.print(f"[red]Error updating datasets: {str(e)}[/red]", flush=True)
+            console.print(f"[red]Error updating datasets: {str(e)}[/red]")
             self._restore_index_backup(current_release)
             return False
 
@@ -593,7 +602,7 @@ class S2DatasetDownloader:
             return True
             
         except Exception as e:
-            console.print(f"[red]Error updating dataset {dataset_name}: {str(e)}[/red]", flush=True)
+            console.print(f"[red]Error updating dataset {dataset_name}: {str(e)}[/red]")
             return False
 
     def _backup_index(self, release_id: str):
@@ -603,7 +612,7 @@ class S2DatasetDownloader:
         
         if index_path.exists():
             shutil.copy2(str(index_path), str(backup_path))
-            console.print("[green]Created index backup[/green]", flush=True)
+            console.print("[green]Created index backup[/green]")
 
     def _restore_index_backup(self, release_id: str):
         """Restore index from backup if update failed."""
@@ -614,7 +623,7 @@ class S2DatasetDownloader:
             if index_path.exists():
                 index_path.unlink()
             shutil.copy2(str(backup_path), str(index_path))
-            console.print("[yellow]Restored index from backup[/yellow]", flush=True)
+            console.print("[yellow]Restored index from backup[/yellow]")
 
     def _cleanup_backup(self, release_id: str):
         """Remove backup files after successful update."""
@@ -656,7 +665,7 @@ class S2DatasetDownloader:
                             )
                             
                     except json.JSONDecodeError:
-                        console.print(f"[yellow]Warning: Invalid JSON in {file_path}[/yellow]", flush=True)
+                        console.print(f"[yellow]Warning: Invalid JSON in {file_path}[/yellow]")
                         
                     offset += len(line.encode('utf-8'))
                 
@@ -680,7 +689,7 @@ class S2DatasetDownloader:
                             )
                             
                     except json.JSONDecodeError:
-                        console.print(f"[yellow]Warning: Invalid JSON in {file_path}[/yellow]", flush=True)
+                        console.print(f"[yellow]Warning: Invalid JSON in {file_path}[/yellow]")
                 
                 conn.commit()
 
@@ -692,12 +701,12 @@ class S2DatasetDownloader:
         try:
             release_id = self._get_latest_local_release()
             if not release_id:
-                console.print("[yellow]No local datasets found.[/yellow]", flush=True)
+                console.print("[yellow]No local datasets found.[/yellow]")
                 return False
 
             index_path = self.index_dir / f"{release_id}.db"
             if not index_path.exists():
-                console.print("[red]Index database not found.[/red]", flush=True)
+                console.print("[red]Index database not found.[/red]")
                 return False
 
             incomplete_files = []
@@ -714,7 +723,7 @@ class S2DatasetDownloader:
                         if file_path.name == 'metadata.json':
                             continue
                             
-                        console.print(f"[cyan]Verifying index for {file_path.name}...[/cyan]", flush=True)
+                        console.print(f"[cyan]Verifying index for {file_path.name}...[/cyan]")
                         
                         # Count actual records in the file
                         actual_records = 0
@@ -734,19 +743,19 @@ class S2DatasetDownloader:
                         indexed_records = cursor.fetchone()[0]
                         
                         if indexed_records == 0:
-                            console.print(f"[red]File {file_path.name} has no index entries![/red]", flush=True)
+                            console.print(f"[red]File {file_path.name} has no index entries![/red]")
                             incomplete_files.append((file_path, 'missing'))
                         elif indexed_records < actual_records:
                             console.print(
                                 f"[yellow]File {file_path.name} is partially indexed: "
-                                f"{indexed_records}/{actual_records} records[/yellow]", flush=True
+                                f"{indexed_records}/{actual_records} records[/yellow]"
                             )
                             incomplete_files.append((file_path, 'partial'))
 
             if incomplete_files:
-                console.print("\n[red]Found incompletely indexed files:[/red]", flush=True)
+                console.print("\n[red]Found incompletely indexed files:[/red]")
                 for file_path, status in incomplete_files:
-                    console.print(f"- {file_path.name} ({status})", flush=True)
+                    console.print(f"- {file_path.name} ({status})")
                 
                 # Offer to fix incomplete files
                 if console.input("\nWould you like to reindex these files? (y/n): ").lower() == 'y':
@@ -760,15 +769,15 @@ class S2DatasetDownloader:
                             # Reindex the file
                             dataset = file_path.parent.name
                             self._index_file(conn, file_path, dataset)
-                    console.print("[green]Reindexing complete![/green]", flush=True)
+                    console.print("[green]Reindexing complete![/green]")
                 
                 return False
                 
-            console.print("[green]All files are properly indexed![/green]", flush=True)
+            console.print("[green]All files are properly indexed![/green]")
             return True
             
         except Exception as e:
-            console.print(f"[red]Error verifying index: {str(e)}[/red]", flush=True)
+            console.print(f"[red]Error verifying index: {str(e)}[/red]")
             return False
 
     def _get_latest_local_release(self) -> Optional[str]:
