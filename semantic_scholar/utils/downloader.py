@@ -353,12 +353,12 @@ class S2DatasetDownloader:
                 console.print(f"[bold green]✓ Successfully indexed {total_lines:,} total lines from {file_path.name}[/bold green]\n")
                 return True
                 
-            except KeyboardInterrupt:
-                console.print("\n[yellow]Indexing interrupted by user[/yellow]")
-                raise
-            except Exception as e:
-                console.print(f"[red]Error indexing {file_path.name}: {str(e)}[/red]")
-                raise
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Indexing interrupted by user[/yellow]")
+            raise
+        except Exception as e:
+            console.print(f"[red]Error indexing {file_path.name}: {str(e)}[/red]")
+            raise
 
     def download_dataset(self, dataset_name: str, release_id: str = 'latest', mini: bool = False) -> bool:
         """Download a specific dataset and build index."""
