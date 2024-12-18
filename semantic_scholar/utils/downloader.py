@@ -276,33 +276,17 @@ class S2DatasetDownloader:
                 ON paper_locations(dataset)
             """)
 
-    def _parallel_index_chunk(self, chunk_data: Tuple[Path, str, int, int]) -> List[Tuple]:
-        """Process a chunk of a file and return index entries."""
-        file_path, dataset, start_pos, chunk_size = chunk_data
-        entries = []
+    def _index_file(self, conn: sqlite3.Connection, file_path: Path, dataset: str):
+        """Single-threaded file indexing with robust error handling."""
+        console.print(f"\n[cyan]Starting indexing of {file_path.name}...[/cyan]")
         
         try:
-            console.print(f"[cyan]Processing chunk at offset {start_pos} of {file_path.name}...[/cyan]")
+            entries = []
+            total_lines = 0
             
             with open(file_path, 'r', encoding='utf-8') as f:
-                # Seek to start position
-                f.seek(start_pos)
-                
-                # If not at start of file, read until next newline to avoid partial lines
-                if start_pos > 0:
-                    f.readline()
-                
-                # Read chunk
-                data = f.read(chunk_size)
-                
-                # Read until next newline to avoid cutting in middle of a line
-                if not data.endswith('\n'):
-                    data += f.readline()
-                    
-                lines = data.splitlines()
-                
-                offset = f.tell() - len(data)  # Get actual starting offset after alignment
-                for line_num, line in enumerate(lines, 1):
+                offset = 0
+                for line_num, line in enumerate(f, 1):
                     try:
                         if not line.strip():
                             continue
@@ -312,113 +296,37 @@ class S2DatasetDownloader:
                             id_value = str(item.get(field_name, '')).lower()
                             if id_value:
                                 entries.append((id_value, id_type, dataset, str(file_path), offset))
+                                
                     except json.JSONDecodeError:
                         continue
                     except Exception as e:
                         console.print(f"[yellow]Warning: Error processing line {line_num}: {str(e)}[/yellow]")
                         continue
-                        
-                    offset += len(line.encode('utf-8')) + 1  # +1 for newline
                     
-                    if line_num % 100000 == 0:
-                        console.print(f"[cyan]Processed {line_num:,} lines in chunk...[/cyan]")
+                    offset += len(line.encode('utf-8'))
+                    total_lines += 1
                     
-            console.print(f"[green]Completed chunk with {len(entries):,} entries[/green]")
-            return entries
-            
-        except Exception as e:
-            console.print(f"[red]Error processing chunk at offset {start_pos}: {str(e)}[/red]")
-            return []
-
-    def _index_file(self, conn: sqlite3.Connection, file_path: Path, dataset: str):
-        """Index file with improved error handling and fallback to single process."""
-        try:
-            # First try with multiprocessing
-            return self._index_file_parallel(conn, file_path, dataset)
-        except Exception as e:
-            console.print(f"[yellow]Parallel indexing failed: {str(e)}. Falling back to single process...[/yellow]")
-            return self._index_file_single(conn, file_path, dataset)
-
-    def _index_file_parallel(self, conn: sqlite3.Connection, file_path: Path, dataset: str):
-        """Parallel file indexing with better error handling."""
-        # Use fewer cores to reduce memory pressure
-        num_cores = max(2, multiprocessing.cpu_count() // 2)
-        file_size = file_path.stat().st_size
-        chunk_size = file_size // num_cores
-        
-        console.print(f"\n[bold cyan]Starting parallel indexing of {file_path.name} using {num_cores} cores...[/bold cyan]")
-        console.print(f"File size: {self.format_size(file_size)}, Chunk size: {self.format_size(chunk_size)}")
-        
-        chunks = [
-            (file_path, dataset, i * chunk_size, chunk_size)
-            for i in range(num_cores)
-        ]
-        
-        # Add remainder to last chunk
-        chunks[-1] = (file_path, dataset, (num_cores-1) * chunk_size, file_size - (num_cores-1) * chunk_size)
-        
-        total_entries = 0
-        executor = None
-        
-        try:
-            executor = ProcessPoolExecutor(max_workers=num_cores)
-            futures = []
-            for chunk in chunks:
-                futures.append(executor.submit(self._parallel_index_chunk, chunk))
-            
-            for i, future in enumerate(futures, 1):
-                try:
-                    # Shorter timeout and check for interrupts more frequently
-                    chunk_entries = future.result(timeout=300)  # 5 minute timeout
-                    if chunk_entries:
+                    # Batch insert every 100k entries to avoid memory issues
+                    if len(entries) >= 100000:
                         conn.execute('BEGIN IMMEDIATE')
                         try:
                             conn.executemany("""
                                 INSERT OR REPLACE INTO paper_locations 
                                 (id, id_type, dataset, file_path, line_offset)
                                 VALUES (?, ?, ?, ?, ?)
-                            """, chunk_entries)
+                            """, entries)
                             conn.commit()
-                            total_entries += len(chunk_entries)
-                            console.print(f"[green]Processed chunk {i}/{num_cores} ({len(chunk_entries):,} entries)[/green]")
+                            console.print(f"[green]Processed {total_lines:,} lines ({len(entries):,} entries)[/green]")
+                            entries = []
                         except:
                             conn.rollback()
                             raise
-                except KeyboardInterrupt:
-                    console.print("\n[yellow]Received interrupt signal, shutting down...[/yellow]")
-                    if executor:
-                        executor.shutdown(wait=False)
-                    raise
-                except Exception as e:
-                    console.print(f"[red]Error processing chunk {i}: {str(e)}[/red]")
-                    raise
                     
-            console.print(f"[bold green]✓ Successfully indexed {total_entries:,} total entries from {file_path.name}[/bold green]\n")
-            return True
+                    # Progress update
+                    if line_num % 100000 == 0:
+                        console.print(f"[cyan]Processed {line_num:,} lines...[/cyan]")
             
-        except KeyboardInterrupt:
-            console.print("\n[yellow]Indexing interrupted by user[/yellow]")
-            if executor:
-                executor.shutdown(wait=False)
-            raise
-        except Exception as e:
-            console.print(f"[red]Error during parallel indexing: {str(e)}[/red]")
-            if executor:
-                executor.shutdown(wait=False)
-            raise
-        finally:
-            # Make sure we always clean up the executor
-            if executor:
-                executor.shutdown(wait=False)
-
-    def _index_file_single(self, conn: sqlite3.Connection, file_path: Path, dataset: str):
-        """Single process fallback for indexing."""
-        console.print(f"[cyan]Starting single-process indexing of {file_path.name}...[/cyan]")
-        
-        try:
-            chunk_data = (file_path, dataset, 0, file_path.stat().st_size)
-            entries = self._parallel_index_chunk(chunk_data)
-            
+            # Insert any remaining entries
             if entries:
                 conn.execute('BEGIN IMMEDIATE')
                 try:
@@ -428,14 +336,18 @@ class S2DatasetDownloader:
                         VALUES (?, ?, ?, ?, ?)
                     """, entries)
                     conn.commit()
-                    console.print(f"[green]Successfully indexed {len(entries):,} entries[/green]")
-                    return True
                 except:
                     conn.rollback()
                     raise
-                    
+            
+            console.print(f"[bold green]✓ Successfully indexed {total_lines:,} total lines from {file_path.name}[/bold green]\n")
+            return True
+            
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Indexing interrupted by user[/yellow]")
+            raise
         except Exception as e:
-            console.print(f"[red]Error during single-process indexing: {str(e)}[/red]")
+            console.print(f"[red]Error indexing {file_path.name}: {str(e)}[/red]")
             raise
 
     def download_dataset(self, dataset_name: str, release_id: str = 'latest', mini: bool = False) -> bool:
