@@ -95,10 +95,14 @@ class S2DatasetDownloader:
                 # Wait for rate limit before making request
                 self.rate_limiter.wait()
                 
+                # Don't modify or encode the URL - use it exactly as provided
+                headers = kwargs.get('headers', {})
+                headers.update(self.session.headers)
+                
                 if method.lower() == 'get':
-                    response = self.session.get(url, **kwargs)
+                    response = requests.get(url, headers=headers, **kwargs)
                 elif method.lower() == 'head':
-                    response = self.session.head(url, **kwargs)
+                    response = requests.head(url, headers=headers, **kwargs)
                 else:
                     raise ValueError(f"Unsupported method: {method}")
 
@@ -108,13 +112,10 @@ class S2DatasetDownloader:
                     console.print(f"[yellow]Rate limited. Waiting {wait_time} seconds...[/yellow]")
                     time.sleep(wait_time)
                     continue
-                elif response.status_code == 403:  # Expired credentials
-                    if attempt < max_retries - 1:  # Only retry if we have attempts left
-                        console.print("[yellow]URL expired, retrying with fresh URL...[/yellow]")
-                        time.sleep(1)  # Brief pause before retry
-                        continue
-                    else:
-                        console.print("[red]Max retries reached for expired URL[/red]")
+                elif response.status_code == 403:
+                    console.print(f"[yellow]Access denied. URL: {url}[/yellow]")
+                    console.print(f"[yellow]Response: {response.text}[/yellow]")
+                    raise requests.exceptions.HTTPError(f"403 Forbidden: {response.text}")
                 
                 response.raise_for_status()
                 return response
