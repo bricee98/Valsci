@@ -108,8 +108,8 @@ class S2DatasetDownloader:
                     console.print(f"[yellow]Rate limited. Waiting {wait_time} seconds...[/yellow]")
                     time.sleep(wait_time)
                     continue
-                elif response.status_code == 400:  # Bad request - likely expired credentials
-                    console.print("[yellow]Credentials expired. Refreshing dataset info...[/yellow]")
+                elif response.status_code == 403:  # Expired credentials
+                    console.print("[yellow]URL expired. Refreshing dataset info...[/yellow]")
                     # Re-fetch the dataset info to get fresh pre-signed URLs
                     if hasattr(self, '_current_dataset'):
                         dataset_info = self.get_dataset_info(self._current_dataset, self._current_release)
@@ -117,7 +117,10 @@ class S2DatasetDownloader:
                             # Find matching new URL
                             old_filename = self.get_filename_from_url(url)
                             for new_url in dataset_info['files']:
+                                if isinstance(new_url, dict):  # Handle S2ORC case
+                                    new_url = new_url['url']
                                 if self.get_filename_from_url(new_url) == old_filename:
+                                    console.print("[green]Got fresh URL, retrying...[/green]")
                                     return self.make_request(new_url, method, max_retries-attempt, **kwargs)
                     raise
                 
@@ -128,7 +131,7 @@ class S2DatasetDownloader:
                 if attempt == max_retries - 1:
                     raise
                 wait_time = min(30, (2 ** attempt) + 1)
-                console.print(f"[yellow]Request failed. Retrying in {wait_time} seconds...[/yellow]")
+                console.print(f"[yellow]Request failed ({str(e)}). Retrying in {wait_time} seconds...[/yellow]")
                 time.sleep(wait_time)
 
     def get_latest_release(self) -> str:
@@ -287,13 +290,15 @@ class S2DatasetDownloader:
         file_path, dataset, start_pos, chunk_size = chunk_data
         entries = []
         
+        console.print(f"[cyan]Processing chunk at offset {start_pos} of {file_path.name}...[/cyan]")
+        
         with open(file_path, 'r', encoding='utf-8') as f:
             f.seek(start_pos)
             data = f.read(chunk_size)
             lines = data.splitlines()
             
             offset = start_pos
-            for line in lines:
+            for line_num, line in enumerate(lines, 1):
                 try:
                     item = json.loads(line.strip())
                     for field_name, id_type in self.dataset_id_fields[dataset]:
@@ -304,6 +309,10 @@ class S2DatasetDownloader:
                     continue
                 offset += len(line.encode('utf-8')) + 1  # +1 for newline
                 
+                if line_num % 100000 == 0:
+                    console.print(f"[cyan]Processed {line_num:,} lines in chunk...[/cyan]")
+                
+        console.print(f"[green]Completed chunk with {len(entries):,} entries[/green]")
         return entries
 
     def _index_file(self, conn: sqlite3.Connection, file_path: Path, dataset: str):
