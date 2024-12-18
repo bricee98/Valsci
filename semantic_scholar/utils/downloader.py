@@ -358,40 +358,58 @@ class S2DatasetDownloader:
         chunks[-1] = (file_path, dataset, (num_cores-1) * chunk_size, file_size - (num_cores-1) * chunk_size)
         
         total_entries = 0
+        executor = None
         
         try:
-            with ProcessPoolExecutor(max_workers=num_cores) as executor:
-                futures = []
-                for chunk in chunks:
-                    futures.append(executor.submit(self._parallel_index_chunk, chunk))
-                
-                for i, future in enumerate(futures, 1):
-                    try:
-                        chunk_entries = future.result(timeout=3600)  # 1 hour timeout
-                        if chunk_entries:
-                            conn.execute('BEGIN IMMEDIATE')
-                            try:
-                                conn.executemany("""
-                                    INSERT OR REPLACE INTO paper_locations 
-                                    (id, id_type, dataset, file_path, line_offset)
-                                    VALUES (?, ?, ?, ?, ?)
-                                """, chunk_entries)
-                                conn.commit()
-                                total_entries += len(chunk_entries)
-                                console.print(f"[green]Processed chunk {i}/{num_cores} ({len(chunk_entries):,} entries)[/green]")
-                            except:
-                                conn.rollback()
-                                raise
-                    except Exception as e:
-                        console.print(f"[red]Error processing chunk {i}: {str(e)}[/red]")
-                        raise
-                        
+            executor = ProcessPoolExecutor(max_workers=num_cores)
+            futures = []
+            for chunk in chunks:
+                futures.append(executor.submit(self._parallel_index_chunk, chunk))
+            
+            for i, future in enumerate(futures, 1):
+                try:
+                    # Shorter timeout and check for interrupts more frequently
+                    chunk_entries = future.result(timeout=300)  # 5 minute timeout
+                    if chunk_entries:
+                        conn.execute('BEGIN IMMEDIATE')
+                        try:
+                            conn.executemany("""
+                                INSERT OR REPLACE INTO paper_locations 
+                                (id, id_type, dataset, file_path, line_offset)
+                                VALUES (?, ?, ?, ?, ?)
+                            """, chunk_entries)
+                            conn.commit()
+                            total_entries += len(chunk_entries)
+                            console.print(f"[green]Processed chunk {i}/{num_cores} ({len(chunk_entries):,} entries)[/green]")
+                        except:
+                            conn.rollback()
+                            raise
+                except KeyboardInterrupt:
+                    console.print("\n[yellow]Received interrupt signal, shutting down...[/yellow]")
+                    if executor:
+                        executor.shutdown(wait=False)
+                    raise
+                except Exception as e:
+                    console.print(f"[red]Error processing chunk {i}: {str(e)}[/red]")
+                    raise
+                    
             console.print(f"[bold green]✓ Successfully indexed {total_entries:,} total entries from {file_path.name}[/bold green]\n")
             return True
             
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Indexing interrupted by user[/yellow]")
+            if executor:
+                executor.shutdown(wait=False)
+            raise
         except Exception as e:
             console.print(f"[red]Error during parallel indexing: {str(e)}[/red]")
+            if executor:
+                executor.shutdown(wait=False)
             raise
+        finally:
+            # Make sure we always clean up the executor
+            if executor:
+                executor.shutdown(wait=False)
 
     def _index_file_single(self, conn: sqlite3.Connection, file_path: Path, dataset: str):
         """Single process fallback for indexing."""
