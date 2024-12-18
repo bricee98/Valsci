@@ -65,9 +65,10 @@ class S2DatasetDownloader:
             "tldrs"
         ]
         
-        # Add index_dir initialization
+        # Create base and index directories with parents
+        self.base_dir.mkdir(parents=True, exist_ok=True)
         self.index_dir = self.base_dir / "indices"
-        self.index_dir.mkdir(exist_ok=True)
+        self.index_dir.mkdir(parents=True, exist_ok=True)
 
     def make_request(self, url: str, method: str = 'get', max_retries: int = 5, **kwargs) -> requests.Response:
         """Make a request with retry logic for rate limits."""
