@@ -24,7 +24,7 @@ sys.path.append(project_root)
 from app.config.settings import Config
 
 BASE_URL = "https://api.semanticscholar.org/datasets/v1"
-console = Console()
+console = Console(force_terminal=True, force_interactive=True)
 
 class RateLimiter:
     def __init__(self, requests_per_second: float = 1.0):
@@ -87,11 +87,11 @@ class S2DatasetDownloader:
                 # Handle different error cases
                 if response.status_code == 429:  # Rate limit
                     wait_time = min(30, (2 ** attempt) + 1)
-                    console.print(f"[yellow]Rate limited. Waiting {wait_time} seconds...[/yellow]")
+                    console.print(f"[yellow]Rate limited. Waiting {wait_time} seconds...[/yellow]", flush=True)
                     time.sleep(wait_time)
                     continue
                 elif response.status_code == 400:  # Bad request - likely expired credentials
-                    console.print("[yellow]Credentials expired. Refreshing dataset info...[/yellow]")
+                    console.print("[yellow]Credentials expired. Refreshing dataset info...[/yellow]", flush=True)
                     # Re-fetch the dataset info to get fresh pre-signed URLs
                     if hasattr(self, '_current_dataset'):
                         dataset_info = self.get_dataset_info(self._current_dataset, self._current_release)
@@ -110,7 +110,7 @@ class S2DatasetDownloader:
                 if attempt == max_retries - 1:
                     raise
                 wait_time = min(30, (2 ** attempt) + 1)
-                console.print(f"[yellow]Request failed. Retrying in {wait_time} seconds...[/yellow]")
+                console.print(f"[yellow]Request failed. Retrying in {wait_time} seconds...[/yellow]", flush=True)
                 time.sleep(wait_time)
 
     def get_latest_release(self) -> str:
@@ -138,8 +138,8 @@ class S2DatasetDownloader:
                     ]
                 return data
             except requests.exceptions.HTTPError as e:
-                console.print("[red]Error accessing S2ORC dataset. Make sure your API key has S2ORC access.[/red]")
-                console.print("[yellow]For S2ORC access, visit: https://api.semanticscholar.org/s2orc[/yellow]")
+                console.print("[red]Error accessing S2ORC dataset. Make sure your API key has S2ORC access.[/red]", flush=True)
+                console.print("[yellow]For S2ORC access, visit: https://api.semanticscholar.org/s2orc[/yellow]", flush=True)
                 raise
         else:
             # Standard dataset handling
@@ -188,6 +188,8 @@ class S2DatasetDownloader:
                 unit='iB',
                 unit_scale=True,
                 unit_divisor=1024,
+                mininterval=0.1,
+                force=True,
             ) as pbar:
                 for data in response.iter_content(chunk_size=1024):
                     size = f.write(data)
@@ -195,7 +197,7 @@ class S2DatasetDownloader:
                 
             # If file is gzipped, extract it
             if filename.endswith('.gz'):
-                console.print(f"Extracting {filename}...")
+                console.print(f"Extracting {filename}...", flush=True)
                 base_name = filename.replace('.gz', '')
                 if not base_name.endswith('.json'):
                     base_name += '.json'
@@ -208,7 +210,7 @@ class S2DatasetDownloader:
             return True
             
         except Exception as e:
-            console.print(f"[red]Error downloading {url}: {str(e)}[/red]")
+            console.print(f"[red]Error downloading {url}: {str(e)}[/red]", flush=True)
             return False
 
     def _init_sqlite_db(self, index_path: Path):
@@ -247,7 +249,7 @@ class S2DatasetDownloader:
 
     def _index_file(self, conn: sqlite3.Connection, file_path: Path, dataset: str):
         """Build index for a downloaded file with optimized batch processing."""
-        console.print(f"[cyan]Indexing {file_path.name}...[/cyan]")
+        console.print(f"[cyan]Indexing {file_path.name}...[/cyan]", flush=True)
         
         # Define which IDs to index for each dataset
         dataset_id_fields = {
@@ -266,7 +268,7 @@ class S2DatasetDownloader:
 
         id_fields = dataset_id_fields.get(dataset, [])
         if not id_fields:
-            console.print(f"[yellow]Warning: No ID fields defined for dataset {dataset}[/yellow]")
+            console.print(f"[yellow]Warning: No ID fields defined for dataset {dataset}[/yellow]", flush=True)
             return
 
         try:
@@ -304,7 +306,7 @@ class S2DatasetDownloader:
                                 ))
                                 
                     except json.JSONDecodeError:
-                        console.print(f"[yellow]Warning: Invalid JSON at line {line_num}[/yellow]")
+                        console.print(f"[yellow]Warning: Invalid JSON at line {line_num}[/yellow]", flush=True)
                         
                     offset += len(line.encode('utf-8'))
                     
@@ -314,7 +316,7 @@ class S2DatasetDownloader:
                         total_lines += len(batch)
                         batch = []
                         if total_lines % 100000 == 0:  # Report progress less frequently
-                            console.print(f"[green]Indexed {total_lines:,} records[/green]")
+                            console.print(f"[green]Indexed {total_lines:,} records[/green]", flush=True)
                 
                 # Insert any remaining records
                 if batch:
@@ -323,12 +325,12 @@ class S2DatasetDownloader:
                 
                 # Commit the transaction
                 conn.execute('COMMIT')
-                console.print(f"[green]Successfully indexed {total_lines:,} total records[/green]")
+                console.print(f"[green]Successfully indexed {total_lines:,} total records[/green]", flush=True)
                 
         except Exception as e:
             # Rollback transaction on error
             conn.execute('ROLLBACK')
-            console.print(f"[red]Error indexing {file_path.name}: {str(e)}[/red]")
+            console.print(f"[red]Error indexing {file_path.name}: {str(e)}[/red]", flush=True)
             raise
 
     def download_dataset(self, dataset_name: str, release_id: str = 'latest', mini: bool = False) -> bool:
@@ -386,7 +388,7 @@ class S2DatasetDownloader:
                     ]
                     
                     if not remaining_files:
-                        console.print(f"[green]All files already downloaded for {dataset_name}[/green]")
+                        console.print(f"[green]All files already downloaded for {dataset_name}[/green]", flush=True)
                         return True
                     
                     with Progress() as progress:
@@ -416,7 +418,7 @@ class S2DatasetDownloader:
                     ]
                     
                     if not remaining_files:
-                        console.print(f"[green]All files already downloaded for {dataset_name}[/green]")
+                        console.print(f"[green]All files already downloaded for {dataset_name}[/green]", flush=True)
                         return True
                     
                     with Progress() as progress:
@@ -436,7 +438,7 @@ class S2DatasetDownloader:
                 return True
                 
         except Exception as e:
-            console.print(f"[red]Error downloading dataset {dataset_name}: {str(e)}[/red]")
+            console.print(f"[red]Error downloading dataset {dataset_name}: {str(e)}[/red]", flush=True)
             return False
 
     def download_all_datasets(self, release_id: str = 'latest', mini: bool = False) -> bool:
@@ -444,20 +446,20 @@ class S2DatasetDownloader:
         if release_id == 'latest':
             release_id = self.get_latest_release()
         
-        console.print(f"[cyan]Downloading datasets for release {release_id}[/cyan]")
-        console.print(f"[cyan]Files will be saved to: {self.base_dir}[/cyan]")
+        console.print(f"[cyan]Downloading datasets for release {release_id}[/cyan]", flush=True)
+        console.print(f"[cyan]Files will be saved to: {self.base_dir}[/cyan]", flush=True)
         
         success = True
         for dataset in self.datasets_to_download:
-            console.print(f"\n[cyan]Downloading {dataset} dataset...[/cyan]")
+            console.print(f"\n[cyan]Downloading {dataset} dataset...[/cyan]", flush=True)
             if not self.download_dataset(dataset, release_id, mini):
                 success = False
-                console.print(f"[red]Failed to download {dataset} dataset[/red]")
+                console.print(f"[red]Failed to download {dataset} dataset[/red]", flush=True)
         
         if success:
-            console.print("\n[green]All datasets downloaded successfully![/green]")
+            console.print("\n[green]All datasets downloaded successfully![/green]", flush=True)
         else:
-            console.print("\n[red]Some datasets failed to download[/red]")
+            console.print("\n[red]Some datasets failed to download[/red]", flush=True)
         
         return success
 
@@ -474,7 +476,7 @@ class S2DatasetDownloader:
                     
                 dataset_dir = self.base_dir / release_id / dataset
                 if not dataset_dir.exists():
-                    console.print(f"[red]Missing dataset directory: {dataset}[/red]")
+                    console.print(f"[red]Missing dataset directory: {dataset}[/red]", flush=True)
                     continue
                 
                 # Get expected files
@@ -501,15 +503,15 @@ class S2DatasetDownloader:
                     missing_files[dataset] = missing
                     
             if missing_files:
-                console.print("\nVerifying downloads for release {}...".format(release_id))
+                console.print("\nVerifying downloads for release {}...".format(release_id), flush=True)
                 for dataset, missing in missing_files.items():
-                    console.print(f"Missing files in {dataset}: {missing}")
+                    console.print(f"Missing files in {dataset}: {missing}", flush=True)
                 return False
                 
             return True
             
         except Exception as e:
-            console.print(f"[red]Error verifying downloads: {str(e)}[/red]")
+            console.print(f"[red]Error verifying downloads: {str(e)}[/red]", flush=True)
             raise
 
     def update_datasets(self) -> bool:
@@ -521,15 +523,15 @@ class S2DatasetDownloader:
             # Get current and latest release IDs
             current_release = self._get_latest_local_release()
             if not current_release:
-                console.print("[yellow]No local datasets found. Please run initial download first.[/yellow]")
+                console.print("[yellow]No local datasets found. Please run initial download first.[/yellow]", flush=True)
                 return False
             
             latest_release = self.get_latest_release()
             if current_release == latest_release:
-                console.print("[green]Datasets already at latest release.[/green]")
+                console.print("[green]Datasets already at latest release.[/green]", flush=True)
                 return True
             
-            console.print(f"[cyan]Updating from {current_release} to {latest_release}...[/cyan]")
+            console.print(f"[cyan]Updating from {current_release} to {latest_release}...[/cyan]", flush=True)
             
             # Create backup of index
             self._backup_index(current_release)
@@ -546,7 +548,7 @@ class S2DatasetDownloader:
             return True
             
         except Exception as e:
-            console.print(f"[red]Error updating datasets: {str(e)}[/red]")
+            console.print(f"[red]Error updating datasets: {str(e)}[/red]", flush=True)
             self._restore_index_backup(current_release)
             return False
 
@@ -591,7 +593,7 @@ class S2DatasetDownloader:
             return True
             
         except Exception as e:
-            console.print(f"[red]Error updating dataset {dataset_name}: {str(e)}[/red]")
+            console.print(f"[red]Error updating dataset {dataset_name}: {str(e)}[/red]", flush=True)
             return False
 
     def _backup_index(self, release_id: str):
@@ -601,7 +603,7 @@ class S2DatasetDownloader:
         
         if index_path.exists():
             shutil.copy2(str(index_path), str(backup_path))
-            console.print("[green]Created index backup[/green]")
+            console.print("[green]Created index backup[/green]", flush=True)
 
     def _restore_index_backup(self, release_id: str):
         """Restore index from backup if update failed."""
@@ -612,7 +614,7 @@ class S2DatasetDownloader:
             if index_path.exists():
                 index_path.unlink()
             shutil.copy2(str(backup_path), str(index_path))
-            console.print("[yellow]Restored index from backup[/yellow]")
+            console.print("[yellow]Restored index from backup[/yellow]", flush=True)
 
     def _cleanup_backup(self, release_id: str):
         """Remove backup files after successful update."""
@@ -654,7 +656,7 @@ class S2DatasetDownloader:
                             )
                             
                     except json.JSONDecodeError:
-                        console.print(f"[yellow]Warning: Invalid JSON in {file_path}[/yellow]")
+                        console.print(f"[yellow]Warning: Invalid JSON in {file_path}[/yellow]", flush=True)
                         
                     offset += len(line.encode('utf-8'))
                 
@@ -678,7 +680,7 @@ class S2DatasetDownloader:
                             )
                             
                     except json.JSONDecodeError:
-                        console.print(f"[yellow]Warning: Invalid JSON in {file_path}[/yellow]")
+                        console.print(f"[yellow]Warning: Invalid JSON in {file_path}[/yellow]", flush=True)
                 
                 conn.commit()
 
@@ -690,12 +692,12 @@ class S2DatasetDownloader:
         try:
             release_id = self._get_latest_local_release()
             if not release_id:
-                console.print("[yellow]No local datasets found.[/yellow]")
+                console.print("[yellow]No local datasets found.[/yellow]", flush=True)
                 return False
 
             index_path = self.index_dir / f"{release_id}.db"
             if not index_path.exists():
-                console.print("[red]Index database not found.[/red]")
+                console.print("[red]Index database not found.[/red]", flush=True)
                 return False
 
             incomplete_files = []
@@ -712,7 +714,7 @@ class S2DatasetDownloader:
                         if file_path.name == 'metadata.json':
                             continue
                             
-                        console.print(f"[cyan]Verifying index for {file_path.name}...[/cyan]")
+                        console.print(f"[cyan]Verifying index for {file_path.name}...[/cyan]", flush=True)
                         
                         # Count actual records in the file
                         actual_records = 0
@@ -732,19 +734,19 @@ class S2DatasetDownloader:
                         indexed_records = cursor.fetchone()[0]
                         
                         if indexed_records == 0:
-                            console.print(f"[red]File {file_path.name} has no index entries![/red]")
+                            console.print(f"[red]File {file_path.name} has no index entries![/red]", flush=True)
                             incomplete_files.append((file_path, 'missing'))
                         elif indexed_records < actual_records:
                             console.print(
                                 f"[yellow]File {file_path.name} is partially indexed: "
-                                f"{indexed_records}/{actual_records} records[/yellow]"
+                                f"{indexed_records}/{actual_records} records[/yellow]", flush=True
                             )
                             incomplete_files.append((file_path, 'partial'))
 
             if incomplete_files:
-                console.print("\n[red]Found incompletely indexed files:[/red]")
+                console.print("\n[red]Found incompletely indexed files:[/red]", flush=True)
                 for file_path, status in incomplete_files:
-                    console.print(f"- {file_path.name} ({status})")
+                    console.print(f"- {file_path.name} ({status})", flush=True)
                 
                 # Offer to fix incomplete files
                 if console.input("\nWould you like to reindex these files? (y/n): ").lower() == 'y':
@@ -758,15 +760,15 @@ class S2DatasetDownloader:
                             # Reindex the file
                             dataset = file_path.parent.name
                             self._index_file(conn, file_path, dataset)
-                    console.print("[green]Reindexing complete![/green]")
+                    console.print("[green]Reindexing complete![/green]", flush=True)
                 
                 return False
                 
-            console.print("[green]All files are properly indexed![/green]")
+            console.print("[green]All files are properly indexed![/green]", flush=True)
             return True
             
         except Exception as e:
-            console.print(f"[red]Error verifying index: {str(e)}[/red]")
+            console.print(f"[red]Error verifying index: {str(e)}[/red]", flush=True)
             return False
 
     def _get_latest_local_release(self) -> Optional[str]:
