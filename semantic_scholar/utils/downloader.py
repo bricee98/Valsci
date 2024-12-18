@@ -322,6 +322,9 @@ class S2DatasetDownloader:
         file_size = file_path.stat().st_size
         chunk_size = file_size // num_cores
         
+        console.print(f"\n[bold cyan]Starting parallel indexing of {file_path.name} using {num_cores} cores...[/bold cyan]")
+        console.print(f"File size: {self.format_size(file_size)}, Chunk size: {self.format_size(chunk_size)}")
+        
         chunks = [
             (file_path, dataset, i * chunk_size, chunk_size)
             for i in range(num_cores)
@@ -330,22 +333,23 @@ class S2DatasetDownloader:
         # Add remainder to last chunk
         chunks[-1] = (file_path, dataset, (num_cores-1) * chunk_size, file_size - (num_cores-1) * chunk_size)
         
-        console.print(f"[cyan]Indexing {file_path.name} using {num_cores} cores...[/cyan]")
-        
         try:
             conn.execute('BEGIN TRANSACTION')
+            total_entries = 0
             
             with ProcessPoolExecutor(max_workers=num_cores) as executor:
-                for chunk_entries in executor.map(self._parallel_index_chunk, chunks):
+                for i, chunk_entries in enumerate(executor.map(self._parallel_index_chunk, chunks), 1):
                     if chunk_entries:
                         conn.executemany("""
                             INSERT OR REPLACE INTO paper_locations 
                             (id, id_type, dataset, file_path, line_offset)
                             VALUES (?, ?, ?, ?, ?)
                         """, chunk_entries)
+                        total_entries += len(chunk_entries)
+                    console.print(f"[green]Processed chunk {i}/{num_cores} ({len(chunk_entries):,} entries)[/green]")
             
             conn.execute('COMMIT')
-            console.print(f"[green]Successfully indexed {file_path.name}[/green]")
+            console.print(f"[bold green]✓ Successfully indexed {total_entries:,} total entries from {file_path.name}[/bold green]\n")
             
         except Exception as e:
             conn.execute('ROLLBACK')
