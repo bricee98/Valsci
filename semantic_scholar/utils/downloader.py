@@ -678,17 +678,107 @@ class S2DatasetDownloader:
                 
                 conn.commit()
 
+    def verify_index_completeness(self) -> bool:
+        """
+        Verify that all downloaded files have been completely indexed.
+        Returns True if all files are properly indexed, False otherwise.
+        """
+        try:
+            release_id = self._get_latest_local_release()
+            if not release_id:
+                console.print("[yellow]No local datasets found.[/yellow]")
+                return False
+
+            index_path = self.index_dir / f"{release_id}.db"
+            if not index_path.exists():
+                console.print("[red]Index database not found.[/red]")
+                return False
+
+            incomplete_files = []
+            
+            with sqlite3.connect(str(index_path)) as conn:
+                for dataset in self.datasets_to_download:
+                    dataset_dir = self.base_dir / release_id / dataset
+                    if not dataset_dir.exists():
+                        continue
+
+                    # Get all JSON files in the dataset directory
+                    json_files = list(dataset_dir.glob('*.json'))
+                    for file_path in json_files:
+                        if file_path.name == 'metadata.json':
+                            continue
+                            
+                        console.print(f"[cyan]Verifying index for {file_path.name}...[/cyan]")
+                        
+                        # Count actual records in the file
+                        actual_records = 0
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            for line in f:
+                                try:
+                                    json.loads(line.strip())  # Validate JSON
+                                    actual_records += 1
+                                except json.JSONDecodeError:
+                                    continue
+                        
+                        # Count indexed records for this file
+                        cursor = conn.execute("""
+                            SELECT COUNT(*) FROM paper_locations 
+                            WHERE file_path = ?
+                        """, (str(file_path),))
+                        indexed_records = cursor.fetchone()[0]
+                        
+                        if indexed_records == 0:
+                            console.print(f"[red]File {file_path.name} has no index entries![/red]")
+                            incomplete_files.append((file_path, 'missing'))
+                        elif indexed_records < actual_records:
+                            console.print(
+                                f"[yellow]File {file_path.name} is partially indexed: "
+                                f"{indexed_records}/{actual_records} records[/yellow]"
+                            )
+                            incomplete_files.append((file_path, 'partial'))
+
+            if incomplete_files:
+                console.print("\n[red]Found incompletely indexed files:[/red]")
+                for file_path, status in incomplete_files:
+                    console.print(f"- {file_path.name} ({status})")
+                
+                # Offer to fix incomplete files
+                if console.input("\nWould you like to reindex these files? (y/n): ").lower() == 'y':
+                    with sqlite3.connect(str(index_path)) as conn:
+                        for file_path, _ in incomplete_files:
+                            # Remove existing entries
+                            conn.execute(
+                                "DELETE FROM paper_locations WHERE file_path = ?", 
+                                (str(file_path),)
+                            )
+                            # Reindex the file
+                            dataset = file_path.parent.name
+                            self._index_file(conn, file_path, dataset)
+                    console.print("[green]Reindexing complete![/green]")
+                
+                return False
+                
+            console.print("[green]All files are properly indexed![/green]")
+            return True
+            
+        except Exception as e:
+            console.print(f"[red]Error verifying index: {str(e)}[/red]")
+            return False
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Download Semantic Scholar datasets')
     parser.add_argument('--release', default='latest', help='Release ID to download')
     parser.add_argument('--mini', action='store_true', help='Download minimal dataset for testing')
     parser.add_argument('--verify', action='store_true', help='Verify downloaded datasets')
+    parser.add_argument('--verify-index', action='store_true', help='Verify index completeness')
     args = parser.parse_args()
     
     downloader = S2DatasetDownloader()
     
-    if args.verify:
+    if args.verify_index:
+        downloader.verify_index_completeness()
+    elif args.verify:
         downloader.verify_downloads(args.release)
     else:
         downloader.download_all_datasets(args.release, args.mini)
