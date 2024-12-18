@@ -266,6 +266,9 @@ class S2DatasetDownloader:
             return
 
         try:
+            # Start a transaction
+            conn.execute('BEGIN TRANSACTION')
+            
             # Prepare the insert statement once
             insert_stmt = """
                 INSERT OR REPLACE INTO paper_locations 
@@ -276,6 +279,7 @@ class S2DatasetDownloader:
             # Create a batch of records to insert
             batch_size = 10000
             batch = []
+            total_lines = 0
             
             with open(file_path, 'r', encoding='utf-8') as f:
                 offset = 0
@@ -303,16 +307,25 @@ class S2DatasetDownloader:
                     # Execute batch insert when batch is full
                     if len(batch) >= batch_size:
                         conn.executemany(insert_stmt, batch)
+                        total_lines += len(batch)
                         batch = []
-                        console.print(f"[green]Indexed {line_num} lines[/green]")
+                        if total_lines % 100000 == 0:  # Report progress less frequently
+                            console.print(f"[green]Indexed {total_lines:,} records[/green]")
                 
                 # Insert any remaining records
                 if batch:
                     conn.executemany(insert_stmt, batch)
-                    console.print(f"[green]Indexed {line_num} lines[/green]")
-                    
+                    total_lines += len(batch)
+                
+                # Commit the transaction
+                conn.execute('COMMIT')
+                console.print(f"[green]Successfully indexed {total_lines:,} total records[/green]")
+                
         except Exception as e:
+            # Rollback transaction on error
+            conn.execute('ROLLBACK')
             console.print(f"[red]Error indexing {file_path.name}: {str(e)}[/red]")
+            raise
 
     def download_dataset(self, dataset_name: str, release_id: str = 'latest', mini: bool = False) -> bool:
         """Download a specific dataset and build index."""
