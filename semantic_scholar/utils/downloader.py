@@ -214,6 +214,10 @@ class S2DatasetDownloader:
     def _init_sqlite_db(self, index_path: Path):
         """Initialize SQLite database with proper schema and indices."""
         with sqlite3.connect(str(index_path)) as conn:
+            # Increase cache size and page size for better write performance
+            conn.execute("PRAGMA cache_size = -2000000")  # Use 2GB memory for caching
+            conn.execute("PRAGMA page_size = 4096")
+            
             # Enable WAL mode for better write performance
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
@@ -276,8 +280,8 @@ class S2DatasetDownloader:
                 VALUES (?, ?, ?, ?, ?)
             """
             
-            # Create a batch of records to insert
-            batch_size = 10000
+            # Increase batch size for better performance
+            batch_size = 200000  # Much larger batch size for better performance
             batch = []
             total_lines = 0
             
