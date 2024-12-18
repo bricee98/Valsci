@@ -64,6 +64,10 @@ class S2DatasetDownloader:
             "s2orc",
             "tldrs"
         ]
+        
+        # Add index_dir initialization
+        self.index_dir = self.base_dir / "indices"
+        self.index_dir.mkdir(exist_ok=True)
 
     def make_request(self, url: str, method: str = 'get', max_retries: int = 5, **kwargs) -> requests.Response:
         """Make a request with retry logic for rate limits."""
@@ -196,14 +200,18 @@ class S2DatasetDownloader:
     def _init_sqlite_db(self, index_path: Path):
         """Initialize SQLite database with proper schema and indices."""
         with sqlite3.connect(str(index_path)) as conn:
+            # Enable WAL mode for better write performance
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            
             # Create tables with proper indices
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS paper_locations (
-                    id TEXT,              -- The ID (paperId, corpusId, authorId etc)
-                    id_type TEXT,         -- Type of ID (paper_id, corpus_id, author_id)
-                    dataset TEXT,         -- Dataset name (papers, abstracts, s2orc etc)
-                    file_path TEXT,       -- Path to the JSON file
-                    line_offset INTEGER,  -- Byte offset in file
+                    id TEXT,              
+                    id_type TEXT,         
+                    dataset TEXT,         
+                    file_path TEXT,       
+                    line_offset INTEGER,  
                     PRIMARY KEY (id, id_type, dataset)
                 )
             """)
@@ -220,7 +228,7 @@ class S2DatasetDownloader:
             """)
 
     def _index_file(self, conn: sqlite3.Connection, file_path: Path, dataset: str):
-        """Build index for a downloaded file."""
+        """Build index for a downloaded file with optimized batch processing."""
         console.print(f"[cyan]Indexing {file_path.name}...[/cyan]")
         
         # Define which IDs to index for each dataset
@@ -229,19 +237,13 @@ class S2DatasetDownloader:
                 ('paperId', 'paper_id'),
                 ('corpusid', 'corpus_id')
             ],
-            'abstracts': [
-                ('corpusid', 'corpus_id')
-            ],
-            's2orc': [
-                ('corpusid', 'corpus_id')
-            ],
+            'abstracts': [('corpusid', 'corpus_id')],
+            's2orc': [('corpusid', 'corpus_id')],
             'citations': [
                 ('citingcorpusid', 'corpus_id'),
                 ('citedcorpusid', 'corpus_id')
             ],
-            'authors': [
-                ('authorid', 'author_id')
-            ]
+            'authors': [('authorid', 'author_id')]
         }
 
         id_fields = dataset_id_fields.get(dataset, [])
@@ -250,6 +252,17 @@ class S2DatasetDownloader:
             return
 
         try:
+            # Prepare the insert statement once
+            insert_stmt = """
+                INSERT OR REPLACE INTO paper_locations 
+                (id, id_type, dataset, file_path, line_offset)
+                VALUES (?, ?, ?, ?, ?)
+            """
+            
+            # Create a batch of records to insert
+            batch_size = 10000
+            batch = []
+            
             with open(file_path, 'r', encoding='utf-8') as f:
                 offset = 0
                 for line_num, line in enumerate(f, 1):
@@ -260,29 +273,30 @@ class S2DatasetDownloader:
                         for field_name, id_type in id_fields:
                             id_value = str(item.get(field_name, '')).lower()
                             if id_value:
-                                conn.execute(
-                                    """
-                                    INSERT OR REPLACE INTO paper_locations 
-                                    (id, id_type, dataset, file_path, line_offset)
-                                    VALUES (?, ?, ?, ?, ?)
-                                    """,
-                                    (id_value, id_type, dataset, str(file_path), offset)
-                                )
+                                batch.append((
+                                    id_value, 
+                                    id_type, 
+                                    dataset, 
+                                    str(file_path), 
+                                    offset
+                                ))
                                 
                     except json.JSONDecodeError:
                         console.print(f"[yellow]Warning: Invalid JSON at line {line_num}[/yellow]")
                         
                     offset += len(line.encode('utf-8'))
                     
-                    # Commit every 10000 records
-                    if line_num % 10000 == 0:
-                        conn.commit()
-                        console.print(f"[green]Committed {line_num} lines[/green]")
-                        
-                # Final commit
-                conn.commit()
-                console.print(f"[green]Committed {line_num} lines[/green]")
-                        
+                    # Execute batch insert when batch is full
+                    if len(batch) >= batch_size:
+                        conn.executemany(insert_stmt, batch)
+                        batch = []
+                        console.print(f"[green]Indexed {line_num} lines[/green]")
+                
+                # Insert any remaining records
+                if batch:
+                    conn.executemany(insert_stmt, batch)
+                    console.print(f"[green]Indexed {line_num} lines[/green]")
+                    
         except Exception as e:
             console.print(f"[red]Error indexing {file_path.name}: {str(e)}[/red]")
 
