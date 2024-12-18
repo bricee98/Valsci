@@ -71,7 +71,7 @@ class S2DatasetDownloader:
         self.index_dir.mkdir(parents=True, exist_ok=True)
 
     def make_request(self, url: str, method: str = 'get', max_retries: int = 5, **kwargs) -> requests.Response:
-        """Make a request with retry logic for rate limits."""
+        """Make a request with retry logic for rate limits and expired credentials."""
         for attempt in range(max_retries):
             try:
                 # Wait for rate limit before making request
@@ -84,12 +84,25 @@ class S2DatasetDownloader:
                 else:
                     raise ValueError(f"Unsupported method: {method}")
 
-                if response.status_code == 429:
-                    wait_time = min(30, (2 ** attempt) + 1)  # Exponential backoff
+                # Handle different error cases
+                if response.status_code == 429:  # Rate limit
+                    wait_time = min(30, (2 ** attempt) + 1)
                     console.print(f"[yellow]Rate limited. Waiting {wait_time} seconds...[/yellow]")
                     time.sleep(wait_time)
                     continue
-
+                elif response.status_code == 400:  # Bad request - likely expired credentials
+                    console.print("[yellow]Credentials expired. Refreshing dataset info...[/yellow]")
+                    # Re-fetch the dataset info to get fresh pre-signed URLs
+                    if hasattr(self, '_current_dataset'):
+                        dataset_info = self.get_dataset_info(self._current_dataset, self._current_release)
+                        if 'files' in dataset_info:
+                            # Find matching new URL
+                            old_filename = self.get_filename_from_url(url)
+                            for new_url in dataset_info['files']:
+                                if self.get_filename_from_url(new_url) == old_filename:
+                                    return self.make_request(new_url, method, max_retries-attempt, **kwargs)
+                    raise
+                
                 response.raise_for_status()
                 return response
 
@@ -307,6 +320,10 @@ class S2DatasetDownloader:
             release_id = self.get_latest_release()
         
         try:
+            # Store current dataset context for credential refresh
+            self._current_dataset = dataset_name
+            self._current_release = release_id
+            
             dataset_info = self.get_dataset_info(dataset_name, release_id)
             if not dataset_info:
                 return False
@@ -315,8 +332,10 @@ class S2DatasetDownloader:
             os.makedirs(dataset_dir, exist_ok=True)
             
             # Save metadata
-            with open(dataset_dir / 'metadata.json', 'w') as f:
-                json.dump(dataset_info, f, indent=2)
+            metadata_path = dataset_dir / 'metadata.json'
+            if not metadata_path.exists():
+                with open(metadata_path, 'w') as f:
+                    json.dump(dataset_info, f, indent=2)
 
             # Initialize SQLite index
             index_dir = self.base_dir / "indices"
@@ -327,16 +346,40 @@ class S2DatasetDownloader:
             self._init_sqlite_db(index_path)
             
             with sqlite3.connect(str(index_path)) as conn:
+                # Get list of already processed files
+                processed_files = set()
+                cursor = conn.execute(
+                    "SELECT DISTINCT file_path FROM paper_locations WHERE dataset = ?", 
+                    (dataset_name,)
+                )
+                for (file_path,) in cursor:
+                    processed_files.add(Path(file_path).name)
+
                 # Handle S2ORC differently
                 if dataset_name == 's2orc':
                     files = dataset_info['files']
                     if mini:
                         files = files[:1]  # Get only first shard for mini download
                     
+                    # Filter out already processed files
+                    remaining_files = [
+                        f for f in files 
+                        if not (dataset_dir / f"{f['shard']}.json").exists() and
+                        f"{f['shard']}.json" not in processed_files
+                    ]
+                    
+                    if not remaining_files:
+                        console.print(f"[green]All files already downloaded for {dataset_name}[/green]")
+                        return True
+                    
                     with Progress() as progress:
-                        task = progress.add_task(f"Downloading {dataset_name}...", total=len(files))
+                        task = progress.add_task(
+                            f"Downloading {dataset_name}...", 
+                            total=len(files),
+                            completed=len(files) - len(remaining_files)
+                        )
                         
-                        for file_info in files:
+                        for file_info in remaining_files:
                             url = file_info['url']
                             shard = file_info['shard']
                             output_path = dataset_dir / f"{shard}.json"
@@ -348,10 +391,25 @@ class S2DatasetDownloader:
                     # Standard dataset handling
                     files_to_download = dataset_info['files'][:1] if mini else dataset_info['files']
                     
+                    # Filter out already processed files
+                    remaining_files = [
+                        url for url in files_to_download
+                        if not (dataset_dir / self.get_filename_from_url(url).replace('.gz', '.json')).exists() and
+                        self.get_filename_from_url(url).replace('.gz', '.json') not in processed_files
+                    ]
+                    
+                    if not remaining_files:
+                        console.print(f"[green]All files already downloaded for {dataset_name}[/green]")
+                        return True
+                    
                     with Progress() as progress:
-                        task = progress.add_task(f"Downloading {dataset_name}...", total=len(files_to_download))
+                        task = progress.add_task(
+                            f"Downloading {dataset_name}...", 
+                            total=len(files_to_download),
+                            completed=len(files_to_download) - len(remaining_files)
+                        )
                         
-                        for file_url in files_to_download:
+                        for file_url in remaining_files:
                             output_path = dataset_dir / self.get_filename_from_url(file_url).replace('.gz', '.json')
                             if self.download_file(file_url, dataset_dir):
                                 self._index_file(conn, output_path, dataset_name)
