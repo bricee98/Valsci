@@ -171,6 +171,6 @@ cookies/
 
 *.pdf
 
-semantic_scholar/
+semantic_scholar/datasets
 
 venv/
