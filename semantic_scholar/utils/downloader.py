@@ -205,28 +205,73 @@ class S2DatasetDownloader:
             console.print(f"[red]Error extracting {input_path.name}: {str(e)}[/red]")
             raise
 
+    def verify_file(self, file_path: Path, expected_size: Optional[int] = None) -> bool:
+        """Verify if a file is complete based on size."""
+        if not file_path.exists():
+            return False
+        
+        if expected_size is not None:
+            actual_size = file_path.stat().st_size
+            if actual_size != expected_size:
+                console.print(f"[yellow]File {file_path.name} is incomplete (size: {actual_size} vs expected: {expected_size})[/yellow]")
+                return False
+        
+        return True
+
     def download_file(self, url: str, output_dir: Path, desc: str = None) -> Tuple[bool, Optional[Path]]:
-        """Download a file with progress bar. Returns (success, output_path)."""
+        """Download a file with progress bar and resume capability."""
         try:
             filename = self.get_filename_from_url(url)
             output_path = output_dir / filename
             desc = desc or f"Downloading {filename}"
             
-            response = self.make_request(url, stream=True)
+            # Get file size from server
+            response = self.make_request(url, method='head')
             total_size = int(response.headers.get('content-length', 0))
             
-            with open(output_path, 'wb') as f, tqdm(
+            # Check if file exists and is complete
+            if output_path.exists():
+                if output_path.stat().st_size == total_size:
+                    console.print(f"[green]File {filename} already downloaded completely[/green]")
+                    return True, output_path
+                else:
+                    console.print(f"[yellow]File {filename} exists but is incomplete, resuming...[/yellow]")
+            
+            # Resume download from where we left off
+            headers = {}
+            mode = 'wb'
+            if output_path.exists():
+                current_size = output_path.stat().st_size
+                headers['Range'] = f'bytes={current_size}-'
+                mode = 'ab'
+                initial_size = current_size
+            else:
+                initial_size = 0
+            
+            response = self.make_request(url, stream=True, headers=headers)
+            
+            # Handle resume response
+            if response.status_code == 206:  # Partial content
+                total_size = initial_size + int(response.headers.get('content-length', 0))
+            
+            with open(output_path, mode) as f, tqdm(
                 desc=desc,
                 total=total_size,
+                initial=initial_size,
                 unit='iB',
                 unit_scale=True,
                 unit_divisor=1024,
             ) as pbar:
-                for data in response.iter_content(chunk_size=1024):
+                for data in response.iter_content(chunk_size=8192):
                     size = f.write(data)
                     pbar.update(size)
-                
-            # If file is gzipped, extract it using parallel processing
+            
+            # Verify final size
+            if output_path.stat().st_size != total_size:
+                console.print(f"[red]Warning: Final file size doesn't match expected size for {filename}[/red]")
+                return False, None
+            
+            # If file is gzipped, extract it
             if filename.endswith('.gz'):
                 console.print(f"Extracting {filename}...")
                 base_name = filename.replace('.gz', '')
