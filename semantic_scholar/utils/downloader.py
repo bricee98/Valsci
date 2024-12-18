@@ -765,6 +765,23 @@ class S2DatasetDownloader:
             console.print(f"[red]Error verifying index: {str(e)}[/red]")
             return False
 
+    def _get_latest_local_release(self) -> Optional[str]:
+        """Get the latest release ID from local datasets directory."""
+        if not self.base_dir.exists():
+            return None
+        
+        # Get all subdirectories that look like release IDs (YYYY-MM-DD)
+        releases = [
+            d.name for d in self.base_dir.iterdir() 
+            if d.is_dir() and re.match(r'\d{4}-\d{2}-\d{2}', d.name)
+        ]
+        
+        if not releases:
+            return None
+        
+        # Sort by date and return the latest
+        return sorted(releases)[-1]
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Download Semantic Scholar datasets')
