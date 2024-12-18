@@ -835,6 +835,102 @@ class S2DatasetDownloader:
         # Sort by date and return the latest
         return sorted(releases)[-1]
 
+    def audit_datasets(self, release_id: str = 'latest'):
+        """Audit dataset files and indexing status."""
+        if release_id == 'latest':
+            release_id = self.get_latest_release()
+        
+        console.print(f"\n[bold cyan]Auditing datasets for release {release_id}...[/bold cyan]")
+        
+        # Get index database
+        index_path = self.base_dir / "indices" / f"{release_id}.db"
+        if not index_path.exists():
+            console.print("[red]No index database found for this release[/red]")
+            return
+        
+        table = Table(
+            "Dataset", 
+            "Expected Files", 
+            "Downloaded Files",
+            "Indexed Files",
+            "Status",
+            title=f"Dataset Audit for Release {release_id}"
+        )
+        
+        with sqlite3.connect(str(index_path)) as conn:
+            for dataset in self.datasets_to_download:
+                try:
+                    # Get expected files from API
+                    dataset_info = self.get_dataset_info(dataset, release_id)
+                    if not dataset_info:
+                        table.add_row(
+                            dataset,
+                            "?",
+                            "0",
+                            "0",
+                            "[red]Cannot fetch dataset info[/red]"
+                        )
+                        continue
+                    
+                    expected_count = len(dataset_info['files'])
+                    
+                    # Get downloaded files
+                    dataset_dir = self.base_dir / release_id / dataset
+                    if dataset == 's2orc':
+                        downloaded_files = list(dataset_dir.glob("*.json")) if dataset_dir.exists() else []
+                    else:
+                        downloaded_files = [
+                            f for f in dataset_dir.glob("*.json")
+                            if f.name != 'metadata.json'
+                        ] if dataset_dir.exists() else []
+                    
+                    # Get indexed files
+                    cursor = conn.execute("""
+                        SELECT DISTINCT file_path, COUNT(*) as entry_count 
+                        FROM paper_locations 
+                        WHERE dataset = ?
+                        GROUP BY file_path
+                    """, (dataset,))
+                    indexed_files = {Path(path): count for path, count in cursor}
+                    
+                    # Determine status
+                    if not dataset_dir.exists():
+                        status = "[red]Not downloaded[/red]"
+                    elif len(downloaded_files) < expected_count:
+                        status = f"[yellow]Partially downloaded ({len(downloaded_files)}/{expected_count})[/yellow]"
+                    elif len(indexed_files) < len(downloaded_files):
+                        status = f"[yellow]Partially indexed ({len(indexed_files)}/{len(downloaded_files)})[/yellow]"
+                    else:
+                        status = "[green]Complete[/green]"
+                    
+                    # Add details for partially indexed files
+                    partially_indexed = []
+                    for f in downloaded_files:
+                        if f in indexed_files and indexed_files[f] < 100:  # Arbitrary threshold
+                            partially_indexed.append(f.name)
+                    
+                    if partially_indexed:
+                        status += f"\n[yellow]Low index count: {', '.join(partially_indexed)}[/yellow]"
+                    
+                    table.add_row(
+                        dataset,
+                        str(expected_count),
+                        str(len(downloaded_files)),
+                        str(len(indexed_files)),
+                        status
+                    )
+                    
+                except Exception as e:
+                    table.add_row(
+                        dataset,
+                        "?",
+                        "?",
+                        "?",
+                        f"[red]Error: {str(e)}[/red]"
+                    )
+        
+        console.print(table)
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Download Semantic Scholar datasets')
@@ -842,11 +938,14 @@ def main():
     parser.add_argument('--mini', action='store_true', help='Download minimal dataset for testing')
     parser.add_argument('--verify', action='store_true', help='Verify downloaded datasets')
     parser.add_argument('--verify-index', action='store_true', help='Verify index completeness')
+    parser.add_argument('--audit', action='store_true', help='Audit datasets and indexing status')
     args = parser.parse_args()
     
     downloader = S2DatasetDownloader()
     
-    if args.verify_index:
+    if args.audit:
+        downloader.audit_datasets(args.release)
+    elif args.verify_index:
         downloader.verify_index_completeness()
     elif args.verify:
         downloader.verify_downloads(args.release)
