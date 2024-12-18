@@ -215,8 +215,8 @@ class S2DatasetDownloader:
                     for future in futures:
                         out.write(future.result())
 
-    def download_file(self, url: str, output_dir: Path, desc: str = None) -> bool:
-        """Download a file with progress bar."""
+    def download_file(self, url: str, output_dir: Path, desc: str = None) -> Tuple[bool, Optional[Path]]:
+        """Download a file with progress bar. Returns (success, output_path)."""
         try:
             filename = self.get_filename_from_url(url)
             output_path = output_dir / filename
@@ -246,12 +246,13 @@ class S2DatasetDownloader:
                 output_json_path = output_dir / base_name
                 self._parallel_extract_gzip(output_path, output_json_path)
                 os.remove(output_path)  # Remove the gzipped file
-                
-            return True
+                return True, output_json_path
+            
+            return True, output_path
             
         except Exception as e:
             console.print(f"[red]Error downloading {url}: {str(e)}[/red]")
-            return False
+            return False, None
 
     def _init_sqlite_db(self, index_path: Path):
         """Initialize SQLite database with proper schema and indices."""
@@ -447,8 +448,9 @@ class S2DatasetDownloader:
                         )
                         
                         for file_url in remaining_files:
-                            output_path = dataset_dir / self.get_filename_from_url(file_url).replace('.gz', '.json')
-                            if self.download_file(file_url, dataset_dir):
+                            success, output_path = self.download_file(file_url, dataset_dir)
+                            if success and output_path:
+                                console.print(f"[cyan]Starting indexing for {output_path.name}...[/cyan]")
                                 self._index_file(conn, output_path, dataset_name)
                             progress.advance(task)
                     
