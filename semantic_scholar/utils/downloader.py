@@ -418,21 +418,15 @@ class S2DatasetDownloader:
                         console.print(f"[green]All files already downloaded for {dataset_name}[/green]")
                         return True
                     
-                    with Progress() as progress:
-                        task = progress.add_task(
-                            f"Downloading {dataset_name}...", 
-                            total=len(files),
-                            completed=len(files) - len(remaining_files)
-                        )
+                    console.print(f"[cyan]Downloading {len(remaining_files)} files for {dataset_name}...[/cyan]")
+                    
+                    for file_info in remaining_files:
+                        url = file_info['url']
+                        shard = file_info['shard']
+                        output_path = dataset_dir / f"{shard}.json"
                         
-                        for file_info in remaining_files:
-                            url = file_info['url']
-                            shard = file_info['shard']
-                            output_path = dataset_dir / f"{shard}.json"
-                            
-                            if self.download_file(url, dataset_dir, f"Downloading S2ORC shard {shard}"):
-                                self._index_file(conn, output_path, dataset_name)
-                            progress.advance(task)
+                        if self.download_file(url, dataset_dir, f"Downloading S2ORC shard {shard}"):
+                            self._index_file(conn, output_path, dataset_name)
                 else:
                     # Standard dataset handling
                     files_to_download = dataset_info['files'][:1] if mini else dataset_info['files']
@@ -448,19 +442,12 @@ class S2DatasetDownloader:
                         console.print(f"[green]All files already downloaded for {dataset_name}[/green]")
                         return True
                     
-                    with Progress() as progress:
-                        task = progress.add_task(
-                            f"Downloading {dataset_name}...", 
-                            total=len(files_to_download),
-                            completed=len(files_to_download) - len(remaining_files)
-                        )
-                        
-                        for file_url in remaining_files:
-                            success, output_path = self.download_file(file_url, dataset_dir)
-                            if success and output_path:
-                                console.print(f"[cyan]Starting indexing for {output_path.name}...[/cyan]")
-                                self._index_file(conn, output_path, dataset_name)
-                            progress.advance(task)
+                    console.print(f"[cyan]Downloading {len(remaining_files)} files for {dataset_name}...[/cyan]")
+                    
+                    for file_url in remaining_files:
+                        success, output_path = self.download_file(file_url, dataset_dir)
+                        if success and output_path:
+                            self._index_file(conn, output_path, dataset_name)
                     
                     conn.commit()
                 return True
