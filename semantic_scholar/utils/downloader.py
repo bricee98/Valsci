@@ -289,17 +289,8 @@ class S2DatasetDownloader:
             
             entries = []
             total_lines = 0
-            file_size = file_path.stat().st_size
             
-            with open(file_path, 'r', encoding='utf-8') as f, \
-                 Progress() as progress:
-                
-                # Add progress bar
-                task = progress.add_task(
-                    f"[cyan]Indexing {file_path.name}...", 
-                    total=file_size
-                )
-                
+            with open(file_path, 'r', encoding='utf-8') as f:
                 offset = 0
                 for line_num, line in enumerate(f, 1):
                     try:
@@ -318,10 +309,8 @@ class S2DatasetDownloader:
                         console.print(f"[yellow]Warning: Error processing line {line_num}: {str(e)}[/yellow]")
                         continue
                     
-                    line_size = len(line.encode('utf-8'))
-                    offset += line_size
+                    offset += len(line.encode('utf-8'))
                     total_lines += 1
-                    progress.update(task, advance=line_size)
                     
                     # Batch insert every 500k entries to avoid memory issues
                     if len(entries) >= 500000:
@@ -342,34 +331,34 @@ class S2DatasetDownloader:
                     # Progress update every 500k lines
                     if line_num % 500000 == 0:
                         console.print(f"[cyan]Processed {line_num:,} lines...[/cyan]")
-            
-            # Insert any remaining entries
-            if entries:
-                conn.execute('BEGIN IMMEDIATE')
-                try:
-                    conn.executemany("""
-                        INSERT OR REPLACE INTO paper_locations 
-                        (id, id_type, dataset, file_path, line_offset)
-                        VALUES (?, ?, ?, ?, ?)
-                    """, entries)
-                    conn.commit()
-                except:
-                    conn.rollback()
-                    raise
-            
-            # Restore SQLite settings
-            conn.execute("PRAGMA synchronous = NORMAL")
-            conn.execute("PRAGMA journal_mode = WAL")
-            
-            console.print(f"[bold green]✓ Successfully indexed {total_lines:,} total lines from {file_path.name}[/bold green]\n")
-            return True
-            
-        except KeyboardInterrupt:
-            console.print("\n[yellow]Indexing interrupted by user[/yellow]")
-            raise
-        except Exception as e:
-            console.print(f"[red]Error indexing {file_path.name}: {str(e)}[/red]")
-            raise
+                
+                # Insert any remaining entries
+                if entries:
+                    conn.execute('BEGIN IMMEDIATE')
+                    try:
+                        conn.executemany("""
+                            INSERT OR REPLACE INTO paper_locations 
+                            (id, id_type, dataset, file_path, line_offset)
+                            VALUES (?, ?, ?, ?, ?)
+                        """, entries)
+                        conn.commit()
+                    except:
+                        conn.rollback()
+                        raise
+                
+                # Restore SQLite settings
+                conn.execute("PRAGMA synchronous = NORMAL")
+                conn.execute("PRAGMA journal_mode = WAL")
+                
+                console.print(f"[bold green]✓ Successfully indexed {total_lines:,} total lines from {file_path.name}[/bold green]\n")
+                return True
+                
+            except KeyboardInterrupt:
+                console.print("\n[yellow]Indexing interrupted by user[/yellow]")
+                raise
+            except Exception as e:
+                console.print(f"[red]Error indexing {file_path.name}: {str(e)}[/red]")
+                raise
 
     def download_dataset(self, dataset_name: str, release_id: str = 'latest', mini: bool = False) -> bool:
         """Download a specific dataset and build index."""
