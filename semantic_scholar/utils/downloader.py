@@ -1160,14 +1160,7 @@ class S2DatasetDownloader:
 
     def download_single_paper_file(self, release_id: str = 'latest', force: bool = True) -> Optional[Path]:
         """
-        Download a single papers dataset file for testing purposes.
-        
-        Args:
-            release_id: Release ID to download from, defaults to latest
-            force: If True, will overwrite existing file
-        
-        Returns:
-            Path to the downloaded file if successful, None otherwise
+        Download a single papers dataset file for testing purposes using wget.
         """
         try:
             if release_id == 'latest':
@@ -1187,23 +1180,37 @@ class S2DatasetDownloader:
             dataset_dir = self.base_dir / release_id / 'papers'
             dataset_dir.mkdir(parents=True, exist_ok=True)
             
-            # If force is True, remove existing file first
+            # Get output path
             output_path = dataset_dir / self.get_filename_from_url(file_url).replace('.gz', '.json')
+            gz_path = dataset_dir / self.get_filename_from_url(file_url)
+            
             if force and output_path.exists():
                 console.print(f"[yellow]Removing existing file: {output_path}[/yellow]")
                 output_path.unlink()
             
-            # Download the file
+            # Download using wget
             console.print(f"\n[cyan]Downloading single papers file...[/cyan]")
-            success, file_path = self.download_file(file_url, dataset_dir)
+            import subprocess
             
-            if success and file_path:
-                console.print(f"[green]Successfully downloaded: {file_path}[/green]")
-                return file_path
-            else:
-                console.print("[red]Failed to download papers file[/red]")
+            try:
+                # Download with wget, which handles pre-signed URLs better
+                subprocess.run(['wget', '-q', '--show-progress', file_url, '-O', str(gz_path)], check=True)
+                
+                # Extract the gzip file
+                console.print(f"[cyan]Extracting {gz_path.name}...[/cyan]")
+                with gzip.open(gz_path, 'rb') as gz_in, open(output_path, 'wb') as out:
+                    shutil.copyfileobj(gz_in, out)
+                
+                # Remove the gzip file
+                gz_path.unlink()
+                
+                console.print(f"[green]Successfully downloaded and extracted: {output_path}[/green]")
+                return output_path
+                
+            except subprocess.CalledProcessError as e:
+                console.print(f"[red]Failed to download file: {e}[/red]")
                 return None
-            
+                
         except Exception as e:
             console.print(f"[red]Error downloading papers file: {str(e)}[/red]")
             return None
