@@ -1064,7 +1064,7 @@ def main():
     parser.add_argument('--verify', action='store_true', help='Verify downloaded datasets')
     parser.add_argument('--verify-index', action='store_true', help='Verify index completeness')
     parser.add_argument('--audit', action='store_true', help='Audit datasets and indexing status')
-    parser.add_argument('--index-only', action='store_true', help='Only run indexing on downloaded files')
+    parser.add_argument('--index-only', nargs='*', help='Only run indexing on downloaded files. Optionally specify datasets to index (e.g. --index-only papers abstracts)')
     parser.add_argument('--download-only', action='store_true', help='Only download files without indexing')
     parser.add_argument('--repair', action='store_true', help='Repair/resume incomplete indexes')
     parser.add_argument('--count', action='store_true', help='Show detailed index counts for each file')
@@ -1080,8 +1080,19 @@ def main():
         downloader.verify_index_completeness()
     elif args.verify:
         downloader.verify_downloads(args.release)
-    elif args.index_only:
-        for dataset in downloader.datasets_to_download:
+    elif args.index_only is not None:  # Changed from args.index_only to check if not None
+        # If no specific datasets provided, use all datasets
+        datasets_to_index = args.index_only if args.index_only else downloader.datasets_to_download
+        
+        # Validate dataset names
+        invalid_datasets = [d for d in datasets_to_index if d not in downloader.datasets_to_download]
+        if invalid_datasets:
+            console.print(f"[red]Invalid dataset names: {', '.join(invalid_datasets)}[/red]")
+            console.print(f"[yellow]Valid datasets are: {', '.join(downloader.datasets_to_download)}[/yellow]")
+            return
+            
+        console.print(f"[cyan]Indexing datasets: {', '.join(datasets_to_index)}[/cyan]")
+        for dataset in datasets_to_index:
             downloader.index_dataset(dataset, args.release, repair=args.repair)
     elif args.download_only:
         # Download all datasets without indexing
