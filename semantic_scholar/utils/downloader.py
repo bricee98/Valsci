@@ -380,10 +380,18 @@ class S2DatasetDownloader:
 
     def download_dataset(self, dataset_name: str, release_id: str = 'latest', mini: bool = False, index: bool = True) -> bool:
         """Download a specific dataset and optionally build index."""
-        if release_id == 'latest':
-            release_id = self.get_latest_release()
-        
         try:
+            if release_id == 'latest':
+                # First try to get local latest release
+                local_release = self._get_latest_local_release()
+                if local_release:
+                    release_id = local_release
+                    console.print(f"[cyan]Using latest local release: {release_id}[/cyan]")
+                else:
+                    # If no local release, get latest from API
+                    release_id = self.get_latest_release()
+                    console.print(f"[cyan]Using latest API release: {release_id}[/cyan]")
+            
             # Get dataset info
             console.print(f"\n[cyan]Getting dataset info for {dataset_name}...[/cyan]")
             dataset_info = self.get_dataset_info(dataset_name, release_id)
@@ -449,9 +457,17 @@ class S2DatasetDownloader:
             console.print(f"[red]Error downloading dataset {dataset_name}: {str(e)}[/red]")
             return False
 
-    def index_dataset(self, dataset_name: str, release_id: str, files: List[Path] = None, repair: bool = False) -> bool:
+    def index_dataset(self, dataset_name: str, release_id: str = 'latest', files: List[Path] = None, repair: bool = False) -> bool:
         """Index all files for a specific dataset."""
         try:
+            # Get actual release ID if 'latest'
+            if release_id == 'latest':
+                release_id = self._get_latest_local_release()
+                if not release_id:
+                    console.print("[red]No local releases found. Please download datasets first.[/red]")
+                    return False
+                console.print(f"[cyan]Using latest local release: {release_id}[/cyan]")
+
             # Initialize SQLite index
             index_dir = self.base_dir / "indices"
             index_dir.mkdir(exist_ok=True)
