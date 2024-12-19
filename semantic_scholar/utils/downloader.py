@@ -771,7 +771,7 @@ class S2DatasetDownloader:
                 
                 conn.commit()
 
-    def verify_index_completeness(self) -> bool:
+    def verify_index_completeness(self, datasets: List[str] = None) -> bool:
         """
         Verify that all downloaded files have been completely indexed.
         Uses parallel processing and optimized SQLite access.
@@ -783,6 +783,9 @@ class S2DatasetDownloader:
                 console.print("[yellow]No local datasets found.[/yellow]")
                 return False
 
+            # Use provided datasets or all datasets
+            datasets = datasets or self.datasets_to_download
+
             index_path = self.index_dir / f"{release_id}.db"
             if not index_path.exists():
                 console.print("[red]Index database not found.[/red]")
@@ -791,6 +794,8 @@ class S2DatasetDownloader:
             def verify_file(args) -> Tuple[Path, str, int, int]:
                 """Worker function to verify a single file's index completeness."""
                 file_path, db_path, dataset = args
+                if dataset not in datasets:  # Skip datasets not in our list
+                    return None
                 if file_path.name == 'metadata.json':
                     return None
                     
@@ -820,7 +825,7 @@ class S2DatasetDownloader:
             with Progress() as progress:
                 task = progress.add_task("[cyan]Verifying index completeness...", total=0)
                 
-                for dataset in self.datasets_to_download:
+                for dataset in self.datasets_to_download if datasets is None else datasets:
                     dataset_dir = self.base_dir / release_id / dataset
                     if not dataset_dir.exists():
                         continue
@@ -892,12 +897,15 @@ class S2DatasetDownloader:
         # Sort by date and return the latest
         return sorted(releases)[-1]
 
-    def audit_datasets(self, release_id: str = 'latest'):
+    def audit_datasets(self, release_id: str = 'latest', datasets: List[str] = None):
         """Audit dataset files and indexing status."""
         if release_id == 'latest':
             release_id = self.get_latest_release()
         
         console.print(f"\n[bold cyan]Auditing datasets for release {release_id}...[/bold cyan]")
+        
+        # Use provided datasets or all datasets
+        datasets = datasets or self.datasets_to_download
         
         # Get index database
         index_path = self.base_dir / "indices" / f"{release_id}.db"
@@ -915,7 +923,7 @@ class S2DatasetDownloader:
         )
         
         with sqlite3.connect(str(index_path)) as conn:
-            for dataset in self.datasets_to_download:
+            for dataset in datasets:  # Changed from self.datasets_to_download to datasets
                 try:
                     # Get expected files from API
                     dataset_info = self.get_dataset_info(dataset, release_id)
@@ -1062,8 +1070,8 @@ def main():
     parser.add_argument('--release', default='latest', help='Release ID to download')
     parser.add_argument('--mini', action='store_true', help='Download minimal dataset for testing')
     parser.add_argument('--verify', action='store_true', help='Verify downloaded datasets')
-    parser.add_argument('--verify-index', action='store_true', help='Verify index completeness')
-    parser.add_argument('--audit', action='store_true', help='Audit datasets and indexing status')
+    parser.add_argument('--verify-index', nargs='*', help='Verify index completeness. Optionally specify datasets to verify (e.g. --verify-index papers abstracts)')
+    parser.add_argument('--audit', nargs='*', help='Audit datasets and indexing status. Optionally specify datasets to audit (e.g. --audit papers abstracts)')
     parser.add_argument('--index-only', nargs='*', help='Only run indexing on downloaded files. Optionally specify datasets to index (e.g. --index-only papers abstracts)')
     parser.add_argument('--download-only', action='store_true', help='Only download files without indexing')
     parser.add_argument('--repair', action='store_true', help='Repair/resume incomplete indexes')
@@ -1072,27 +1080,40 @@ def main():
     
     downloader = S2DatasetDownloader()
     
-    if args.count:
-        downloader.count_indices(args.release)
-    elif args.audit:
-        downloader.audit_datasets(args.release)
-    elif args.verify_index:
-        downloader.verify_index_completeness()
-    elif args.verify:
-        downloader.verify_downloads(args.release)
-    elif args.index_only is not None:  # Changed from args.index_only to check if not None
-        # If no specific datasets provided, use all datasets
-        datasets_to_index = args.index_only if args.index_only else downloader.datasets_to_download
-        
-        # Validate dataset names
-        invalid_datasets = [d for d in datasets_to_index if d not in downloader.datasets_to_download]
+    def validate_datasets(dataset_list):
+        """Helper function to validate dataset names and return filtered list"""
+        if not dataset_list:
+            return downloader.datasets_to_download
+            
+        invalid_datasets = [d for d in dataset_list if d not in downloader.datasets_to_download]
         if invalid_datasets:
             console.print(f"[red]Invalid dataset names: {', '.join(invalid_datasets)}[/red]")
             console.print(f"[yellow]Valid datasets are: {', '.join(downloader.datasets_to_download)}[/yellow]")
+            return None
+        return dataset_list
+    
+    if args.count:
+        downloader.count_indices(args.release)
+    elif args.audit is not None:
+        datasets = validate_datasets(args.audit)
+        if datasets is None:
             return
-            
-        console.print(f"[cyan]Indexing datasets: {', '.join(datasets_to_index)}[/cyan]")
-        for dataset in datasets_to_index:
+        console.print(f"[cyan]Auditing datasets: {', '.join(datasets)}[/cyan]")
+        downloader.audit_datasets(args.release, datasets)
+    elif args.verify_index is not None:
+        datasets = validate_datasets(args.verify_index)
+        if datasets is None:
+            return
+        console.print(f"[cyan]Verifying index for datasets: {', '.join(datasets)}[/cyan]")
+        downloader.verify_index_completeness(datasets)
+    elif args.verify:
+        downloader.verify_downloads(args.release)
+    elif args.index_only is not None:
+        datasets = validate_datasets(args.index_only)
+        if datasets is None:
+            return
+        console.print(f"[cyan]Indexing datasets: {', '.join(datasets)}[/cyan]")
+        for dataset in datasets:
             downloader.index_dataset(dataset, args.release, repair=args.repair)
     elif args.download_only:
         # Download all datasets without indexing
