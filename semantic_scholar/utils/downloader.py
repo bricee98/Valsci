@@ -264,53 +264,68 @@ class S2DatasetDownloader:
 
     def _init_sqlite_db(self, index_path: Path):
         """Initialize SQLite database with proper schema and indices."""
+        # First try to clean up any stale WAL files
+        wal_file = index_path.parent / (index_path.name + "-wal")
+        shm_file = index_path.parent / (index_path.name + "-shm")
+        
         try:
-            with sqlite3.connect(str(index_path), timeout=60) as conn:  # Increased timeout
-                # Enable WAL mode for better concurrent access
-                conn.execute("PRAGMA journal_mode=WAL")
-                conn.execute("PRAGMA synchronous=NORMAL")
-                conn.execute("PRAGMA cache_size = -2000000")
-                conn.execute("PRAGMA page_size = 4096")
-                conn.execute("PRAGMA busy_timeout = 60000")  # 60 second busy timeout
+            if wal_file.exists():
+                wal_file.unlink()
+            if shm_file.exists():
+                shm_file.unlink()
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not remove WAL files: {e}[/yellow]")
+
+        max_retries = 3
+        retry_delay = 5
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
+                with sqlite3.connect(str(index_path), timeout=60) as conn:
+                    # Enable WAL mode for better concurrent access
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    conn.execute("PRAGMA synchronous=NORMAL")
+                    conn.execute("PRAGMA cache_size = -2000000")
+                    conn.execute("PRAGMA page_size = 4096")
+                    conn.execute("PRAGMA busy_timeout = 60000")
+                    
+                    # Create tables with proper indices
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS paper_locations (
+                            id TEXT,              
+                            id_type TEXT,         
+                            dataset TEXT,         
+                            file_path TEXT,       
+                            line_offset INTEGER,  
+                            PRIMARY KEY (id, id_type, dataset)
+                        )
+                    """)
+                    
+                    # Create indices for faster lookups
+                    conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_paper_locations_id 
+                        ON paper_locations(id, id_type)
+                    """)
+                    
+                    conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_paper_locations_dataset 
+                        ON paper_locations(dataset)
+                    """)
+                    
+                    conn.commit()
+                    return
+                    
+            except sqlite3.OperationalError as e:
+                last_error = e
+                if "database is locked" in str(e) and attempt < max_retries - 1:
+                    console.print(f"[yellow]Database is locked, retrying in {retry_delay} seconds (attempt {attempt + 1}/{max_retries})[/yellow]")
+                    time.sleep(retry_delay)
+                    continue
+                raise
                 
-                # Create tables with proper indices
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS paper_locations (
-                        id TEXT,              
-                        id_type TEXT,         
-                        dataset TEXT,         
-                        file_path TEXT,       
-                        line_offset INTEGER,  
-                        PRIMARY KEY (id, id_type, dataset)
-                    )
-                """)
-                
-                # Create indices for faster lookups
-                conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_paper_locations_id 
-                    ON paper_locations(id, id_type)
-                """)
-                
-                conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_paper_locations_dataset 
-                    ON paper_locations(dataset)
-                """)
-                
-                conn.commit()
-        except sqlite3.OperationalError as e:
-            if "database is locked" in str(e):
-                # Try to clean up WAL files
-                wal_file = index_path.parent / (index_path.name + "-wal")
-                shm_file = index_path.parent / (index_path.name + "-shm")
-                try:
-                    if wal_file.exists():
-                        wal_file.unlink()
-                    if shm_file.exists():
-                        shm_file.unlink()
-                except Exception:
-                    pass
-                raise RuntimeError(f"Database {index_path} is locked. Try deleting {wal_file} and {shm_file} manually.")
-            raise
+        if last_error:
+            raise RuntimeError(f"Could not initialize database after {max_retries} attempts: {last_error}")
 
     def _get_db_connection(self, index_path: Path) -> sqlite3.Connection:
         """Get a database connection with retry logic."""
@@ -511,91 +526,124 @@ class S2DatasetDownloader:
             index_dir.mkdir(exist_ok=True)
             index_path = index_dir / f"{release_id}.db"
             
+            # Clean up any existing WAL files before starting
+            wal_file = index_path.parent / (index_path.name + "-wal")
+            shm_file = index_path.parent / (index_path.name + "-shm")
+            try:
+                if wal_file.exists():
+                    wal_file.unlink()
+                if shm_file.exists():
+                    shm_file.unlink()
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not remove WAL files: {e}[/yellow]")
+            
             # Initialize database schema if needed
             self._init_sqlite_db(index_path)
             
-            # Get connection with retry logic
-            conn = self._get_db_connection(index_path)
-            try:
-                # First check if the dataset has any entries at all
-                cursor = conn.execute("""
-                    SELECT COUNT(*) 
-                    FROM paper_locations 
-                    WHERE dataset = ?
-                """, (dataset_name,))
-                total_entries = cursor.fetchone()[0]
-                
-                # Get list of processed files and their entry counts
-                processed_files = {}
-                if total_entries > 0:  # Only check processed files if we have entries
+            # Get connection with retry logic and increased timeout
+            max_retries = 3
+            retry_delay = 5
+            last_error = None
+            
+            for attempt in range(max_retries):
+                try:
+                    conn = sqlite3.connect(str(index_path), timeout=120)  # Increased timeout to 2 minutes
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    conn.execute("PRAGMA synchronous=NORMAL")
+                    conn.execute("PRAGMA cache_size=-2000000")
+                    conn.execute("PRAGMA busy_timeout=120000")  # Match the connection timeout
+                    
+                    # First check if the dataset has any entries at all
                     cursor = conn.execute("""
-                        SELECT file_path, COUNT(*) as entry_count 
+                        SELECT COUNT(*) 
                         FROM paper_locations 
                         WHERE dataset = ?
-                        GROUP BY file_path
                     """, (dataset_name,))
-                    for file_path, count in cursor:
-                        processed_files[Path(file_path).name] = count
-
-                # If no files specified, find all JSON files in dataset directory
-                if files is None:
-                    dataset_dir = self.base_dir / release_id / dataset_name
-                    if not dataset_dir.exists():
-                        console.print(f"[yellow]Dataset directory not found: {dataset_dir}[/yellow]")
-                        return False
-                        
-                    files = [
-                        f for f in dataset_dir.glob("*.json")
-                        if f.name != 'metadata.json'
-                    ]
+                    total_entries = cursor.fetchone()[0]
                     
-                    if not files:
-                        console.print(f"[yellow]No JSON files found in {dataset_dir}[/yellow]")
-                        return False
+                    # Get list of processed files and their entry counts
+                    processed_files = {}
+                    if total_entries > 0:  # Only check processed files if we have entries
+                        cursor = conn.execute("""
+                            SELECT file_path, COUNT(*) as entry_count 
+                            FROM paper_locations 
+                            WHERE dataset = ?
+                            GROUP BY file_path
+                        """, (dataset_name,))
+                        for file_path, count in cursor:
+                            processed_files[Path(file_path).name] = count
 
-                files_to_index = []
-                for f in files:
-                    if f.name not in processed_files:
-                        # File never indexed
-                        files_to_index.append(f)
-                        console.print(f"[yellow]File needs indexing: {f.name}[/yellow]")
-                    elif repair:
-                        # Check if file needs repair
-                        entry_count = processed_files[f.name]
-                        if entry_count < 100:  # Arbitrary threshold for suspicious count
-                            console.print(f"[yellow]File {f.name} has suspiciously low entry count ({entry_count}), will re-index[/yellow]")
-                            # Delete existing entries for this file
-                            conn.execute("DELETE FROM paper_locations WHERE file_path = ?", (str(f),))
+                    # If no files specified, find all JSON files in dataset directory
+                    if files is None:
+                        dataset_dir = self.base_dir / release_id / dataset_name
+                        if not dataset_dir.exists():
+                            console.print(f"[yellow]Dataset directory not found: {dataset_dir}[/yellow]")
+                            return False
+                            
+                        files = [
+                            f for f in dataset_dir.glob("*.json")
+                            if f.name != 'metadata.json'
+                        ]
+                        
+                        if not files:
+                            console.print(f"[yellow]No JSON files found in {dataset_dir}[/yellow]")
+                            return False
+
+                    files_to_index = []
+                    for f in files:
+                        if f.name not in processed_files:
+                            # File never indexed
                             files_to_index.append(f)
+                            console.print(f"[yellow]File needs indexing: {f.name}[/yellow]")
+                        elif repair:
+                            # Check if file needs repair
+                            entry_count = processed_files[f.name]
+                            if entry_count < 100:  # Arbitrary threshold for suspicious count
+                                console.print(f"[yellow]File {f.name} has suspiciously low entry count ({entry_count}), will re-index[/yellow]")
+                                # Delete existing entries for this file
+                                conn.execute("DELETE FROM paper_locations WHERE file_path = ?", (str(f),))
+                                files_to_index.append(f)
+                            else:
+                                console.print(f"[green]File {f.name} appears complete ({entry_count} entries)[/green]")
+
+                    if not files_to_index:
+                        if total_entries > 0:
+                            console.print(f"[green]All files already indexed for {dataset_name} ({total_entries:,} total entries)[/green]")
                         else:
-                            console.print(f"[green]File {f.name} appears complete ({entry_count} entries)[/green]")
+                            console.print(f"[yellow]No files to index for {dataset_name} and no existing entries found[/yellow]")
+                        return True
 
-                if not files_to_index:
-                    if total_entries > 0:
-                        console.print(f"[green]All files already indexed for {dataset_name} ({total_entries:,} total entries)[/green]")
-                    else:
-                        console.print(f"[yellow]No files to index for {dataset_name} and no existing entries found[/yellow]")
+                    console.print(f"[cyan]Indexing {len(files_to_index)} files for {dataset_name}...[/cyan]")
+                    
+                    for file_path in files_to_index:
+                        try:
+                            self._index_file(conn, file_path, dataset_name)
+                        except Exception as e:
+                            console.print(f"[red]Error indexing {file_path.name}: {str(e)}[/red]")
+                            if not repair:
+                                raise
+                    
+                    conn.commit()
                     return True
-
-                console.print(f"[cyan]Indexing {len(files_to_index)} files for {dataset_name}...[/cyan]")
-                
-                for file_path in files_to_index:
-                    try:
-                        self._index_file(conn, file_path, dataset_name)
-                    except Exception as e:
-                        console.print(f"[red]Error indexing {file_path.name}: {str(e)}[/red]")
-                        if not repair:
-                            raise
-                
-                conn.commit()
-                return True
-                
-            finally:
-                # Ensure connection is properly closed
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+                    
+                except sqlite3.OperationalError as e:
+                    last_error = e
+                    if "database is locked" in str(e) and attempt < max_retries - 1:
+                        console.print(f"[yellow]Database is locked, retrying in {retry_delay} seconds (attempt {attempt + 1}/{max_retries})[/yellow]")
+                        time.sleep(retry_delay)
+                        # Try to clean up WAL files before retry
+                        try:
+                            if wal_file.exists():
+                                wal_file.unlink()
+                            if shm_file.exists():
+                                shm_file.unlink()
+                        except Exception:
+                            pass
+                        continue
+                    raise
+                    
+            if last_error:
+                raise RuntimeError(f"Could not access database after {max_retries} attempts: {last_error}")
 
         except Exception as e:
             console.print(f"[red]Error indexing dataset {dataset_name}: {str(e)}[/red]")
