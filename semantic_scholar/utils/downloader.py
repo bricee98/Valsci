@@ -215,74 +215,51 @@ class S2DatasetDownloader:
         return True
 
     def download_file(self, url: str, output_dir: Path, desc: str = None) -> Tuple[bool, Optional[Path]]:
-        """Download a file with progress bar and resume capability."""
+        """Download a file using wget with progress bar."""
         try:
             filename = self.get_filename_from_url(url)
             output_path = output_dir / filename
             desc = desc or f"Downloading {filename}"
             
-            # Get file size from server
-            response = self.make_request(url, method='head')
-            total_size = int(response.headers.get('content-length', 0))
-            
-            # Check if file exists and is complete
-            if output_path.exists():
-                if output_path.stat().st_size == total_size:
-                    console.print(f"[green]File {filename} already downloaded completely[/green]")
-                    return True, output_path
-                else:
-                    console.print(f"[yellow]File {filename} exists but is incomplete, resuming...[/yellow]")
-            
-            # Resume download from where we left off
-            headers = {}
-            mode = 'wb'
-            if output_path.exists():
-                current_size = output_path.stat().st_size
-                headers['Range'] = f'bytes={current_size}-'
-                mode = 'ab'
-                initial_size = current_size
+            # If it's a gzipped file, we'll need both paths
+            is_gzipped = filename.endswith('.gz')
+            if is_gzipped:
+                final_path = output_dir / filename.replace('.gz', '.json')
+                if final_path.exists():
+                    console.print(f"[green]File {final_path.name} already exists[/green]")
+                    return True, final_path
             else:
-                initial_size = 0
-            
-            response = self.make_request(url, stream=True, headers=headers)
-            
-            # Handle resume response
-            if response.status_code == 206:  # Partial content
-                total_size = initial_size + int(response.headers.get('content-length', 0))
-            
-            with open(output_path, mode) as f, tqdm(
-                desc=desc,
-                total=total_size,
-                initial=initial_size,
-                unit='iB',
-                unit_scale=True,
-                unit_divisor=1024,
-            ) as pbar:
-                for data in response.iter_content(chunk_size=8192):
-                    size = f.write(data)
-                    pbar.update(size)
-            
-            # Verify final size
-            if output_path.stat().st_size != total_size:
-                console.print(f"[red]Warning: Final file size doesn't match expected size for {filename}[/red]")
-                return False, None
-            
-            # If file is gzipped, extract it
-            if filename.endswith('.gz'):
-                console.print(f"Extracting {filename}...")
-                base_name = filename.replace('.gz', '')
-                if not base_name.endswith('.json'):
-                    base_name += '.json'
+                final_path = output_path
+                if final_path.exists():
+                    console.print(f"[green]File {final_path.name} already exists[/green]")
+                    return True, final_path
+
+            # Download using wget
+            import subprocess
+            try:
+                console.print(f"[cyan]{desc}[/cyan]")
+                subprocess.run(['wget', '-q', '--show-progress', url, '-O', str(output_path)], check=True)
                 
-                output_json_path = output_dir / base_name
-                self._parallel_extract_gzip(output_path, output_json_path)
-                os.remove(output_path)  # Remove the gzipped file
-                return True, output_json_path
-            
-            return True, output_path
-            
+                # Handle gzip extraction if needed
+                if is_gzipped:
+                    console.print(f"[cyan]Extracting {output_path.name}...[/cyan]")
+                    with gzip.open(output_path, 'rb') as gz_in, open(final_path, 'wb') as out:
+                        shutil.copyfileobj(gz_in, out)
+                    # Remove the gzip file
+                    output_path.unlink()
+                    output_path = final_path
+                
+                console.print(f"[green]Successfully downloaded: {output_path}[/green]")
+                return True, output_path
+                
+            except subprocess.CalledProcessError as e:
+                console.print(f"[red]Failed to download file: {e}[/red]")
+                if output_path.exists():
+                    output_path.unlink()
+                return False, None
+                
         except Exception as e:
-            console.print(f"[red]Error downloading {url}: {str(e)}[/red]")
+            console.print(f"[red]Error downloading file: {str(e)}[/red]")
             return False, None
 
     def _init_sqlite_db(self, index_path: Path):
@@ -457,14 +434,11 @@ class S2DatasetDownloader:
                     if dataset_name == 's2orc':
                         url = file_info['url']
                         shard = file_info['shard']
-                        output_path = dataset_dir / f"{shard}.json"
-                        if self.download_file(url, dataset_dir, f"Downloading S2ORC shard {shard}"):
-                            downloaded_files.append(output_path)
+                        success, path = self.download_file(url, dataset_dir, f"Downloading S2ORC shard {shard}")
                     else:
-                        output_path = dataset_dir / self.get_filename_from_url(file_info).replace('.gz', '.json')
                         success, path = self.download_file(file_info, dataset_dir)
-                        if success and path:
-                            downloaded_files.append(path)
+                    if success and path:
+                        downloaded_files.append(path)
 
                 if index and downloaded_files:
                     self.index_dataset(dataset_name, release_id, downloaded_files)
