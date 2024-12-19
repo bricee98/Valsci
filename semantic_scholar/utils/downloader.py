@@ -381,7 +381,6 @@ class S2DatasetDownloader:
                     
                     # Batch insert every 500k entries
                     if len(entries) >= 500000:
-                        conn.execute('BEGIN IMMEDIATE')
                         try:
                             conn.executemany("""
                                 INSERT OR REPLACE INTO paper_locations 
@@ -401,7 +400,6 @@ class S2DatasetDownloader:
             
             # Insert any remaining entries
             if entries:
-                conn.execute('BEGIN IMMEDIATE')
                 try:
                     conn.executemany("""
                         INSERT OR REPLACE INTO paper_locations 
