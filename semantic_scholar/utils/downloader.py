@@ -1155,6 +1155,56 @@ class S2DatasetDownloader:
             console.print(f"[red]Error downloading TLDR file: {str(e)}[/red]")
             return None
 
+    def download_single_paper_file(self, release_id: str = 'latest', force: bool = True) -> Optional[Path]:
+        """
+        Download a single papers dataset file for testing purposes.
+        
+        Args:
+            release_id: Release ID to download from, defaults to latest
+            force: If True, will overwrite existing file
+        
+        Returns:
+            Path to the downloaded file if successful, None otherwise
+        """
+        try:
+            if release_id == 'latest':
+                release_id = self.get_latest_release()
+            
+            console.print(f"\n[cyan]Getting dataset info for papers (release {release_id})...[/cyan]")
+            dataset_info = self.get_dataset_info('papers', release_id)
+            
+            if not dataset_info or not dataset_info.get('files'):
+                console.print("[red]No paper files found in dataset info[/red]")
+                return None
+            
+            # Get just the first file URL
+            file_url = dataset_info['files'][0]
+            
+            # Create the dataset directory
+            dataset_dir = self.base_dir / release_id / 'papers'
+            dataset_dir.mkdir(parents=True, exist_ok=True)
+            
+            # If force is True, remove existing file first
+            output_path = dataset_dir / self.get_filename_from_url(file_url).replace('.gz', '.json')
+            if force and output_path.exists():
+                console.print(f"[yellow]Removing existing file: {output_path}[/yellow]")
+                output_path.unlink()
+            
+            # Download the file
+            console.print(f"\n[cyan]Downloading single papers file...[/cyan]")
+            success, file_path = self.download_file(file_url, dataset_dir)
+            
+            if success and file_path:
+                console.print(f"[green]Successfully downloaded: {file_path}[/green]")
+                return file_path
+            else:
+                console.print("[red]Failed to download papers file[/red]")
+                return None
+            
+        except Exception as e:
+            console.print(f"[red]Error downloading papers file: {str(e)}[/red]")
+            return None
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Download Semantic Scholar datasets')
@@ -1169,6 +1219,7 @@ def main():
     parser.add_argument('--count', action='store_true', help='Show detailed index counts for each file')
     parser.add_argument('--test-citations', action='store_true', help='Download a single citations file for testing')
     parser.add_argument('--test-tldr', action='store_true', help='Download a single TLDR file for testing')
+    parser.add_argument('--test-paper', action='store_true', help='Download a single papers file for testing')
     args = parser.parse_args()
     
     downloader = S2DatasetDownloader()
@@ -1177,6 +1228,8 @@ def main():
         downloader.download_single_tldr_file(args.release)
     elif args.test_citations:
         downloader.download_single_citation_file(args.release)
+    elif args.test_paper:
+        downloader.download_single_paper_file(args.release)
     elif args.count:
         downloader.count_indices(args.release)
     elif args.audit:
