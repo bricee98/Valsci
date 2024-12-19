@@ -85,7 +85,8 @@ class S2DatasetDownloader:
                 ('citingcorpusid', 'corpus_id'),
                 ('citedcorpusid', 'corpus_id')
             ],
-            'authors': [('authorid', 'author_id')]
+            'authors': [('authorid', 'author_id')],
+            'tldrs': [('corpusid', 'corpus_id')]
         }
 
     def make_request(self, url: str, method: str = 'get', max_retries: int = 5, **kwargs) -> requests.Response:
