@@ -239,29 +239,31 @@ class S2Searcher:
         if not self.has_local_data:
             return None
         
-        index_path = self.base_dir / "indices" / f"{self.current_release}.db"
+        index_path = self.index_dir / f"{self.current_release}.db"
         if not index_path.exists():
             return None
 
         try:
             with sqlite3.connect(str(index_path)) as conn:
+                # Match the schema from downloader.py
                 if id_type:
-                    # Look up specific ID type
                     cursor = conn.execute(
                         """
                         SELECT file_path, line_offset 
                         FROM paper_locations 
                         WHERE id = ? AND id_type = ? AND dataset = ?
+                        LIMIT 1
                         """,
                         (str(item_id).lower(), id_type, dataset)
                     )
                 else:
-                    # Try both paper_id and corpus_id
+                    # Try both paper_id and corpus_id if id_type not specified
                     cursor = conn.execute(
                         """
                         SELECT file_path, line_offset 
                         FROM paper_locations 
                         WHERE id = ? AND dataset = ?
+                        LIMIT 1
                         """,
                         (str(item_id).lower(), dataset)
                     )

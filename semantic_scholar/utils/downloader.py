@@ -461,30 +461,48 @@ class S2DatasetDownloader:
             self._init_sqlite_db(index_path)
             
             with sqlite3.connect(str(index_path)) as conn:
-                # Get list of processed files and their entry counts
-                processed_files = {}
+                # First check if the dataset has any entries at all
                 cursor = conn.execute("""
-                    SELECT file_path, COUNT(*) as entry_count 
+                    SELECT COUNT(*) 
                     FROM paper_locations 
                     WHERE dataset = ?
-                    GROUP BY file_path
                 """, (dataset_name,))
-                for file_path, count in cursor:
-                    processed_files[Path(file_path).name] = count
+                total_entries = cursor.fetchone()[0]
+                
+                # Get list of processed files and their entry counts
+                processed_files = {}
+                if total_entries > 0:  # Only check processed files if we have entries
+                    cursor = conn.execute("""
+                        SELECT file_path, COUNT(*) as entry_count 
+                        FROM paper_locations 
+                        WHERE dataset = ?
+                        GROUP BY file_path
+                    """, (dataset_name,))
+                    for file_path, count in cursor:
+                        processed_files[Path(file_path).name] = count
 
                 # If no files specified, find all JSON files in dataset directory
                 if files is None:
                     dataset_dir = self.base_dir / release_id / dataset_name
+                    if not dataset_dir.exists():
+                        console.print(f"[yellow]Dataset directory not found: {dataset_dir}[/yellow]")
+                        return False
+                        
                     files = [
                         f for f in dataset_dir.glob("*.json")
                         if f.name != 'metadata.json'
                     ]
+                    
+                    if not files:
+                        console.print(f"[yellow]No JSON files found in {dataset_dir}[/yellow]")
+                        return False
 
                 files_to_index = []
                 for f in files:
                     if f.name not in processed_files:
                         # File never indexed
                         files_to_index.append(f)
+                        console.print(f"[yellow]File needs indexing: {f.name}[/yellow]")
                     elif repair:
                         # Check if file needs repair
                         entry_count = processed_files[f.name]
@@ -497,7 +515,10 @@ class S2DatasetDownloader:
                             console.print(f"[green]File {f.name} appears complete ({entry_count} entries)[/green]")
 
                 if not files_to_index:
-                    console.print(f"[green]All files already indexed for {dataset_name}[/green]")
+                    if total_entries > 0:
+                        console.print(f"[green]All files already indexed for {dataset_name} ({total_entries:,} total entries)[/green]")
+                    else:
+                        console.print(f"[yellow]No files to index for {dataset_name} and no existing entries found[/yellow]")
                     return True
 
                 console.print(f"[cyan]Indexing {len(files_to_index)} files for {dataset_name}...[/cyan]")

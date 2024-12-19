@@ -202,30 +202,30 @@ def test_index_functionality():
     searcher = S2Searcher()
     
     # First verify index exists
-    index_path = searcher.base_dir / "indices" / f"{searcher.current_release}.db"
+    index_path = searcher.index_dir / f"{searcher.current_release}.db"
     if not index_path.exists():
         console.print("[red]No index found. Run downloader first.[/red]")
         return False
 
-    # Test queries using sample data from ex_sample_lines.json
+    # Test queries using sample data
     test_cases = [
         {
             'dataset': 'papers',
-            'id': '71452834',  # Sample paper ID
+            'id': '71452834',
             'id_type': 'corpus_id',
-            'expected_fields': {'title', 'authors'}
+            'expected_fields': {'paperId', 'title', 'authors'}
         },
         {
-            'dataset': 'abstracts',
-            'id': '150777384',  # Sample abstract ID
+            'dataset': 'abstracts', 
+            'id': '150777384',
             'id_type': 'corpus_id',
             'expected_fields': {'abstract'}
         },
         {
             'dataset': 's2orc',
-            'id': '16385537',  # Sample S2ORC ID
+            'id': '16385537',
             'id_type': 'corpus_id',
-            'expected_fields': {'content'}
+            'expected_fields': {'text', 'content'}
         }
     ]
 
@@ -302,12 +302,12 @@ def test_index_functionality():
     # Get a list of IDs from the index
     with sqlite3.connect(str(index_path)) as conn:
         cursor = conn.execute("""
-            SELECT DISTINCT id, id_type 
+            SELECT id, id_type 
             FROM paper_locations 
             WHERE dataset = 'papers'
             LIMIT 100
         """)
-        ids = [(row[0], row[1]) for row in cursor.fetchall()]
+        ids = cursor.fetchall()
 
     if ids:
         # Time lookups for random IDs
