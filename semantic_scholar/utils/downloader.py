@@ -264,35 +264,73 @@ class S2DatasetDownloader:
 
     def _init_sqlite_db(self, index_path: Path):
         """Initialize SQLite database with proper schema and indices."""
-        with sqlite3.connect(str(index_path)) as conn:
-            # Enable WAL mode for better concurrent access
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA cache_size = -2000000")
-            conn.execute("PRAGMA page_size = 4096")
-            
-            # Create tables with proper indices
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS paper_locations (
-                    id TEXT,              
-                    id_type TEXT,         
-                    dataset TEXT,         
-                    file_path TEXT,       
-                    line_offset INTEGER,  
-                    PRIMARY KEY (id, id_type, dataset)
-                )
-            """)
-            
-            # Create indices for faster lookups
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_paper_locations_id 
-                ON paper_locations(id, id_type)
-            """)
-            
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_paper_locations_dataset 
-                ON paper_locations(dataset)
-            """)
+        try:
+            with sqlite3.connect(str(index_path), timeout=60) as conn:  # Increased timeout
+                # Enable WAL mode for better concurrent access
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                conn.execute("PRAGMA cache_size = -2000000")
+                conn.execute("PRAGMA page_size = 4096")
+                conn.execute("PRAGMA busy_timeout = 60000")  # 60 second busy timeout
+                
+                # Create tables with proper indices
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS paper_locations (
+                        id TEXT,              
+                        id_type TEXT,         
+                        dataset TEXT,         
+                        file_path TEXT,       
+                        line_offset INTEGER,  
+                        PRIMARY KEY (id, id_type, dataset)
+                    )
+                """)
+                
+                # Create indices for faster lookups
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_paper_locations_id 
+                    ON paper_locations(id, id_type)
+                """)
+                
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_paper_locations_dataset 
+                    ON paper_locations(dataset)
+                """)
+                
+                conn.commit()
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e):
+                # Try to clean up WAL files
+                wal_file = index_path.parent / (index_path.name + "-wal")
+                shm_file = index_path.parent / (index_path.name + "-shm")
+                try:
+                    if wal_file.exists():
+                        wal_file.unlink()
+                    if shm_file.exists():
+                        shm_file.unlink()
+                except Exception:
+                    pass
+                raise RuntimeError(f"Database {index_path} is locked. Try deleting {wal_file} and {shm_file} manually.")
+            raise
+
+    def _get_db_connection(self, index_path: Path) -> sqlite3.Connection:
+        """Get a database connection with retry logic."""
+        max_retries = 3
+        retry_delay = 5  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                conn = sqlite3.connect(str(index_path), timeout=60)
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                conn.execute("PRAGMA cache_size = -2000000")
+                conn.execute("PRAGMA busy_timeout = 60000")  # 60 second busy timeout
+                return conn
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e) and attempt < max_retries - 1:
+                    console.print(f"[yellow]Database is locked, retrying in {retry_delay} seconds (attempt {attempt + 1}/{max_retries})[/yellow]")
+                    time.sleep(retry_delay)
+                    continue
+                raise
 
     def _index_file(self, conn: sqlite3.Connection, file_path: Path, dataset: str):
         """Single-threaded file indexing with robust error handling."""
@@ -476,7 +514,9 @@ class S2DatasetDownloader:
             # Initialize database schema if needed
             self._init_sqlite_db(index_path)
             
-            with sqlite3.connect(str(index_path)) as conn:
+            # Get connection with retry logic
+            conn = self._get_db_connection(index_path)
+            try:
                 # First check if the dataset has any entries at all
                 cursor = conn.execute("""
                     SELECT COUNT(*) 
@@ -550,6 +590,13 @@ class S2DatasetDownloader:
                 conn.commit()
                 return True
                 
+            finally:
+                # Ensure connection is properly closed
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
         except Exception as e:
             console.print(f"[red]Error indexing dataset {dataset_name}: {str(e)}[/red]")
             return False
