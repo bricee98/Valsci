@@ -1148,6 +1148,20 @@ class S2DatasetDownloader:
         
             console.print(table)
 
+    def _verify_db_name(self):
+        """Verify index database has correct name."""
+        index_dir = self.base_dir / "indices"
+        if not index_dir.exists():
+            return
+        
+        db_files = list(index_dir.glob("*.db"))
+        expected_name = f"{self._get_latest_local_release()}.db"
+        
+        for db_file in db_files:
+            if db_file.name != expected_name:
+                console.print(f"[yellow]Warning: Found database with incorrect name: {db_file.name}[/yellow]")
+                console.print(f"[yellow]Expected name: {expected_name}[/yellow]")
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Download Semantic Scholar datasets')
