@@ -329,11 +329,24 @@ class S2Searcher:
             with sqlite3.connect(str(index_path)) as conn:
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS paper_locations (
-                        corpus_id TEXT PRIMARY KEY,
-                        dataset TEXT,
-                        file_path TEXT,
-                        line_offset INTEGER
+                        id TEXT,              
+                        id_type TEXT,         
+                        dataset TEXT,         
+                        file_path TEXT,       
+                        line_offset INTEGER,  
+                        PRIMARY KEY (id, id_type, dataset)
                     )
+                """)
+                
+                # Create indices for faster lookups
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_paper_locations_id 
+                    ON paper_locations(id, id_type)
+                """)
+                
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_paper_locations_dataset 
+                    ON paper_locations(dataset)
                 """)
                 
                 # Index papers, abstracts, and s2orc
@@ -354,8 +367,8 @@ class S2Searcher:
                                     corpus_id = str(item.get('corpusid')).lower()
                                     if corpus_id:
                                         conn.execute(
-                                            "INSERT OR REPLACE INTO paper_locations VALUES (?, ?, ?, ?)",
-                                            (corpus_id, dataset, str(file_path), offset)
+                                            "INSERT OR REPLACE INTO paper_locations VALUES (?, ?, ?, ?, ?)",
+                                            (str(item.get('id')).lower(), str(item.get('id_type')).lower(), str(item.get('dataset')).lower(), str(file_path), offset)
                                         )
                                 except json.JSONDecodeError:
                                     pass

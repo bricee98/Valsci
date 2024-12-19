@@ -211,24 +211,28 @@ def test_index_functionality():
     test_cases = [
         {
             'dataset': 'papers',
-            'corpus_id': '71452834',  # From sample papers line
+            'id': '71452834',  # Sample paper ID
+            'id_type': 'corpus_id',
             'expected_fields': {'title', 'authors'}
         },
         {
             'dataset': 'abstracts',
-            'corpus_id': '150777384',  # From sample abstracts line
+            'id': '150777384',  # Sample abstract ID
+            'id_type': 'corpus_id', 
             'expected_fields': {'abstract'}
         },
         {
             'dataset': 's2orc',
-            'corpus_id': '16385537',  # From sample s2orc line
+            'id': '16385537',  # Sample S2ORC ID
+            'id_type': 'corpus_id',
             'expected_fields': {'content'}
         }
     ]
 
     results_table = Table(title="Index Test Results")
     results_table.add_column("Dataset", style="cyan")
-    results_table.add_column("Corpus ID", style="blue")
+    results_table.add_column("ID", style="blue")
+    results_table.add_column("ID Type", style="yellow")
     results_table.add_column("Found", style="green")
     results_table.add_column("Fields Present", style="yellow")
     results_table.add_column("Lookup Time (ms)", style="magenta")
@@ -236,7 +240,8 @@ def test_index_functionality():
     all_passed = True
     for test in test_cases:
         start_time = time.time()
-        result = searcher._find_in_dataset(test['dataset'], test['corpus_id'])
+        # Use id_type in lookup
+        result = searcher._find_in_dataset(test['dataset'], test['id'], test['id_type'])
         lookup_time = (time.time() - start_time) * 1000  # Convert to ms
 
         if result:
@@ -251,7 +256,8 @@ def test_index_functionality():
 
         results_table.add_row(
             test['dataset'],
-            test['corpus_id'],
+            test['id'],
+            test['id_type'],
             status,
             fields_str,
             f"{lookup_time:.2f}"
@@ -259,34 +265,72 @@ def test_index_functionality():
 
     console.print(results_table)
 
+    # Add specific test for paper full text lookup
+    console.print("\n[cyan]Testing full text lookup...[/cyan]")
+    test_paper_id = test_cases[0]['id']  # Use first test paper ID
+    
+    full_text_table = Table(title="Full Text Lookup Test")
+    full_text_table.add_column("Paper ID", style="blue")
+    full_text_table.add_column("Content Found", style="green")
+    full_text_table.add_column("Content Type", style="yellow")
+    full_text_table.add_column("Content Length", style="magenta")
+
+    # Test get_paper_content
+    content = searcher.get_paper_content(test_paper_id)
+    if content:
+        content_found = "✓"
+        content_type = content['source']
+        content_length = len(content['text'])
+    else:
+        content_found = "✗"
+        content_type = "N/A"
+        content_length = 0
+        all_passed = False
+
+    full_text_table.add_row(
+        test_paper_id,
+        content_found,
+        content_type,
+        str(content_length)
+    )
+    
+    console.print(full_text_table)
+
     # Test random access performance
     console.print("\n[cyan]Testing random access performance...[/cyan]")
     
-    # Get a list of corpus IDs from the index
+    # Get a list of IDs from the index
     with sqlite3.connect(str(index_path)) as conn:
-        cursor = conn.execute("SELECT DISTINCT corpus_id FROM paper_locations LIMIT 100")
-        corpus_ids = [row[0] for row in cursor.fetchall()]
+        cursor = conn.execute("""
+            SELECT DISTINCT id, id_type 
+            FROM paper_locations 
+            WHERE dataset = 'papers'
+            LIMIT 100
+        """)
+        ids = [(row[0], row[1]) for row in cursor.fetchall()]
 
-    if corpus_ids:
-        # Time lookups for random corpus IDs
+    if ids:
+        # Time lookups for random IDs
         import random
-        test_size = min(10, len(corpus_ids))
+        test_size = min(10, len(ids))
         total_time = 0
         
         perf_table = Table(title="Random Access Performance")
-        perf_table.add_column("Corpus ID", style="blue")
+        perf_table.add_column("ID", style="blue")
+        perf_table.add_column("ID Type", style="yellow")
         perf_table.add_column("Found", style="green")
         perf_table.add_column("Time (ms)", style="yellow")
 
         for _ in range(test_size):
-            corpus_id = random.choice(corpus_ids)
+            test_id, id_type = random.choice(ids)
             start_time = time.time()
-            result = searcher._find_in_dataset('papers', corpus_id)
+            result = searcher._find_in_dataset('papers', test_id, id_type)
             lookup_time = (time.time() - start_time) * 1000
             total_time += lookup_time
 
             perf_table.add_row(
-                corpus_id,
+                test_id,
+                id_type,
                 "✓" if result else "✗",
                 f"{lookup_time:.2f}"
             )
