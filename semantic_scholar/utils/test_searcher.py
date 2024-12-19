@@ -218,7 +218,7 @@ def test_index_functionality():
         {
             'dataset': 'abstracts',
             'id': '150777384',  # Sample abstract ID
-            'id_type': 'corpus_id', 
+            'id_type': 'corpus_id',
             'expected_fields': {'abstract'}
         },
         {
