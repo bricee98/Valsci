@@ -404,17 +404,13 @@ class S2DatasetDownloader:
             release_id = self.get_latest_release()
         
         try:
-            # Store current dataset context for credential refresh
-            self._current_dataset = dataset_name
-            self._current_release = release_id
-            
-            # Get fresh dataset info once at the start
+            # Get dataset info
             console.print(f"\n[cyan]Getting dataset info for {dataset_name}...[/cyan]")
             dataset_info = self.get_dataset_info(dataset_name, release_id)
             if not dataset_info:
                 return False
             
-            # Save metadata immediately to avoid re-fetching
+            # Save metadata
             dataset_dir = self.base_dir / release_id / dataset_name
             os.makedirs(dataset_dir, exist_ok=True)
             
@@ -422,42 +418,53 @@ class S2DatasetDownloader:
             with open(metadata_path, 'w') as f:
                 json.dump(dataset_info, f, indent=2)
 
-            downloaded_files = []
-            
-            # Use saved dataset info instead of re-fetching
+            # First check which files we need
+            missing_files = []
             if dataset_name == 's2orc':
                 files = dataset_info['files'][:1] if mini else dataset_info['files']
                 console.print(f"\n[bold]Checking {len(files)} files for {dataset_name}...[/bold]")
                 for file_info in files:
-                    url = file_info['url']
-                    shard = file_info['shard']
-                    output_path = dataset_dir / f"{shard}.json"
-                    
+                    output_path = dataset_dir / f"{file_info['shard']}.json"
                     if output_path.exists():
-                        size = output_path.stat().st_size / (1024 * 1024)  # Convert to MB
+                        size = output_path.stat().st_size / (1024 * 1024)
                         console.print(f"[green]✓ Already exists ({size:.1f} MB): {output_path.name}[/green]")
-                        downloaded_files.append(output_path)
                     else:
                         console.print(f"[yellow]→ Needs download: {output_path.name}[/yellow]")
-                        if self.download_file(url, dataset_dir, f"Downloading S2ORC shard {shard}"):
-                            downloaded_files.append(output_path)
+                        missing_files.append(file_info)
             else:
                 files_to_download = dataset_info['files'][:1] if mini else dataset_info['files']
                 console.print(f"\n[bold]Checking {len(files_to_download)} files for {dataset_name}...[/bold]")
                 for file_url in files_to_download:
                     output_path = dataset_dir / self.get_filename_from_url(file_url).replace('.gz', '.json')
                     if output_path.exists():
-                        size = output_path.stat().st_size / (1024 * 1024)  # Convert to MB
+                        size = output_path.stat().st_size / (1024 * 1024)
                         console.print(f"[green]✓ Already exists ({size:.1f} MB): {output_path.name}[/green]")
-                        downloaded_files.append(output_path)
                     else:
                         console.print(f"[yellow]→ Needs download: {output_path.name}[/yellow]")
-                        success, path = self.download_file(file_url, dataset_dir)
+                        missing_files.append(file_url)
+
+            # If we have missing files, get fresh dataset info and download them
+            if missing_files:
+                console.print(f"\n[cyan]Getting fresh download URLs for {len(missing_files)} missing files...[/cyan]")
+                dataset_info = self.get_dataset_info(dataset_name, release_id)
+                
+                # Download missing files
+                downloaded_files = []
+                for file_info in missing_files:
+                    if dataset_name == 's2orc':
+                        url = file_info['url']
+                        shard = file_info['shard']
+                        output_path = dataset_dir / f"{shard}.json"
+                        if self.download_file(url, dataset_dir, f"Downloading S2ORC shard {shard}"):
+                            downloaded_files.append(output_path)
+                    else:
+                        output_path = dataset_dir / self.get_filename_from_url(file_info).replace('.gz', '.json')
+                        success, path = self.download_file(file_info, dataset_dir)
                         if success and path:
                             downloaded_files.append(path)
 
-            if index:
-                self.index_dataset(dataset_name, release_id, downloaded_files)
+                if index and downloaded_files:
+                    self.index_dataset(dataset_name, release_id, downloaded_files)
                 
             return True
                 
