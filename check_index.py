@@ -1,6 +1,7 @@
 import sqlite3
 from pathlib import Path
 import sys
+import time
 
 def explore_index(release_id='latest'):
     # Find the latest release if not specified
@@ -17,74 +18,94 @@ def explore_index(release_id='latest'):
     if not db_path.exists():
         print(f"No index database found at {db_path}")
         return
-        
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
     
-    # List all tables
-    print("\nTables in database:")
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    tables = cursor.fetchall()
-    for table in tables:
-        print(f"\nTable: {table[0]}")
-        # Get table schema
-        cursor.execute(f"PRAGMA table_info({table[0]})")
-        columns = cursor.fetchall()
-        print("Columns:")
-        for col in columns:
-            print(f"  {col[1]} ({col[2]})")
-    
-    # Get total count
-    cursor.execute("SELECT COUNT(*) FROM paper_locations")
-    total = cursor.fetchone()[0]
-    print(f"\nTotal index entries: {total:,}")
-    
-    # Get counts by dataset
-    print("\nEntries by dataset:")
-    cursor.execute("""
-        SELECT dataset, COUNT(*) as count 
-        FROM paper_locations 
-        GROUP BY dataset
-    """)
-    for dataset, count in cursor.fetchall():
-        print(f"{dataset}: {count:,}")
-    
-    # Sample some entries
-    print("\nSample entries:")
-    cursor.execute("""
-        SELECT id, id_type, dataset, file_path, line_offset 
-        FROM paper_locations 
-        LIMIT 5
-    """)
-    for row in cursor.fetchall():
-        print(f"ID: {row[0]}")
-        print(f"Type: {row[1]}")
-        print(f"Dataset: {row[2]}")
-        print(f"File: {Path(row[3]).name}")
-        print(f"Offset: {row[4]}")
-        print()
-    
-    # Interactive query mode
-    while True:
-        print("\nEnter a paper ID to look up (or 'q' to quit):")
-        paper_id = input().strip()
-        if paper_id.lower() == 'q':
+    # Try to connect with timeout and read-only mode
+    max_attempts = 10
+    for attempt in range(max_attempts):
+        try:
+            conn = sqlite3.connect(str(db_path), timeout=30)  # 30 second timeout
+            # Set to read-only mode
+            conn.execute("PRAGMA query_only = ON")
+            # Use WAL mode for better concurrency
+            conn.execute("PRAGMA journal_mode = WAL")
+            cursor = conn.cursor()
             break
-            
-        cursor.execute("""
-            SELECT dataset, file_path, line_offset 
-            FROM paper_locations 
-            WHERE id = ?
-        """, (paper_id,))
-        results = cursor.fetchall()
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e):
+                if attempt < max_attempts - 1:
+                    print(f"Database is locked, waiting... (attempt {attempt + 1}/{max_attempts})")
+                    time.sleep(3)  # Wait 3 seconds between attempts
+                    continue
+            raise
+    
+    try:
+        # List all tables
+        print("\nTables in database:")
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = cursor.fetchall()
+        for table in tables:
+            print(f"\nTable: {table[0]}")
+            # Get table schema
+            cursor.execute(f"PRAGMA table_info({table[0]})")
+            columns = cursor.fetchall()
+            print("Columns:")
+            for col in columns:
+                print(f"  {col[1]} ({col[2]})")
         
-        if not results:
-            print("Paper ID not found in index")
-        else:
-            for dataset, file_path, offset in results:
-                print(f"\nFound in {dataset}")
-                print(f"File: {Path(file_path).name}")
-                print(f"Offset: {offset}")
+        # Get total count
+        cursor.execute("SELECT COUNT(*) FROM paper_locations")
+        total = cursor.fetchone()[0]
+        print(f"\nTotal index entries: {total:,}")
+        
+        # Get counts by dataset
+        print("\nEntries by dataset:")
+        cursor.execute("""
+            SELECT dataset, COUNT(*) as count 
+            FROM paper_locations 
+            GROUP BY dataset
+        """)
+        for dataset, count in cursor.fetchall():
+            print(f"{dataset}: {count:,}")
+        
+        # Sample some entries
+        print("\nSample entries:")
+        cursor.execute("""
+            SELECT id, id_type, dataset, file_path, line_offset 
+            FROM paper_locations 
+            LIMIT 5
+        """)
+        for row in cursor.fetchall():
+            print(f"ID: {row[0]}")
+            print(f"Type: {row[1]}")
+            print(f"Dataset: {row[2]}")
+            print(f"File: {Path(row[3]).name}")
+            print(f"Offset: {row[4]}")
+            print()
+        
+        # Interactive query mode
+        while True:
+            print("\nEnter a paper ID to look up (or 'q' to quit):")
+            paper_id = input().strip()
+            if paper_id.lower() == 'q':
+                break
+                
+            cursor.execute("""
+                SELECT dataset, file_path, line_offset 
+                FROM paper_locations 
+                WHERE id = ?
+            """, (paper_id,))
+            results = cursor.fetchall()
+            
+            if not results:
+                print("Paper ID not found in index")
+            else:
+                for dataset, file_path, offset in results:
+                    print(f"\nFound in {dataset}")
+                    print(f"File: {Path(file_path).name}")
+                    print(f"Offset: {offset}")
+    
+    finally:
+        conn.close()
 
 if __name__ == '__main__':
     release_id = sys.argv[1] if len(sys.argv) > 1 else 'latest'
