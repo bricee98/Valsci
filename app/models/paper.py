@@ -12,24 +12,25 @@ class Paper(BaseModel):
     citation_count: Optional[int] = 0
     is_open_access: Optional[bool] = False
     fields_of_study: List[str] = []
+    references: List[str] = []
 
     class Config:
         allow_population_by_dict = True
 
     @classmethod
-    def from_s2_paper(cls, s2_paper: Dict) -> 'Paper':
+    def from_s2_paper(cls, paper_data: dict):
         """Create a Paper instance from Semantic Scholar paper data."""
         return cls(
-            paper_id=s2_paper['paperId'],
-            title=s2_paper.get('title', ''),
-            abstract=s2_paper.get('abstract', ''),
-            authors=s2_paper.get('authors', []),
-            year=s2_paper.get('year'),
-            journal=s2_paper.get('venue', ''),
-            url=s2_paper.get('url', ''),
-            citation_count=s2_paper.get('citation_count', 0),
-            is_open_access=s2_paper.get('isOpenAccess', False),
-            fields_of_study=s2_paper.get('fieldsOfStudy', [])
+            paper_id=paper_data.get('paper_id'),
+            title=paper_data.get('title', ''),
+            abstract=paper_data.get('abstract', ''),
+            authors=paper_data.get('authors', []),
+            year=paper_data.get('year'),
+            journal=paper_data.get('venue', ''),
+            url=paper_data.get('url', ''),
+            citation_count=paper_data.get('citation_count', 0),
+            fields_of_study=paper_data.get('fields_of_study', []),
+            references=paper_data.get('references', [])
         )
 
 class PaperMetadata:

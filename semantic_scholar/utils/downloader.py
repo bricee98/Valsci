@@ -1056,139 +1056,6 @@ class S2DatasetDownloader:
         
             console.print(table)
 
-    def download_single_citation_file(self, release_id: str = 'latest') -> Optional[Path]:
-        """
-        Download a single citations dataset file for testing purposes.
-        Returns the path to the downloaded file if successful, None otherwise.
-        """
-        try:
-            if release_id == 'latest':
-                release_id = self.get_latest_release()
-            
-            console.print(f"\n[cyan]Getting dataset info for citations (release {release_id})...[/cyan]")
-            dataset_info = self.get_dataset_info('citations', release_id)
-            
-            if not dataset_info or not dataset_info.get('files'):
-                console.print("[red]No citation files found in dataset info[/red]")
-                return None
-            
-            # Get just the first file URL
-            file_url = dataset_info['files'][0]
-            
-            # Create the dataset directory
-            dataset_dir = self.base_dir / release_id / 'citations'
-            dataset_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Download the file
-            console.print(f"\n[cyan]Downloading single citations file...[/cyan]")
-            success, file_path = self.download_file(file_url, dataset_dir)
-            
-            if success and file_path:
-                console.print(f"[green]Successfully downloaded: {file_path}[/green]")
-                return file_path
-            else:
-                console.print("[red]Failed to download citations file[/red]")
-                return None
-            
-        except Exception as e:
-            console.print(f"[red]Error downloading citations file: {str(e)}[/red]")
-            return None
-
-    def download_single_tldr_file(self, release_id: str = 'latest') -> Optional[Path]:
-        """
-        Download a single TLDR dataset file for testing purposes.
-        Returns the path to the downloaded file if successful, None otherwise.
-        """
-        try:
-            if release_id == 'latest':
-                release_id = self.get_latest_release()
-            
-            console.print(f"\n[cyan]Getting dataset info for TLDRs (release {release_id})...[/cyan]")
-            dataset_info = self.get_dataset_info('tldrs', release_id)
-            
-            if not dataset_info or not dataset_info.get('files'):
-                console.print("[red]No TLDR files found in dataset info[/red]")
-                return None
-            
-            # Get just the first file URL
-            file_url = dataset_info['files'][0]
-            
-            # Create the dataset directory
-            dataset_dir = self.base_dir / release_id / 'tldrs'
-            dataset_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Download the file
-            console.print(f"\n[cyan]Downloading single TLDR file...[/cyan]")
-            success, file_path = self.download_file(file_url, dataset_dir)
-            
-            if success and file_path:
-                console.print(f"[green]Successfully downloaded: {file_path}[/green]")
-                return file_path
-            else:
-                console.print("[red]Failed to download TLDR file[/red]")
-                return None
-            
-        except Exception as e:
-            console.print(f"[red]Error downloading TLDR file: {str(e)}[/red]")
-            return None
-
-    def download_single_paper_file(self, release_id: str = 'latest', force: bool = True) -> Optional[Path]:
-        """
-        Download a single papers dataset file for testing purposes using wget.
-        """
-        try:
-            if release_id == 'latest':
-                release_id = self.get_latest_release()
-            
-            console.print(f"\n[cyan]Getting dataset info for papers (release {release_id})...[/cyan]")
-            dataset_info = self.get_dataset_info('papers', release_id)
-            
-            if not dataset_info or not dataset_info.get('files'):
-                console.print("[red]No paper files found in dataset info[/red]")
-                return None
-            
-            # Get just the first file URL
-            file_url = dataset_info['files'][0]
-            
-            # Create the dataset directory
-            dataset_dir = self.base_dir / release_id / 'papers'
-            dataset_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Get output path
-            output_path = dataset_dir / self.get_filename_from_url(file_url).replace('.gz', '.json')
-            gz_path = dataset_dir / self.get_filename_from_url(file_url)
-            
-            if force and output_path.exists():
-                console.print(f"[yellow]Removing existing file: {output_path}[/yellow]")
-                output_path.unlink()
-            
-            # Download using wget
-            console.print(f"\n[cyan]Downloading single papers file...[/cyan]")
-            import subprocess
-            
-            try:
-                # Download with wget, which handles pre-signed URLs better
-                subprocess.run(['wget', '-q', '--show-progress', file_url, '-O', str(gz_path)], check=True)
-                
-                # Extract the gzip file
-                console.print(f"[cyan]Extracting {gz_path.name}...[/cyan]")
-                with gzip.open(gz_path, 'rb') as gz_in, open(output_path, 'wb') as out:
-                    shutil.copyfileobj(gz_in, out)
-                
-                # Remove the gzip file
-                gz_path.unlink()
-                
-                console.print(f"[green]Successfully downloaded and extracted: {output_path}[/green]")
-                return output_path
-                
-            except subprocess.CalledProcessError as e:
-                console.print(f"[red]Failed to download file: {e}[/red]")
-                return None
-                
-        except Exception as e:
-            console.print(f"[red]Error downloading papers file: {str(e)}[/red]")
-            return None
-
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Download Semantic Scholar datasets')
@@ -1201,20 +1068,11 @@ def main():
     parser.add_argument('--download-only', action='store_true', help='Only download files without indexing')
     parser.add_argument('--repair', action='store_true', help='Repair/resume incomplete indexes')
     parser.add_argument('--count', action='store_true', help='Show detailed index counts for each file')
-    parser.add_argument('--test-citations', action='store_true', help='Download a single citations file for testing')
-    parser.add_argument('--test-tldr', action='store_true', help='Download a single TLDR file for testing')
-    parser.add_argument('--test-paper', action='store_true', help='Download a single papers file for testing')
     args = parser.parse_args()
     
     downloader = S2DatasetDownloader()
     
-    if args.test_tldr:
-        downloader.download_single_tldr_file(args.release)
-    elif args.test_citations:
-        downloader.download_single_citation_file(args.release)
-    elif args.test_paper:
-        downloader.download_single_paper_file(args.release)
-    elif args.count:
+    if args.count:
         downloader.count_indices(args.release)
     elif args.audit:
         downloader.audit_datasets(args.release)

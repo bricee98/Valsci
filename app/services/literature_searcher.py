@@ -31,8 +31,17 @@ class LiteratureSearcher:
             # Save search queries for reporting
             self.saved_search_queries = self.s2_searcher.saved_search_queries
             
-            # Convert to Paper objects
-            papers = [Paper.from_s2_paper(paper) for paper in raw_papers]
+            # Convert to Paper objects with error handling
+            papers = []
+            for raw_paper in raw_papers:
+                try:
+                    # Ensure fields_of_study is a list
+                    if raw_paper.get('fields_of_study') is None:
+                        raw_paper['fields_of_study'] = []
+                    papers.append(Paper.from_s2_paper(raw_paper))
+                except Exception as e:
+                    logger.error(f"Error converting paper {raw_paper.get('paper_id')}: {str(e)}")
+                    continue
             
             # Sort by citation count (most cited first)
             papers.sort(key=lambda p: p.citation_count or 0, reverse=True)
@@ -46,11 +55,18 @@ class LiteratureSearcher:
     def fetch_paper_content(self, paper: Paper, claim: Claim) -> Tuple[str, str]:
         """Fetch the full text content of a paper."""
         try:
+            # Add error logging
+            logger.info(f"Fetching content for paper ID: {paper.paper_id}")
+            
             content = self.s2_searcher.get_paper_content(paper.paper_id)
             if content:
+                logger.info(f"Successfully retrieved content for paper ID: {paper.paper_id}")
                 return content['text'], content['source']
+            
+            logger.warning(f"No content found for paper ID: {paper.paper_id}, falling back to abstract")
             return paper.abstract or "", "abstract_only"
+            
         except Exception as e:
-            logger.error(f"Error fetching paper content: {str(e)}")
+            logger.error(f"Error fetching paper content for {paper.paper_id}: {str(e)}")
             return paper.abstract or "", "abstract_only"
 
