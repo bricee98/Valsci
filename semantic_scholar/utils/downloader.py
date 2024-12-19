@@ -95,14 +95,17 @@ class S2DatasetDownloader:
                 # Wait for rate limit before making request
                 self.rate_limiter.wait()
                 
-                # Don't modify or encode the URL - use it exactly as provided
-                headers = kwargs.get('headers', {})
-                headers.update(self.session.headers)
+                # Handle headers properly - don't merge if pre-signed URL
+                if 'AWSAccessKeyId' in url or 'x-amz-security-token' in url:
+                    headers = kwargs.get('headers', {})
+                else:
+                    headers = {**self.session.headers, **(kwargs.get('headers', {}))}
+                kwargs['headers'] = headers
                 
                 if method.lower() == 'get':
-                    response = requests.get(url, headers=headers, **kwargs)
+                    response = requests.get(url, **kwargs)
                 elif method.lower() == 'head':
-                    response = requests.head(url, headers=headers, **kwargs)
+                    response = requests.head(url, **kwargs)
                 else:
                     raise ValueError(f"Unsupported method: {method}")
 
@@ -219,13 +222,7 @@ class S2DatasetDownloader:
             desc = desc or f"Downloading {filename}"
             
             # Get file size from server
-            # For pre-signed URLs, don't add any headers
-            if 'AWSAccessKeyId' in url or 'x-amz-security-token' in url:
-                headers = {}  # Don't add any headers for pre-signed URLs
-            else:
-                headers = self.session.headers  # Use default headers for regular URLs
-            
-            response = self.make_request(url, method='head', headers=headers)
+            response = self.make_request(url, method='head')
             total_size = int(response.headers.get('content-length', 0))
             
             # Check if file exists and is complete
@@ -237,7 +234,7 @@ class S2DatasetDownloader:
                     console.print(f"[yellow]File {filename} exists but is incomplete, resuming...[/yellow]")
             
             # Resume download from where we left off
-            headers = {}  # Start with empty headers
+            headers = {}
             mode = 'wb'
             if output_path.exists():
                 current_size = output_path.stat().st_size
@@ -246,10 +243,6 @@ class S2DatasetDownloader:
                 initial_size = current_size
             else:
                 initial_size = 0
-            
-            # Don't add session headers for pre-signed URLs
-            if not ('AWSAccessKeyId' in url or 'x-amz-security-token' in url):
-                headers.update(self.session.headers)
             
             response = self.make_request(url, stream=True, headers=headers)
             
