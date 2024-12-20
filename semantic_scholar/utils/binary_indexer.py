@@ -225,38 +225,45 @@ class BinaryIndexer:
                 return False
 
             all_valid = True
-            for index_name, meta in self.metadata[release_id].items():
-                dataset, id_type = index_name.split('_')
-                index_path = self._get_index_path(release_id, dataset, id_type)
-                
-                # Verify file exists
-                if not index_path.exists():
-                    console.print(f"[red]Index file missing: {index_path}[/red]")
+            for index_key, meta in self.metadata[release_id].items():
+                try:
+                    # Split on the first underscore
+                    dataset, id_type = index_key.split('_', 1)
+                    index_path = self._get_index_path(release_id, dataset, id_type)
+                    
+                    # Verify file exists
+                    if not index_path.exists():
+                        console.print(f"[red]Index file missing: {index_path}[/red]")
+                        all_valid = False
+                        continue
+
+                    # Verify file size
+                    expected_size = meta['entry_count'] * IndexEntry.ENTRY_SIZE
+                    actual_size = index_path.stat().st_size
+                    if actual_size != expected_size:
+                        console.print(f"[red]Size mismatch for {index_key}: expected {expected_size}, got {actual_size}[/red]")
+                        all_valid = False
+                        continue
+
+                    # Verify checksum
+                    current_checksum = self._calculate_file_checksum(index_path)
+                    if current_checksum != meta['checksum']:
+                        console.print(f"[red]Checksum mismatch for {index_key}[/red]")
+                        all_valid = False
+                        continue
+
+                    console.print(f"[green]Verified {index_key}[/green]")
+
+                except ValueError as e:
+                    console.print(f"[red]Error processing index {index_key}: {str(e)}[/red]")
                     all_valid = False
                     continue
-
-                # Verify file size
-                expected_size = meta['entry_count'] * IndexEntry.ENTRY_SIZE
-                actual_size = index_path.stat().st_size
-                if actual_size != expected_size:
-                    console.print(f"[red]Size mismatch for {index_name}: expected {expected_size}, got {actual_size}[/red]")
-                    all_valid = False
-                    continue
-
-                # Verify checksum
-                current_checksum = self._calculate_file_checksum(index_path)
-                if current_checksum != meta['checksum']:
-                    console.print(f"[red]Checksum mismatch for {index_name}[/red]")
-                    all_valid = False
-                    continue
-
-                console.print(f"[green]Verified {index_name}[/green]")
 
             return all_valid
 
         except Exception as e:
             console.print(f"[red]Error verifying indices: {str(e)}[/red]")
-            return False 
+            return False
 
     def __del__(self):
         """Ensure cleanup of resources"""
@@ -315,19 +322,25 @@ class BinaryIndexer:
             self._load_metadata(release_id)
             stats = {}
             
-            for index_name, meta in self.metadata[release_id].items():
-                dataset, id_type = index_name.split('_')
-                index_path = self._get_index_path(release_id, dataset, id_type)
-                
-                if not index_path.exists():
-                    continue
+            for index_key, meta in self.metadata[release_id].items():
+                try:
+                    # Split on the first underscore
+                    dataset, id_type = index_key.split('_', 1)
+                    index_path = self._get_index_path(release_id, dataset, id_type)
                     
-                stats[index_name] = {
-                    'entry_count': meta['entry_count'],
-                    'size_mb': index_path.stat().st_size / (1024 * 1024),
-                    'created': meta['created'],
-                    'healthy': self._quick_health_check(index_path, meta)
-                }
+                    if not index_path.exists():
+                        continue
+                    
+                    stats[index_key] = {
+                        'entry_count': meta['entry_count'],
+                        'size_mb': index_path.stat().st_size / (1024 * 1024),
+                        'created': meta['created'],
+                        'healthy': self._quick_health_check(index_path, meta)
+                    }
+                    
+                except ValueError:
+                    console.print(f"[yellow]Warning: Skipping malformed index key: {index_key}[/yellow]")
+                    continue
                 
             return stats
             
