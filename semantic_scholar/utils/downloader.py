@@ -759,6 +759,36 @@ class S2DatasetDownloader:
         """This method is no longer needed with binary indexer"""
         pass
 
+    def verify_index_completeness(self, release_id: str, dataset: Optional[str] = None, 
+                                sample_size: int = 1000, quick_estimate: bool = False) -> bool:
+        """
+        Verify that indices contain all entries from source files.
+        Uses sampling for large files to estimate counts.
+        
+        Args:
+            quick_estimate: If True, uses a faster estimation method based on first file
+        """
+        try:
+            self._load_metadata(release_id)
+            if release_id not in self.metadata:
+                console.print(f"[red]No metadata found for release {release_id}[/red]")
+                return False
+
+            datasets_to_check = [dataset] if dataset else {
+                k.split('_')[0] for k in self.metadata[release_id].keys()
+            }
+
+            all_valid = True
+            source_counts = defaultdict(int)
+            confidence_levels = defaultdict(float)
+
+            # Use the binary indexer's verify_index_completeness method
+            return self.indexer.verify_index_completeness(release_id, dataset, quick_estimate=quick_estimate)
+
+        except Exception as e:
+            console.print(f"[red]Error verifying index completeness: {str(e)}[/red]")
+            return False
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Download Semantic Scholar datasets')
@@ -938,12 +968,28 @@ def main():
                 
             console.print(f"[cyan]Verifying indices for {len(datasets)} datasets...[/cyan]")
             
-            console.print(f"\n[bold]Verifying all indices...[/bold]")
-            if downloader.indexer.verify_all_indices(release_id, show_details=True):
-                console.print(f"[green]✓ All indices verified successfully[/green]")
+            # First do a quick estimate check
+            console.print(f"\n[bold]Quick estimation check...[/bold]")
+            if downloader.verify_index_completeness(release_id, quick_estimate=True):
+                console.print(f"[green]✓ Quick estimate check passed[/green]")
+                
+                # If quick check passes, offer to do detailed verification
+                console.print("\nQuick check passed. Would you like to perform a detailed verification? (y/N)")
+                response = input().lower()
+                if response == 'y':
+                    console.print(f"\n[bold]Performing detailed verification...[/bold]")
+                    if downloader.indexer.verify_all_indices(release_id, show_details=True):
+                        console.print(f"[green]✓ All indices verified successfully[/green]")
+                    else:
+                        console.print(f"[red]× Indices verification failed[/red]")
             else:
-                console.print(f"[red]× Indices verification failed[/red]")
-                            
+                console.print(f"[red]× Quick estimate check failed[/red]")
+                console.print("\nWould you like to perform a detailed verification to identify issues? (y/N)")
+                response = input().lower()
+                if response == 'y':
+                    console.print(f"\n[bold]Performing detailed verification...[/bold]")
+                    downloader.indexer.verify_all_indices(release_id, show_details=True)
+                    
         elif args.index_only is not None:
             datasets = validate_datasets(args.index_only)
             if datasets is None:

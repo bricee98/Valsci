@@ -571,10 +571,15 @@ class BinaryIndexer:
             console.print(f"[yellow]Warning: Error counting entries in {file_path}: {str(e)}[/yellow]")
             return 0, 0.0
 
-    def verify_index_completeness(self, release_id: str, dataset: Optional[str] = None) -> bool:
+    def verify_index_completeness(self, release_id: str, dataset: Optional[str] = None, quick_estimate: bool = False) -> bool:
         """
         Verify that indices contain all entries from source files by counting lines.
         Prints running totals as it processes files.
+        
+        Args:
+            release_id: The release ID to verify
+            dataset: Optional specific dataset to verify
+            quick_estimate: If True, estimates total by sampling first file only
         """
         try:
             # Get all relevant datasets
@@ -598,11 +603,12 @@ class BinaryIndexer:
                     continue
 
                 dataset_lines = 0
-                console.print(f"\n[bold]Counting lines in {dataset_name} files...[/bold]")
-
-                for file_path in files:
+                
+                if quick_estimate:
+                    # Just count lines in first file and multiply
+                    first_file = files[0]
                     file_lines = 0
-                    with open(file_path, 'rb') as f:
+                    with open(first_file, 'rb') as f:
                         for line in f:
                             try:
                                 # Try hex-encoded JSON first
@@ -615,10 +621,36 @@ class BinaryIndexer:
                                     file_lines += 1
                                 except:
                                     continue
+                
+                    estimated_total = file_lines * len(files)
+                    console.print(
+                        f"\n[bold]{dataset_name}[/bold]: Estimating ~{estimated_total:,} total lines "
+                        f"(based on {file_lines:,} lines in {first_file.name} × {len(files)} files)"
+                    )
+                    dataset_lines = estimated_total
+                    total_lines += estimated_total
+                    
+                else:
+                    console.print(f"\n[bold]Counting lines in {dataset_name} files...[/bold]")
+                    for file_path in files:
+                        file_lines = 0
+                        with open(file_path, 'rb') as f:
+                            for line in f:
+                                try:
+                                    # Try hex-encoded JSON first
+                                    bytes.fromhex(line.strip().decode('ascii')).decode('utf-8')
+                                    file_lines += 1
+                                except:
+                                    # Fall back to regular JSON
+                                    try:
+                                        json.loads(line.strip())
+                                        file_lines += 1
+                                    except:
+                                        continue
 
-                    dataset_lines += file_lines
-                    total_lines += file_lines
-                    console.print(f"{file_path.name}: {file_lines:,} lines (Running total: {total_lines:,})")
+                        dataset_lines += file_lines
+                        total_lines += file_lines
+                        console.print(f"{file_path.name}: {file_lines:,} lines (Running total: {total_lines:,})")
 
                 # Compare with index counts for this dataset
                 indices = {
@@ -634,19 +666,25 @@ class BinaryIndexer:
 
                 for id_type, meta in indices.items():
                     index_count = meta['entry_count']
-                    if index_count != dataset_lines:
+                    # Allow for 10% margin of error when using quick estimate
+                    margin = int(dataset_lines * 0.1) if quick_estimate else 0
+                    if abs(index_count - dataset_lines) > margin:
                         console.print(
                             f"[red]Count mismatch for {dataset_name}_{id_type}: "
                             f"Index has {index_count:,} entries, "
-                            f"but found {dataset_lines:,} lines in files[/red]"
+                            f"{'estimated' if quick_estimate else 'found'} {dataset_lines:,} lines in files "
+                            f"({'±10%' if quick_estimate else 'exact'} comparison)[/red]"
                         )
                         all_valid = False
                     else:
                         console.print(
-                            f"[green]✓ {dataset_name}_{id_type} index matches: {index_count:,} entries[/green]"
+                            f"[green]✓ {dataset_name}_{id_type} index matches: {index_count:,} entries "
+                            f"({'±10%' if quick_estimate else 'exact'} comparison)[/green]"
                         )
 
-            console.print(f"\n[bold]Total lines across all files: {total_lines:,}[/bold]")
+            console.print(
+                f"\n[bold]Total {'estimated ' if quick_estimate else ''}lines across all files: {total_lines:,}[/bold]"
+            )
             return all_valid
 
         except Exception as e:
