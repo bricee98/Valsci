@@ -48,7 +48,7 @@ class RateLimiter:
         self.last_request = time.time()
 
 class S2DatasetDownloader:
-    def __init__(self):
+    def __init__(self, version: Optional[str] = None):
         # Use project root for base directory
         self.base_dir = Path(project_root) / "semantic_scholar/datasets"
         self.session = requests.Session()
@@ -61,6 +61,9 @@ class S2DatasetDownloader:
         self.session.headers.update({
             'x-api-key': self.api_key
         })
+        
+        # Store the requested version
+        self.version = version
         
         self.datasets_to_download = [
             "papers", 
@@ -138,7 +141,13 @@ class S2DatasetDownloader:
                 time.sleep(wait_time)
 
     def get_latest_release(self) -> str:
-        """Get the latest release ID."""
+        """Get the latest release ID or return specified version."""
+        if self.version:
+            # Validate version format (YYYY-MM-DD)
+            if not re.match(r'^\d{4}-\d{2}-\d{2}$', self.version):
+                raise ValueError("Version must be in YYYY-MM-DD format")
+            return self.version
+        
         response = self.make_request(f"{BASE_URL}/release/latest")
         return response.json()["release_id"]
 
@@ -486,7 +495,9 @@ class S2DatasetDownloader:
 
     def download_all_datasets(self, release_id: str = 'latest', mini: bool = False):
         """Download all datasets first, then index them all."""
-        if release_id == 'latest':
+        if release_id == 'latest' and self.version:
+            release_id = self.version
+        elif release_id == 'latest':
             release_id = self.get_latest_release()
         
         console.print(f"[bold cyan]Downloading all datasets for release {release_id}...[/bold cyan]")
@@ -852,6 +863,7 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description='Download Semantic Scholar datasets')
     parser.add_argument('--release', default='latest', help='Release ID to download')
+    parser.add_argument('--version', help='Specific version to download (YYYY-MM-DD format)')
     parser.add_argument('--mini', action='store_true', help='Download minimal dataset for testing')
     parser.add_argument('--verify', action='store_true', help='Verify downloaded datasets')
     parser.add_argument('--verify-index', nargs='*', help='Verify index completeness. Optionally specify datasets to verify')
@@ -862,7 +874,7 @@ def main():
     parser.add_argument('--count', action='store_true', help='Show detailed index counts for each file')
     args = parser.parse_args()
     
-    with S2DatasetDownloader() as downloader:
+    with S2DatasetDownloader(version=args.version) as downloader:
         def validate_datasets(dataset_list):
             """Helper function to validate dataset names and return filtered list"""
             if not dataset_list:
