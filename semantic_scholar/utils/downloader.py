@@ -347,7 +347,7 @@ class S2DatasetDownloader:
                         downloaded_files.append(path)
 
                 if index and downloaded_files:
-                    self.index_dataset(dataset_name, release_id, downloaded_files)
+                    self.index_dataset(dataset_name, release_id)
                 
             return True
                 
