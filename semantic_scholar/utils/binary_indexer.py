@@ -275,7 +275,7 @@ class BinaryIndexer:
             console.print(f"[red]Error verifying index contents: {str(e)}[/red]")
             return False
 
-    def verify_all_indices(self, release_id: str, show_details: bool = False) -> bool:
+    def verify_all_indices(self, release_id: str, show_details: bool = True) -> bool:
         """Verify all indices for a release, optionally showing more details."""
         try:
             self._load_metadata(release_id)

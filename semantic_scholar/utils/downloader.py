@@ -1104,26 +1104,6 @@ class S2DatasetDownloader:
         """This method is no longer needed with binary indexer"""
         pass
 
-    def verify_all_indices(self, release_id: str = 'latest', show_details: bool = False) -> bool:
-        """Verify all indices for a release."""
-        try:
-            if release_id == 'latest':
-                release_id = self._get_latest_local_release()
-                if not release_id:
-                    console.print("[red]No local releases found[/red]")
-                    return False
-            
-            console.print(f"\n[bold cyan]Verifying indices for release {release_id}...[/bold cyan]")
-            
-            # Use binary indexer to verify indices
-            with BinaryIndexer(self.base_dir) as indexer:
-                # Let the binary indexer handle all verification and reporting
-                return indexer.verify_all_indices(release_id, show_details=True)
-                
-        except Exception as e:
-            console.print(f"[red]Error verifying indices: {str(e)}[/red]")
-            return False
-
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Download Semantic Scholar datasets')
@@ -1303,18 +1283,11 @@ def main():
                 
             console.print(f"[cyan]Verifying indices for {len(datasets)} datasets...[/cyan]")
             
-            for dataset in datasets:
-                console.print(f"\n[bold]Verifying {dataset}...[/bold]")
-                if downloader.indexer.verify_all_indices(release_id):
-                    console.print(f"[green]✓ {dataset} indices verified successfully[/green]")
-                else:
-                    console.print(f"[red]× {dataset} index verification failed[/red]")
-                    if args.repair:
-                        console.print(f"[cyan]Attempting to repair {dataset} indices...[/cyan]")
-                        if downloader.index_dataset(dataset, release_id):
-                            console.print(f"[green]✓ Successfully repaired {dataset} indices[/green]")
-                        else:
-                            console.print(f"[red]× Failed to repair {dataset} indices[/red]")
+            console.print(f"\n[bold]Verifying all indices...[/bold]")
+            if downloader.indexer.verify_all_indices(release_id, show_details=True):
+                console.print(f"[green]✓ All indices verified successfully[/green]")
+            else:
+                console.print(f"[red]× Indices verification failed[/red]")
                             
         elif args.index_only is not None:
             datasets = validate_datasets(args.index_only)
