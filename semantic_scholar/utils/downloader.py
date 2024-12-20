@@ -169,6 +169,8 @@ class S2DatasetDownloader:
                         }
                         for url in data['files']
                     ]
+                    print("s2orc files")
+                    print(data['files'])
                 return data
             except requests.exceptions.HTTPError as e:
                 console.print("[red]Error accessing S2ORC dataset. Make sure your API key has S2ORC access.[/red]")
@@ -312,6 +314,7 @@ class S2DatasetDownloader:
                 files = dataset_info['files'][:1] if mini else dataset_info['files']
                 console.print(f"\n[bold]Checking {len(files)} files for {dataset_name}...[/bold]")
                 for file_info in files:
+                    print("Shard is ", file_info['shard'])
                     output_path = dataset_dir / f"{file_info['shard']}.json"
                     if output_path.exists():
                         size = output_path.stat().st_size / (1024 * 1024)
