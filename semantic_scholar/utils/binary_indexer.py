@@ -216,6 +216,65 @@ class BinaryIndexer:
             console.print(f"[red]Error searching index: {str(e)}[/red]")
             return None
 
+    def _verify_index_contents(self, index_path: Path, meta: dict) -> bool:
+        """Verify that index file contains valid entries in correct format."""
+        try:
+            with open(index_path, 'rb') as f:
+                # Check we can read the expected number of entries
+                entry_count = meta['entry_count']
+                valid_entries = 0
+                prev_id = None  # For checking sorting
+                
+                # Read and validate each entry
+                for i in range(entry_count):
+                    try:
+                        data = f.read(IndexEntry.ENTRY_SIZE)
+                        if len(data) != IndexEntry.ENTRY_SIZE:
+                            console.print(f"[red]Truncated entry at position {i}[/red]")
+                            return False
+                            
+                        # Try to parse the entry
+                        entry = IndexEntry.from_bytes(data)
+                        
+                        # Basic validation
+                        if not entry.id or not entry.file_path or entry.offset < 0:
+                            console.print(f"[red]Invalid entry at position {i}: {entry}[/red]")
+                            return False
+                            
+                        # Check sorting (IDs should be in ascending order)
+                        if prev_id and entry.id < prev_id:
+                            console.print(f"[red]Index not properly sorted at position {i}[/red]")
+                            return False
+                        prev_id = entry.id
+                        
+                        # Verify referenced file exists
+                        ref_file = Path(entry.file_path)
+                        if not ref_file.exists():
+                            console.print(f"[red]Referenced file missing: {ref_file}[/red]")
+                            return False
+                            
+                        # Verify offset is within file bounds
+                        if entry.offset >= ref_file.stat().st_size:
+                            console.print(f"[red]Invalid offset {entry.offset} for file {ref_file}[/red]")
+                            return False
+                            
+                        valid_entries += 1
+                        
+                    except struct.error:
+                        console.print(f"[red]Failed to parse entry at position {i}[/red]")
+                        return False
+                        
+                # Verify we found the expected number of valid entries
+                if valid_entries != entry_count:
+                    console.print(f"[red]Expected {entry_count} entries but found {valid_entries}[/red]")
+                    return False
+                    
+                return True
+                
+        except Exception as e:
+            console.print(f"[red]Error verifying index contents: {str(e)}[/red]")
+            return False
+
     def verify_all_indices(self, release_id: str, show_details: bool = False) -> bool:
         """Verify all indices for a release, optionally showing more details."""
         try:
@@ -224,56 +283,88 @@ class BinaryIndexer:
                 console.print(f"[yellow]No metadata found for release {release_id}[/yellow]")
                 return False
 
+            # First check if any indices exist for this release
+            index_files = list(self.index_dir.glob(f"{release_id}_*.idx"))
+            if not index_files:
+                console.print(f"[yellow]No index files found for release {release_id}[/yellow]")
+                return False
+
             all_valid = True
-            # Print a quick header if you're showing details:
             if show_details:
                 console.print(f"[bold cyan]Verifying all indices for release {release_id}...[/bold cyan]")
 
-            for index_key, meta in self.metadata[release_id].items():
-                try:
-                    # Split on the first underscore
-                    dataset, id_type = index_key.split('_', 1)
+            datasets_with_indices = set()
 
-                    # Extra log lines so you see which index is being checked
+            for index_path in index_files:
+                try:
+                    # Extract dataset and id_type from filename
+                    filename = index_path.name
+                    parts = filename[len(f"{release_id}_"):-4].split('_')
+                    if len(parts) < 2:
+                        continue
+                    
+                    dataset = parts[0]
+                    id_type = '_'.join(parts[1:])
+                    datasets_with_indices.add(dataset)
+                    
+                    index_key = f"{dataset}_{id_type}"
+                    
                     if show_details:
                         console.print(f"[white]Checking index: [bold]{index_key}[/bold][/white]")
-                        console.print(f"  Dataset: {dataset}, ID Type: {id_type}")
-                        console.print(f"  Entry Count: {meta['entry_count']}")
-                        console.print(f"  Expected Checksum: {meta['checksum']}")
 
-                    index_path = self._get_index_path(release_id, dataset, id_type)                    
+                    # Basic file checks
                     if not index_path.exists():
                         console.print(f"[red]Index file missing: {index_path}[/red]")
                         all_valid = False
                         continue
 
-                    expected_size = meta['entry_count'] * IndexEntry.ENTRY_SIZE
-                    actual_size = index_path.stat().st_size
-                    if actual_size != expected_size:
-                        console.print(
-                            f"[red]Size mismatch for {index_key}: "
-                            f"expected {expected_size}, got {actual_size}[/red]"
-                        )
+                    if release_id in self.metadata and index_key in self.metadata[release_id]:
+                        meta = self.metadata[release_id][index_key]
+                        
+                        # Check file size
+                        expected_size = meta['entry_count'] * IndexEntry.ENTRY_SIZE
+                        actual_size = index_path.stat().st_size
+                        if actual_size != expected_size:
+                            console.print(
+                                f"[red]Size mismatch for {index_key}: "
+                                f"expected {expected_size}, got {actual_size}[/red]"
+                            )
+                            all_valid = False
+                            continue
+
+                        # Check checksum
+                        current_checksum = self._calculate_file_checksum(index_path)
+                        if current_checksum != meta['checksum']:
+                            console.print(
+                                f"[red]Checksum mismatch for {index_key}. "
+                                f"Found {current_checksum}[/red]"
+                            )
+                            all_valid = False
+                            continue
+                            
+                        # Verify actual index contents
+                        if not self._verify_index_contents(index_path, meta):
+                            console.print(f"[red]Index content verification failed for {index_key}[/red]")
+                            all_valid = False
+                            continue
+                            
+                    else:
+                        console.print(f"[red]No metadata found for index {index_key}[/red]")
                         all_valid = False
                         continue
 
-                    current_checksum = self._calculate_file_checksum(index_path)
-                    if current_checksum != meta['checksum']:
-                        console.print(
-                            f"[red]Checksum mismatch for {index_key}. "
-                            f"Found {current_checksum}[/red]"
-                        )
-                        all_valid = False
-                        continue
-
-                    # If everything checks out:
                     if show_details:
                         console.print(f"[green]Verified {index_key} successfully[/green]")
 
-                except ValueError as e:
-                    console.print(f"[red]Error processing index {index_key}: {str(e)}[/red]")
+                except Exception as e:
+                    console.print(f"[red]Error verifying index {index_path.name}: {str(e)}[/red]")
                     all_valid = False
-                    continue
+
+            # Report datasets without indices
+            for dataset in ['papers', 'abstracts', 'citations', 'authors', 's2orc', 'tldrs']:
+                if dataset not in datasets_with_indices:
+                    console.print(f"[yellow]No indices found for dataset: {dataset}[/yellow]")
+                    all_valid = False
 
             return all_valid
 

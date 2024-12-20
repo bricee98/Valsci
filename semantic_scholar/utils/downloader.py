@@ -73,7 +73,7 @@ class S2DatasetDownloader:
         
         # Create base and index directories with parents
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        self.index_dir = self.base_dir / "indices"
+        self.index_dir = self.base_dir / "binary_indices"
         self.index_dir.mkdir(parents=True, exist_ok=True)
         
         # Define which IDs to index for each dataset
@@ -988,92 +988,73 @@ class S2DatasetDownloader:
         # Use provided datasets or all datasets
         datasets = datasets or self.datasets_to_download
         
-        # Get index database
-        index_path = self.base_dir / "indices" / f"{release_id}.db"
-        if not index_path.exists():
-            console.print("[red]No index database found for this release[/red]")
+        # Get index stats from binary indexer
+        index_stats = self.indexer.get_index_stats(release_id)
+        if not index_stats:
+            console.print("[red]No index data found for this release[/red]")
             return
         
         table = Table(
             "Dataset", 
             "Expected Files", 
             "Downloaded Files",
-            "Indexed Files",
-            "Status",
+            "Index Status",
             title=f"Dataset Audit for Release {release_id}"
         )
         
-        with sqlite3.connect(str(index_path)) as conn:
-            for dataset in datasets:  # Changed from self.datasets_to_download to datasets
-                try:
-                    # Get expected files from API
-                    dataset_info = self.get_dataset_info(dataset, release_id)
-                    if not dataset_info:
-                        table.add_row(
-                            dataset,
-                            "?",
-                            "0",
-                            "0",
-                            "[red]Cannot fetch dataset info[/red]"
+        for dataset in datasets:
+            try:
+                # Get expected files from API
+                dataset_info = self.get_dataset_info(dataset, release_id)
+                if not dataset_info:
+                    table.add_row(
+                        dataset,
+                        "?",
+                        "0",
+                        "[red]Cannot fetch dataset info[/red]"
+                    )
+                    continue
+                
+                expected_count = len(dataset_info['files'])
+                
+                # Get downloaded files
+                dataset_dir = self.base_dir / release_id / dataset
+                if dataset == 's2orc':
+                    downloaded_files = list(dataset_dir.glob("*.json")) if dataset_dir.exists() else []
+                else:
+                    downloaded_files = [
+                        f for f in dataset_dir.glob("*.json")
+                        if f.name != 'metadata.json'
+                    ] if dataset_dir.exists() else []
+                
+                # Get index status for all ID types for this dataset
+                index_statuses = []
+                for field_name, id_type in self.dataset_id_fields[dataset]:
+                    index_key = f"{dataset}_{id_type}"
+                    if index_key in index_stats:
+                        index_statuses.append(
+                            f"{id_type}: {index_stats[index_key]['entry_count']:,}"
                         )
-                        continue
-                    
-                    expected_count = len(dataset_info['files'])
-                    
-                    # Get downloaded files
-                    dataset_dir = self.base_dir / release_id / dataset
-                    if dataset == 's2orc':
-                        downloaded_files = list(dataset_dir.glob("*.json")) if dataset_dir.exists() else []
-                    else:
-                        downloaded_files = [
-                            f for f in dataset_dir.glob("*.json")
-                            if f.name != 'metadata.json'
-                        ] if dataset_dir.exists() else []
-                    
-                    # Get indexed files
-                    cursor = conn.execute("""
-                        SELECT DISTINCT file_path, COUNT(*) as entry_count 
-                        FROM paper_locations 
-                        WHERE dataset = ?
-                        GROUP BY file_path
-                    """, (dataset,))
-                    indexed_files = {Path(path): count for path, count in cursor}
-                    
-                    # Determine status
-                    if not dataset_dir.exists():
-                        status = "[red]Not downloaded[/red]"
-                    elif len(downloaded_files) < expected_count:
-                        status = f"[yellow]Partially downloaded ({len(downloaded_files)}/{expected_count})[/yellow]"
-                    elif len(indexed_files) < len(downloaded_files):
-                        status = f"[yellow]Partially indexed ({len(indexed_files)}/{len(downloaded_files)})[/yellow]"
-                    else:
-                        status = "[green]Complete[/green]"
-                    
-                    # Add details for partially indexed files
-                    partially_indexed = []
-                    for f in downloaded_files:
-                        if f in indexed_files and indexed_files[f] < 100:  # Arbitrary threshold
-                            partially_indexed.append(f.name)
-                    
-                    if partially_indexed:
-                        status += f"\n[yellow]Low index count: {', '.join(partially_indexed)}[/yellow]"
-                    
-                    table.add_row(
-                        dataset,
-                        str(expected_count),
-                        str(len(downloaded_files)),
-                        str(len(indexed_files)),
-                        status
-                    )
-                    
-                except Exception as e:
-                    table.add_row(
-                        dataset,
-                        "?",
-                        "?",
-                        "?",
-                        f"[red]Error: {str(e)}[/red]"
-                    )
+                
+                if index_statuses:
+                    index_status = "[green]" + "\n".join(index_statuses) + "[/green]"
+                else:
+                    index_status = "[yellow]Not indexed[/yellow]"
+                
+                table.add_row(
+                    dataset,
+                    str(expected_count),
+                    str(len(downloaded_files)),
+                    index_status
+                )
+                
+            except Exception as e:
+                table.add_row(
+                    dataset,
+                    "?",
+                    "?",
+                    f"[red]Error: {str(e)}[/red]"
+                )
         
         console.print(table)
 
@@ -1084,80 +1065,44 @@ class S2DatasetDownloader:
         
         console.print(f"\n[bold cyan]Index counts for release {release_id}...[/bold cyan]")
         
-        # Get index database
-        index_path = self.base_dir / "indices" / f"{release_id}.db"
-        if not index_path.exists():
-            console.print("[red]No index database found for this release[/red]")
+        # Get index stats from binary indexer
+        stats = self.indexer.get_index_stats(release_id)
+        if not stats:
+            console.print("[red]No index data found for this release[/red]")
             return
         
-        with sqlite3.connect(str(index_path)) as conn:
-            # Get total count
-            cursor = conn.execute("SELECT COUNT(*) FROM paper_locations")
-            total_count = cursor.fetchone()[0]
-            console.print(f"\nTotal index entries: [bold cyan]{total_count:,}[/bold cyan]\n")
-            
-            # Get counts by dataset
-            table = Table(
-                "Dataset",
-                "File",
-                "Index Count",
-                "File Size",
-                "Entries/MB",
-                title="Index Counts by File"
-            )
-            
-            cursor = conn.execute("""
-                SELECT 
-                    dataset,
-                    file_path,
-                    COUNT(*) as entry_count
-                FROM paper_locations 
-                GROUP BY dataset, file_path
-                ORDER BY dataset, file_path
-            """)
-            
-            current_dataset = None
-            for dataset, file_path, count in cursor:
-                # Add separator between datasets
-                if current_dataset != dataset:
-                    if current_dataset is not None:
-                        table.add_row("", "", "", "", "")
-                    current_dataset = dataset
-                
-                # Get file size if file exists
-                path = Path(file_path)
-                if path.exists():
-                    size_mb = path.stat().st_size / (1024 * 1024)  # Convert to MB
-                    density = count / size_mb
-                    size_str = f"{size_mb:.1f} MB"
-                    density_str = f"{density:.1f}"
-                else:
-                    size_str = "[red]Missing[/red]"
-                    density_str = "N/A"
-                
-                table.add_row(
-                    dataset,
-                    path.name,
-                    f"{count:,}",
-                    size_str,
-                    density_str
-                )
+        table = Table(
+            "Dataset",
+            "ID Type",
+            "Entries",
+            "Size",
+            "Created",
+            "Status",
+            title=f"Index Statistics for Release {release_id}"
+        )
         
-            console.print(table)
+        total_entries = 0
+        for index_key, info in stats.items():
+            dataset, id_type = index_key.split('_', 1)
+            total_entries += info['entry_count']
+            
+            status = "[green]Healthy[/green]" if info['healthy'] else "[red]Unhealthy[/red]"
+            
+            table.add_row(
+                dataset,
+                id_type,
+                f"{info['entry_count']:,}",
+                f"{info['size_mb']:.1f} MB",
+                info['created'],
+                status
+            )
+        
+        console.print(f"\nTotal index entries: [bold cyan]{total_entries:,}[/bold cyan]\n")
+        console.print(table)
 
     def _verify_db_name(self):
-        """Verify index database has correct name."""
-        index_dir = self.base_dir / "indices"
-        if not index_dir.exists():
-            return
-        
-        db_files = list(index_dir.glob("*.db"))
-        expected_name = f"{self._get_latest_local_release()}.db"
-        
-        for db_file in db_files:
-            if db_file.name != expected_name:
-                console.print(f"[yellow]Warning: Found database with incorrect name: {db_file.name}[/yellow]")
-                console.print(f"[yellow]Expected name: {expected_name}[/yellow]")
+        """This method is no longer needed with binary indexer"""
+        pass
 
 def main():
     import argparse
