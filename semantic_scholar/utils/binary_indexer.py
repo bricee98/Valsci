@@ -571,65 +571,56 @@ class BinaryIndexer:
             console.print(f"[yellow]Warning: Error counting entries in {file_path}: {str(e)}[/yellow]")
             return 0, 0.0
 
-    def verify_index_completeness(self, release_id: str, dataset: Optional[str] = None, 
-                                sample_size: int = 1000) -> bool:
+    def verify_index_completeness(self, release_id: str, dataset: Optional[str] = None) -> bool:
         """
-        Verify that indices contain all entries from source files.
-        Uses sampling for large files to estimate counts.
+        Verify that indices contain all entries from source files by counting lines.
+        Prints running totals as it processes files.
         """
         try:
-            self._load_metadata(release_id)
-            if release_id not in self.metadata:
-                console.print(f"[red]No metadata found for release {release_id}[/red]")
-                return False
-
+            # Get all relevant datasets
             datasets_to_check = [dataset] if dataset else {
                 k.split('_')[0] for k in self.metadata[release_id].keys()
             }
 
+            total_lines = 0
             all_valid = True
-            source_counts = defaultdict(int)
-            confidence_levels = defaultdict(float)
-            
-            # First pass: count entries in source files
+
             for dataset_name in datasets_to_check:
                 dataset_dir = Path(self.base_dir) / release_id / dataset_name
                 if not dataset_dir.exists():
                     console.print(f"[yellow]Dataset directory not found: {dataset_dir}[/yellow]")
                     continue
 
+                # Get all JSON files except metadata
                 files = [f for f in dataset_dir.glob("*.json") if f.name != 'metadata.json']
                 if not files:
                     console.print(f"[yellow]No source files found for {dataset_name}[/yellow]")
                     continue
 
-                total_count = 0
-                min_confidence = 1.0
-                
+                dataset_lines = 0
+                console.print(f"\n[bold]Counting lines in {dataset_name} files...[/bold]")
+
                 for file_path in files:
-                    count, confidence = self._count_entries_in_file(file_path, sample_size)
-                    total_count += count
-                    min_confidence = min(min_confidence, confidence)
-                    
-                source_counts[dataset_name] = total_count
-                confidence_levels[dataset_name] = min_confidence
+                    file_lines = 0
+                    with open(file_path, 'rb') as f:
+                        for line in f:
+                            try:
+                                # Try hex-encoded JSON first
+                                bytes.fromhex(line.strip().decode('ascii')).decode('utf-8')
+                                file_lines += 1
+                            except:
+                                # Fall back to regular JSON
+                                try:
+                                    json.loads(line.strip())
+                                    file_lines += 1
+                                except:
+                                    continue
 
-            # Second pass: compare with index counts
-            table = Table(
-                "Dataset", 
-                "ID Type",
-                "Index Entries",
-                "Source Entries",
-                "Confidence",
-                "Status",
-                title=f"Index Completeness Check for Release {release_id}"
-            )
+                    dataset_lines += file_lines
+                    total_lines += file_lines
+                    console.print(f"{file_path.name}: {file_lines:,} lines (Running total: {total_lines:,})")
 
-            for dataset_name in datasets_to_check:
-                source_count = source_counts[dataset_name]
-                confidence = confidence_levels[dataset_name]
-                
-                # Get all index types for this dataset
+                # Compare with index counts for this dataset
                 indices = {
                     k.split('_', 1)[1]: v 
                     for k, v in self.metadata[release_id].items() 
@@ -637,38 +628,25 @@ class BinaryIndexer:
                 }
 
                 if not indices:
-                    table.add_row(
-                        dataset_name,
-                        "N/A",
-                        "No indices",
-                        f"{source_count:,}",
-                        f"{confidence:.1%}",
-                        "[red]Missing[/red]"
-                    )
+                    console.print(f"[yellow]No indices found for {dataset_name}[/yellow]")
                     all_valid = False
                     continue
 
                 for id_type, meta in indices.items():
                     index_count = meta['entry_count']
-                    
-                    # Allow for small differences due to sampling
-                    margin = int(source_count * (1 - confidence) * 0.1)
-                    count_match = abs(index_count - source_count) <= margin
-                    
-                    status = "[green]OK[/green]" if count_match else "[red]Mismatch[/red]"
-                    if not count_match:
+                    if index_count != dataset_lines:
+                        console.print(
+                            f"[red]Count mismatch for {dataset_name}_{id_type}: "
+                            f"Index has {index_count:,} entries, "
+                            f"but found {dataset_lines:,} lines in files[/red]"
+                        )
                         all_valid = False
-                    
-                    table.add_row(
-                        dataset_name,
-                        id_type,
-                        f"{index_count:,}",
-                        f"{source_count:,}",
-                        f"{confidence:.1%}",
-                        status
-                    )
+                    else:
+                        console.print(
+                            f"[green]✓ {dataset_name}_{id_type} index matches: {index_count:,} entries[/green]"
+                        )
 
-            console.print(table)
+            console.print(f"\n[bold]Total lines across all files: {total_lines:,}[/bold]")
             return all_valid
 
         except Exception as e:
