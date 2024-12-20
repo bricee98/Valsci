@@ -20,11 +20,13 @@ import sqlite3
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
-from semantic_scholar.utils.binary_indexer import BinaryIndexer, IndexEntry
 
 # Add project root to path
 project_root = str(Path(__file__).parent.parent.parent)
 sys.path.append(project_root)
+
+# Now we can import using the full package path
+from semantic_scholar.utils.binary_indexer import BinaryIndexer, IndexEntry
 from app.config.settings import Config
 
 BASE_URL = "https://api.semanticscholar.org/datasets/v1"
