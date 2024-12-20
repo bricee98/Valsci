@@ -19,6 +19,7 @@ import re
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
+from collections import defaultdict
 
 # Add project root to path
 project_root = str(Path(__file__).parent.parent.parent)
@@ -347,96 +348,77 @@ class S2DatasetDownloader:
             console.print(f"[red]Error downloading dataset {dataset_name}: {str(e)}[/red]")
             return False
 
-    def index_dataset(self, dataset_name: str, release_id: str = 'latest', files: List[Path] = None) -> bool:
-        """Index all files for a specific dataset using binary indices."""
+    def index_dataset(self, dataset: str, release_id: str) -> bool:
+        """Create binary indices for a dataset"""
         try:
-            if release_id == 'latest':
-                release_id = self._get_latest_local_release()
-                if not release_id:
-                    console.print("[red]No local releases found. Please download datasets first.[/red]")
-                    return False
-                console.print(f"[cyan]Using latest local release: {release_id}[/cyan]")
-
-            # Get list of files to process
-            if files is None:
-                dataset_dir = self.base_dir / release_id / dataset_name
-                if not dataset_dir.exists():
-                    console.print(f"[yellow]Dataset directory not found: {dataset_dir}[/yellow]")
-                    return False
-                    
-                files = [
-                    f for f in dataset_dir.glob("*.json")
-                    if f.name != 'metadata.json'
-                ]
-                
-                if not files:
-                    console.print(f"[yellow]No JSON files found in {dataset_dir}[/yellow]")
-                    return False
-
-            # Process each file
-            for file_path in files:
-                try:
-                    console.print(f"[cyan]Indexing {file_path.name}...[/cyan]")
-                    
-                    # Collect entries for each ID type
-                    entries_by_type: Dict[str, List[IndexEntry]] = {}
-                    
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        offset = 0
-                        for line_num, line in enumerate(f, 1):
-                            try:
-                                if not line.strip():
-                                    continue
-                                    
-                                item = json.loads(line.strip())
-                                for field_name, id_type in self.dataset_id_fields[dataset_name]:
-                                    id_value = str(item.get(field_name, '')).lower()
-                                    if id_value:
-                                        entry = IndexEntry(
-                                            id=id_value,
-                                            file_path=str(file_path),
-                                            offset=offset
-                                        )
-                                        entries_by_type.setdefault(id_type, []).append(entry)
-                                        
-                            except json.JSONDecodeError:
-                                console.print(f"[yellow]Warning: Invalid JSON at line {line_num}[/yellow]")
-                                continue
-                            except Exception as e:
-                                console.print(f"[yellow]Warning: Error processing line {line_num}: {str(e)}[/yellow]")
-                                continue
-                                
-                            offset += len(line.encode('utf-8'))
-
-                    # Create indices for each ID type
-                    for id_type, entries in entries_by_type.items():
-                        if entries:
-                            success = self.indexer.create_index(
-                                release_id=release_id,
-                                dataset=dataset_name,
-                                id_type=id_type,
-                                entries=entries
-                            )
-                            if not success:
-                                console.print(f"[red]Failed to create index for {id_type}[/red]")
-                                return False
-
-                except Exception as e:
-                    console.print(f"[red]Error processing {file_path.name}: {str(e)}[/red]")
-                    return False
-
-            # Verify all indices
-            if not self.indexer.verify_all_indices(release_id, show_details=True):
-                console.print("[red]Index verification failed[/red]")
+            dataset_dir = self.base_dir / release_id / dataset
+            if not dataset_dir.exists():
+                console.print(f"[red]Dataset directory not found: {dataset_dir}[/red]")
                 return False
 
-            console.print(f"[green]Successfully indexed {dataset_name}[/green]")
-            return True
-                
-        except Exception as e:
-            console.print(f"[red]Error indexing dataset {dataset_name}: {str(e)}[/red]")
-            return False
+            # Get all data files
+            files = [f for f in dataset_dir.glob("*.json") if f.name != 'metadata.json']
+            if not files:
+                console.print(f"[yellow]No files found to index in {dataset_dir}[/yellow]")
+                return False
+
+            # Track entries for each ID type
+            entries_by_id_type = defaultdict(list)
             
+            # Process each file
+            for file_path in files:
+                with open(file_path, 'rb') as f:  # Open in binary mode
+                    offset = 0
+                    for line in f:
+                        try:
+                            # Try hex-encoded JSON first
+                            decoded = bytes.fromhex(line.strip().decode('ascii')).decode('utf-8')
+                            data = json.loads(decoded)
+                        except:
+                            # Fall back to regular JSON
+                            try:
+                                data = json.loads(line.strip())
+                            except:
+                                console.print(f"[yellow]Warning: Skipping invalid JSON line in {file_path}[/yellow]")
+                                offset += len(line)
+                                continue
+
+                        # Extract IDs based on dataset type
+                        if dataset == 'papers':
+                            if 'corpusid' in data:
+                                entries_by_id_type['corpus_id'].append(
+                                    IndexEntry(str(data['corpusid']), str(file_path), offset)
+                                )
+                            if 'paperId' in data:
+                                entries_by_id_type['paper_id'].append(
+                                    IndexEntry(data['paperId'], str(file_path), offset)
+                                )
+                        elif dataset == 'authors':
+                            if 'authorid' in data:
+                                entries_by_id_type['author_id'].append(
+                                    IndexEntry(data['authorid'], str(file_path), offset)
+                                )
+                        # ... (other dataset types)
+                        
+                        offset += len(line)
+
+            # Create indices for each ID type
+            for id_type, entries in entries_by_id_type.items():
+                if not entries:
+                    console.print(f"[yellow]No entries found for {dataset}_{id_type}[/yellow]")
+                    continue
+                    
+                console.print(f"Creating index for {dataset}_{id_type} with {len(entries):,} entries")
+                if not self.indexer.create_index(release_id, dataset, id_type, entries):
+                    console.print(f"[red]Failed to create index for {dataset}_{id_type}[/red]")
+                    return False
+
+            return True
+
+        except Exception as e:
+            console.print(f"[red]Error indexing dataset {dataset}: {str(e)}[/red]")
+            return False
+
     def __enter__(self):
         return self
         

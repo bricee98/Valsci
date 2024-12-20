@@ -13,6 +13,7 @@ import tempfile
 from datetime import datetime
 from collections import defaultdict
 import random
+from rich.table import Table
 
 console = Console()
 
@@ -428,12 +429,22 @@ class BinaryIndexer:
             if not file_path.exists():
                 console.print(f"[red]File not found: {file_path}[/red]")
                 return None
-                
-            with open(file_path, 'r', encoding='utf-8') as f:
+            
+            with open(file_path, 'rb') as f:
                 f.seek(entry.offset)
                 line = f.readline()
-                return json.loads(line)
-                
+                try:
+                    # Try hex-encoded JSON first
+                    decoded = bytes.fromhex(line.strip().decode('ascii')).decode('utf-8')
+                    return json.loads(decoded)
+                except:
+                    # Fall back to regular JSON
+                    try:
+                        return json.loads(line.strip())
+                    except:
+                        console.print(f"[red]Failed to parse JSON data at offset {entry.offset}[/red]")
+                        return None
+            
         except Exception as e:
             console.print(f"[red]Error reading entry data: {str(e)}[/red]")
             return None
@@ -504,12 +515,25 @@ class BinaryIndexer:
             
             # For small files (< 100MB), just do a full count
             if file_size < 100 * 1024 * 1024 or sample_size is None:
-                with open(file_path, 'r') as f:
-                    count = sum(1 for line in f if line.strip())
+                with open(file_path, 'rb') as f:
+                    count = 0
+                    for line in f:
+                        try:
+                            # Try to decode hex-encoded JSON
+                            decoded = bytes.fromhex(line.strip().decode('ascii')).decode('utf-8')
+                            json.loads(decoded)  # Validate it's valid JSON
+                            count += 1
+                        except:
+                            # If hex decoding fails, try normal JSON
+                            try:
+                                json.loads(line.strip())
+                                count += 1
+                            except:
+                                continue
                 return count, 1.0
                 
             # For large files, use sampling
-            with open(file_path, 'r') as f:
+            with open(file_path, 'rb') as f:
                 # Read sample_size random positions
                 positions = sorted(random.sample(range(file_size), sample_size))
                 line_count = 0
@@ -523,13 +547,23 @@ class BinaryIndexer:
                     line = f.readline()
                     if line:
                         line_count += 1
-                        if line.strip():
+                        try:
+                            # Try hex decoding first
+                            decoded = bytes.fromhex(line.strip().decode('ascii')).decode('utf-8')
+                            json.loads(decoded)
                             valid_samples += 1
+                        except:
+                            # If hex fails, try normal JSON
+                            try:
+                                json.loads(line.strip())
+                                valid_samples += 1
+                            except:
+                                continue
                             
                 # Estimate total lines based on sampling
                 bytes_per_line = file_size / line_count if line_count else 0
-                estimated_total = int((file_size / bytes_per_line) * (valid_samples / line_count))
-                confidence = min(1.0, sample_size / estimated_total)
+                estimated_total = int((file_size / bytes_per_line) * (valid_samples / line_count)) if line_count else 0
+                confidence = min(1.0, sample_size / estimated_total) if estimated_total > 0 else 0.0
                 
                 return estimated_total, confidence
                 
