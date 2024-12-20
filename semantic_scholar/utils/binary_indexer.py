@@ -216,8 +216,8 @@ class BinaryIndexer:
             console.print(f"[red]Error searching index: {str(e)}[/red]")
             return None
 
-    def verify_all_indices(self, release_id: str) -> bool:
-        """Verify all indices for a release"""
+    def verify_all_indices(self, release_id: str, show_details: bool = False) -> bool:
+        """Verify all indices for a release, optionally showing more details."""
         try:
             self._load_metadata(release_id)
             if release_id not in self.metadata:
@@ -225,34 +225,50 @@ class BinaryIndexer:
                 return False
 
             all_valid = True
+            # Print a quick header if you're showing details:
+            if show_details:
+                console.print(f"[bold cyan]Verifying all indices for release {release_id}...[/bold cyan]")
+
             for index_key, meta in self.metadata[release_id].items():
                 try:
                     # Split on the first underscore
                     dataset, id_type = index_key.split('_', 1)
-                    index_path = self._get_index_path(release_id, dataset, id_type)
-                    
-                    # Verify file exists
+
+                    # Extra log lines so you see which index is being checked
+                    if show_details:
+                        console.print(f"[white]Checking index: [bold]{index_key}[/bold][/white]")
+                        console.print(f"  Dataset: {dataset}, ID Type: {id_type}")
+                        console.print(f"  Entry Count: {meta['entry_count']}")
+                        console.print(f"  Expected Checksum: {meta['checksum']}")
+
+                    index_path = self._get_index_path(release_id, dataset, id_type)                    
                     if not index_path.exists():
                         console.print(f"[red]Index file missing: {index_path}[/red]")
                         all_valid = False
                         continue
 
-                    # Verify file size
                     expected_size = meta['entry_count'] * IndexEntry.ENTRY_SIZE
                     actual_size = index_path.stat().st_size
                     if actual_size != expected_size:
-                        console.print(f"[red]Size mismatch for {index_key}: expected {expected_size}, got {actual_size}[/red]")
+                        console.print(
+                            f"[red]Size mismatch for {index_key}: "
+                            f"expected {expected_size}, got {actual_size}[/red]"
+                        )
                         all_valid = False
                         continue
 
-                    # Verify checksum
                     current_checksum = self._calculate_file_checksum(index_path)
                     if current_checksum != meta['checksum']:
-                        console.print(f"[red]Checksum mismatch for {index_key}[/red]")
+                        console.print(
+                            f"[red]Checksum mismatch for {index_key}. "
+                            f"Found {current_checksum}[/red]"
+                        )
                         all_valid = False
                         continue
 
-                    console.print(f"[green]Verified {index_key}[/green]")
+                    # If everything checks out:
+                    if show_details:
+                        console.print(f"[green]Verified {index_key} successfully[/green]")
 
                 except ValueError as e:
                     console.print(f"[red]Error processing index {index_key}: {str(e)}[/red]")

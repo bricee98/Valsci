@@ -581,7 +581,7 @@ class S2DatasetDownloader:
                     return False
 
             # Verify all indices
-            if not self.indexer.verify_all_indices(release_id):
+            if not self.indexer.verify_all_indices(release_id, show_details=True):
                 console.print("[red]Index verification failed[/red]")
                 return False
 
