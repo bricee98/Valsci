@@ -108,6 +108,16 @@ class BinaryIndexer:
             tmp_path = self.tmp_dir / f"{release_id}_{dataset}_{id_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.idx.tmp"
             final_path = self._get_index_path(release_id, dataset, id_type)
 
+            # If index already exists and is valid, skip
+            if final_path.exists():
+                if release_id in self.metadata and f"{dataset}_{id_type}" in self.metadata[release_id]:
+                    meta = self.metadata[release_id][f"{dataset}_{id_type}"]
+                    if meta['entry_count'] == len(entries):
+                        checksum = self._calculate_file_checksum(final_path)
+                        if checksum == meta['checksum']:
+                            console.print(f"[green]Index already exists and is valid: {final_path.name}[/green]")
+                            return True
+
             # Write sorted entries to temporary file
             console.print(f"[cyan]Writing entries to temporary file {tmp_path.name}...[/cyan]")
             with open(tmp_path, 'wb') as f:
