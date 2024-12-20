@@ -20,6 +20,7 @@ import sqlite3
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
+from .binary_indexer import BinaryIndexer, IndexEntry
 
 # Add project root to path
 project_root = str(Path(__file__).parent.parent.parent)
@@ -88,7 +89,10 @@ class S2DatasetDownloader:
             'authors': [('authorid', 'author_id')],
             'tldrs': [('corpusid', 'corpus_id')]
         }
-
+        
+        # Initialize binary indexer
+        self.indexer = BinaryIndexer(self.base_dir)
+        
     def make_request(self, url: str, method: str = 'get', max_retries: int = 5, **kwargs) -> requests.Response:
         """Make a request with retry logic for rate limits and expired credentials."""
         for attempt in range(max_retries):
@@ -496,10 +500,9 @@ class S2DatasetDownloader:
             console.print(f"[red]Error downloading dataset {dataset_name}: {str(e)}[/red]")
             return False
 
-    def index_dataset(self, dataset_name: str, release_id: str = 'latest', files: List[Path] = None, repair: bool = False) -> bool:
-        """Index all files for a specific dataset."""
+    def index_dataset(self, dataset_name: str, release_id: str = 'latest', files: List[Path] = None) -> bool:
+        """Index all files for a specific dataset using binary indices."""
         try:
-            # Get actual release ID if 'latest'
             if release_id == 'latest':
                 release_id = self._get_latest_local_release()
                 if not release_id:
@@ -507,25 +510,6 @@ class S2DatasetDownloader:
                     return False
                 console.print(f"[cyan]Using latest local release: {release_id}[/cyan]")
 
-            # Initialize SQLite index
-            index_dir = self.base_dir / "indices"
-            index_dir.mkdir(exist_ok=True)
-            index_path = index_dir / f"{release_id}.db"
-            
-            # Clean up any existing WAL files before starting
-            wal_file = index_path.parent / (index_path.name + "-wal")
-            shm_file = index_path.parent / (index_path.name + "-shm")
-            try:
-                if wal_file.exists():
-                    wal_file.unlink()
-                if shm_file.exists():
-                    shm_file.unlink()
-            except Exception as e:
-                console.print(f"[yellow]Warning: Could not remove WAL files: {e}[/yellow]")
-            
-            # Initialize database schema if needed
-            self._init_sqlite_db(index_path)
-            
             # Get list of files to process
             if files is None:
                 dataset_dir = self.base_dir / release_id / dataset_name
@@ -542,41 +526,75 @@ class S2DatasetDownloader:
                     console.print(f"[yellow]No JSON files found in {dataset_dir}[/yellow]")
                     return False
 
-            # Process each file with its own connection
+            # Process each file
             for file_path in files:
                 try:
-                    # Create a new connection for each file
-                    with sqlite3.connect(str(index_path), timeout=300) as conn:  # 5 minute timeout
-                        conn.execute("PRAGMA journal_mode=WAL")
-                        conn.execute("PRAGMA synchronous=NORMAL")
-                        conn.execute("PRAGMA cache_size=-2000000")
-                        conn.execute("PRAGMA busy_timeout=300000")  # Match the connection timeout
-                        
-                        # Check if file needs processing
-                        if not repair:
-                            cursor = conn.execute(
-                                "SELECT COUNT(*) FROM paper_locations WHERE file_path = ?", 
-                                (str(file_path),)
-                            )
-                            count = cursor.fetchone()[0]
-                            if count > 0:
-                                console.print(f"[green]File already indexed: {file_path.name} ({count:,} entries)[/green]")
+                    console.print(f"[cyan]Indexing {file_path.name}...[/cyan]")
+                    
+                    # Collect entries for each ID type
+                    entries_by_type: Dict[str, List[IndexEntry]] = {}
+                    
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        offset = 0
+                        for line_num, line in enumerate(f, 1):
+                            try:
+                                if not line.strip():
+                                    continue
+                                    
+                                item = json.loads(line.strip())
+                                for field_name, id_type in self.dataset_id_fields[dataset_name]:
+                                    id_value = str(item.get(field_name, '')).lower()
+                                    if id_value:
+                                        entry = IndexEntry(
+                                            id=id_value,
+                                            file_path=str(file_path),
+                                            offset=offset
+                                        )
+                                        entries_by_type.setdefault(id_type, []).append(entry)
+                                        
+                            except json.JSONDecodeError:
+                                console.print(f"[yellow]Warning: Invalid JSON at line {line_num}[/yellow]")
                                 continue
-                        
-                        # Process the file
-                        console.print(f"[cyan]Indexing {file_path.name}...[/cyan]")
-                        self._index_file(conn, file_path, dataset_name)
-                        
+                            except Exception as e:
+                                console.print(f"[yellow]Warning: Error processing line {line_num}: {str(e)}[/yellow]")
+                                continue
+                                
+                            offset += len(line.encode('utf-8'))
+
+                    # Create indices for each ID type
+                    for id_type, entries in entries_by_type.items():
+                        if entries:
+                            success = self.indexer.create_index(
+                                release_id=release_id,
+                                dataset=dataset_name,
+                                id_type=id_type,
+                                entries=entries
+                            )
+                            if not success:
+                                console.print(f"[red]Failed to create index for {id_type}[/red]")
+                                return False
+
                 except Exception as e:
                     console.print(f"[red]Error processing {file_path.name}: {str(e)}[/red]")
-                    if not repair:
-                        raise
-            
+                    return False
+
+            # Verify all indices
+            if not self.indexer.verify_all_indices(release_id):
+                console.print("[red]Index verification failed[/red]")
+                return False
+
+            console.print(f"[green]Successfully indexed {dataset_name}[/green]")
             return True
                 
         except Exception as e:
             console.print(f"[red]Error indexing dataset {dataset_name}: {str(e)}[/red]")
             return False
+            
+    def __enter__(self):
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.indexer.close()
 
     def download_all_datasets(self, release_id: str = 'latest', mini: bool = False):
         """Download all datasets first, then index them all."""
@@ -1145,57 +1163,239 @@ def main():
     parser.add_argument('--release', default='latest', help='Release ID to download')
     parser.add_argument('--mini', action='store_true', help='Download minimal dataset for testing')
     parser.add_argument('--verify', action='store_true', help='Verify downloaded datasets')
-    parser.add_argument('--verify-index', nargs='*', help='Verify index completeness. Optionally specify datasets to verify (e.g. --verify-index papers abstracts)')
-    parser.add_argument('--audit', nargs='*', help='Audit datasets and indexing status. Optionally specify datasets to audit (e.g. --audit papers abstracts)')
-    parser.add_argument('--index-only', nargs='*', help='Only run indexing on downloaded files. Optionally specify datasets to index (e.g. --index-only papers abstracts)')
+    parser.add_argument('--verify-index', nargs='*', help='Verify index completeness. Optionally specify datasets to verify')
+    parser.add_argument('--audit', nargs='*', help='Audit datasets and indexing status')
+    parser.add_argument('--index-only', nargs='*', help='Only run indexing on downloaded files')
     parser.add_argument('--download-only', action='store_true', help='Only download files without indexing')
     parser.add_argument('--repair', action='store_true', help='Repair/resume incomplete indexes')
     parser.add_argument('--count', action='store_true', help='Show detailed index counts for each file')
     args = parser.parse_args()
     
-    downloader = S2DatasetDownloader()
-    
-    def validate_datasets(dataset_list):
-        """Helper function to validate dataset names and return filtered list"""
-        if not dataset_list:
-            return downloader.datasets_to_download
+    with S2DatasetDownloader() as downloader:
+        def validate_datasets(dataset_list):
+            """Helper function to validate dataset names and return filtered list"""
+            if not dataset_list:
+                return downloader.datasets_to_download
+                
+            invalid_datasets = [d for d in dataset_list if d not in downloader.datasets_to_download]
+            if invalid_datasets:
+                console.print(f"[red]Invalid dataset names: {', '.join(invalid_datasets)}[/red]")
+                console.print(f"[yellow]Valid datasets are: {', '.join(downloader.datasets_to_download)}[/yellow]")
+                return None
+            return dataset_list
+
+        if args.verify:
+            # Verify downloaded files match expected files from API
+            release_id = args.release
+            if release_id == 'latest':
+                release_id = downloader.get_latest_release()
             
-        invalid_datasets = [d for d in dataset_list if d not in downloader.datasets_to_download]
-        if invalid_datasets:
-            console.print(f"[red]Invalid dataset names: {', '.join(invalid_datasets)}[/red]")
-            console.print(f"[yellow]Valid datasets are: {', '.join(downloader.datasets_to_download)}[/yellow]")
-            return None
-        return dataset_list
-    
-    if args.count:
-        downloader.count_indices(args.release)
-    elif args.audit is not None:
-        datasets = validate_datasets(args.audit)
-        if datasets is None:
-            return
-        console.print(f"[cyan]Auditing datasets: {', '.join(datasets)}[/cyan]")
-        downloader.audit_datasets(args.release, datasets)
-    elif args.verify_index is not None:
-        datasets = validate_datasets(args.verify_index)
-        if datasets is None:
-            return
-        console.print(f"[cyan]Verifying index for datasets: {', '.join(datasets)}[/cyan]")
-        downloader.verify_index_completeness(datasets)
-    elif args.verify:
-        downloader.verify_downloads(args.release)
-    elif args.index_only is not None:
-        datasets = validate_datasets(args.index_only)
-        if datasets is None:
-            return
-        console.print(f"[cyan]Indexing datasets: {', '.join(datasets)}[/cyan]")
-        for dataset in datasets:
-            downloader.index_dataset(dataset, args.release, repair=args.repair)
-    elif args.download_only:
-        # Download all datasets without indexing
-        for dataset in downloader.datasets_to_download:
-            downloader.download_dataset(dataset, args.release, args.mini, index=False)
-    else:
-        downloader.download_all_datasets(args.release, args.mini)
+            console.print(f"\n[bold cyan]Verifying downloads for release {release_id}...[/bold cyan]")
+            missing_files = {}
+            
+            for dataset in downloader.datasets_to_download:
+                try:
+                    dataset_info = downloader.get_dataset_info(dataset, release_id)
+                    if not dataset_info:
+                        console.print(f"[yellow]Could not get info for dataset: {dataset}[/yellow]")
+                        continue
+                        
+                    dataset_dir = downloader.base_dir / release_id / dataset
+                    if not dataset_dir.exists():
+                        missing_files[dataset] = ["entire dataset missing"]
+                        continue
+                    
+                    # Get expected files
+                    if dataset == 's2orc':
+                        expected_files = [
+                            f"{info['shard']}.json" 
+                            for info in (dataset_info['files'][:1] if args.mini else dataset_info['files'])
+                        ]
+                    else:
+                        expected_files = [
+                            downloader.get_filename_from_url(url).replace('.gz', '.json')
+                            for url in (dataset_info['files'][:1] if args.mini else dataset_info['files'])
+                        ]
+                    
+                    # Check actual files
+                    actual_files = {f.name for f in dataset_dir.glob('*.json') if f.name != 'metadata.json'}
+                    missing = set(expected_files) - actual_files
+                    if missing:
+                        missing_files[dataset] = missing
+                        
+                except Exception as e:
+                    console.print(f"[red]Error verifying {dataset}: {str(e)}[/red]")
+            
+            if missing_files:
+                console.print("\n[red]Missing files found:[/red]")
+                for dataset, files in missing_files.items():
+                    console.print(f"\n[yellow]{dataset}:[/yellow]")
+                    for f in files:
+                        console.print(f"  • {f}")
+                return False
+            else:
+                console.print("\n[green]All expected files are present![/green]")
+                return True
+                
+        elif args.count:
+            # Show index statistics
+            release_id = args.release
+            if release_id == 'latest':
+                release_id = downloader._get_latest_local_release()
+            if not release_id:
+                console.print("[red]No local releases found[/red]")
+                return
+                
+            stats = downloader.indexer.get_index_stats(release_id)
+            
+            # Create a rich table to display stats
+            table = Table(title=f"Index Statistics for Release {release_id}")
+            table.add_column("Dataset")
+            table.add_column("ID Type")
+            table.add_column("Entries")
+            table.add_column("Size")
+            table.add_column("Created")
+            table.add_column("Status")
+            
+            for index_name, info in stats.items():
+                dataset, id_type = index_name.split('_')
+                status = "[green]Healthy[/green]" if info['healthy'] else "[red]Unhealthy[/red]"
+                table.add_row(
+                    dataset,
+                    id_type,
+                    f"{info['entry_count']:,}",
+                    f"{info['size_mb']:.1f} MB",
+                    info['created'],
+                    status
+                )
+            
+            console.print(table)
+            
+        elif args.audit is not None:
+            datasets = validate_datasets(args.audit)
+            if datasets is None:
+                return
+                
+            release_id = args.release
+            if release_id == 'latest':
+                release_id = downloader._get_latest_local_release()
+            if not release_id:
+                console.print("[red]No local releases found[/red]")
+                return
+                
+            # Create audit table
+            table = Table(title=f"Dataset Audit for Release {release_id}")
+            table.add_column("Dataset")
+            table.add_column("Files")
+            table.add_column("Index Status")
+            table.add_column("Health Check")
+            
+            for dataset in datasets:
+                # Check dataset files
+                dataset_dir = downloader.base_dir / release_id / dataset
+                if not dataset_dir.exists():
+                    table.add_row(dataset, "[red]Missing[/red]", "N/A", "N/A")
+                    continue
+                    
+                files = list(dataset_dir.glob("*.json"))
+                file_count = len([f for f in files if f.name != 'metadata.json'])
+                
+                # Get index stats
+                stats = downloader.indexer.get_index_stats(release_id)
+                index_info = next((v for k, v in stats.items() if k.startswith(f"{dataset}_")), None)
+                
+                if not index_info:
+                    table.add_row(
+                        dataset,
+                        f"{file_count} files",
+                        "[yellow]Not Indexed[/yellow]",
+                        "N/A"
+                    )
+                else:
+                    health = "[green]Healthy[/green]" if index_info['healthy'] else "[red]Unhealthy[/red]"
+                    table.add_row(
+                        dataset,
+                        f"{file_count} files",
+                        f"{index_info['entry_count']:,} entries",
+                        health
+                    )
+            
+            console.print(table)
+            
+        elif args.verify_index is not None:
+            datasets = validate_datasets(args.verify_index)
+            if datasets is None:
+                return
+                
+            release_id = args.release
+            if release_id == 'latest':
+                release_id = downloader._get_latest_local_release()
+            if not release_id:
+                console.print("[red]No local releases found[/red]")
+                return
+                
+            console.print(f"[cyan]Verifying indices for {len(datasets)} datasets...[/cyan]")
+            
+            for dataset in datasets:
+                console.print(f"\n[bold]Verifying {dataset}...[/bold]")
+                if downloader.indexer.verify_all_indices(release_id):
+                    console.print(f"[green]✓ {dataset} indices verified successfully[/green]")
+                else:
+                    console.print(f"[red]× {dataset} index verification failed[/red]")
+                    if args.repair:
+                        console.print(f"[cyan]Attempting to repair {dataset} indices...[/cyan]")
+                        if downloader.index_dataset(dataset, release_id):
+                            console.print(f"[green]✓ Successfully repaired {dataset} indices[/green]")
+                        else:
+                            console.print(f"[red]× Failed to repair {dataset} indices[/red]")
+                            
+        elif args.index_only is not None:
+            datasets = validate_datasets(args.index_only)
+            if datasets is None:
+                return
+                
+            release_id = args.release
+            if release_id == 'latest':
+                release_id = downloader._get_latest_local_release()
+            if not release_id:
+                console.print("[red]No local releases found[/red]")
+                return
+                
+            console.print(f"[cyan]Indexing {len(datasets)} datasets...[/cyan]")
+            
+            for dataset in datasets:
+                console.print(f"\n[bold]Indexing {dataset}...[/bold]")
+                if downloader.index_dataset(dataset, release_id):
+                    console.print(f"[green]✓ Successfully indexed {dataset}[/green]")
+                else:
+                    console.print(f"[red]× Failed to index {dataset}[/red]")
+                    
+        elif args.download_only:
+            # Download all datasets without indexing
+            release_id = args.release
+            if release_id == 'latest':
+                release_id = downloader.get_latest_release()
+                
+            console.print(f"[bold cyan]Downloading datasets for release {release_id}...[/bold cyan]")
+            
+            for dataset in downloader.datasets_to_download:
+                console.print(f"\n[bold]Downloading {dataset}...[/bold]")
+                downloader.download_dataset(dataset, release_id, args.mini, index=False)
+                
+        else:
+            # Download and index all datasets
+            release_id = args.release
+            if release_id == 'latest':
+                release_id = downloader.get_latest_release()
+                
+            console.print(f"[bold cyan]Downloading and indexing datasets for release {release_id}...[/bold cyan]")
+            
+            for dataset in downloader.datasets_to_download:
+                console.print(f"\n[bold]Processing {dataset}...[/bold]")
+                if downloader.download_dataset(dataset, release_id, args.mini, index=True):
+                    console.print(f"[green]✓ Successfully processed {dataset}[/green]")
+                else:
+                    console.print(f"[red]× Failed to process {dataset}[/red]")
 
 if __name__ == "__main__":
     main() 
