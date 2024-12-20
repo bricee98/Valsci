@@ -68,7 +68,6 @@ class S2DatasetDownloader:
         self.datasets_to_download = [
             "papers", 
             "abstracts",
-            "citations",
             "authors",
             "s2orc",
             "tldrs"
@@ -87,10 +86,6 @@ class S2DatasetDownloader:
             ],
             'abstracts': [('corpusid', 'corpus_id')],
             's2orc': [('corpusid', 'corpus_id')],
-            'citations': [
-                ('citingcorpusid', 'corpus_id'),
-                ('citedcorpusid', 'corpus_id')
-            ],
             'authors': [('authorid', 'author_id')],
             'tldrs': [('corpusid', 'corpus_id')]
         }
