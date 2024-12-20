@@ -11,6 +11,8 @@ from rich.console import Console
 import hashlib
 import tempfile
 from datetime import datetime
+from collections import defaultdict
+import random
 
 console = Console()
 
@@ -295,6 +297,8 @@ class BinaryIndexer:
 
             datasets_with_indices = set()
 
+            # First verify index file integrity
+            console.print("\n[bold]1. Verifying index file integrity...[/bold]")
             for index_path in index_files:
                 try:
                     # Extract dataset and id_type from filename
@@ -360,11 +364,22 @@ class BinaryIndexer:
                     console.print(f"[red]Error verifying index {index_path.name}: {str(e)}[/red]")
                     all_valid = False
 
-            # Report datasets without indices
+            # Second, verify completeness against source files
+            console.print("\n[bold]2. Verifying index completeness against source files...[/bold]")
+            if not self.verify_index_completeness(release_id):
+                all_valid = False
+
+            # Finally, report datasets without indices
+            console.print("\n[bold]3. Checking for missing dataset indices...[/bold]")
             for dataset in ['papers', 'abstracts', 'citations', 'authors', 's2orc', 'tldrs']:
                 if dataset not in datasets_with_indices:
                     console.print(f"[yellow]No indices found for dataset: {dataset}[/yellow]")
                     all_valid = False
+
+            if all_valid:
+                console.print("\n[green]✓ All verification checks passed successfully[/green]")
+            else:
+                console.print("\n[red]× Some verification checks failed[/red]")
 
             return all_valid
 
@@ -476,4 +491,152 @@ class BinaryIndexer:
             return True
             
         except Exception:
+            return False
+
+    def _count_entries_in_file(self, file_path: Path, sample_size: Optional[int] = None) -> Tuple[int, float]:
+        """
+        Count entries in a JSONL file, optionally using sampling for large files.
+        Returns (total_count, confidence) where confidence is 1.0 for full counts
+        and lower for sampled estimates.
+        """
+        try:
+            file_size = file_path.stat().st_size
+            
+            # For small files (< 100MB), just do a full count
+            if file_size < 100 * 1024 * 1024 or sample_size is None:
+                with open(file_path, 'r') as f:
+                    count = sum(1 for line in f if line.strip())
+                return count, 1.0
+                
+            # For large files, use sampling
+            with open(file_path, 'r') as f:
+                # Read sample_size random positions
+                positions = sorted(random.sample(range(file_size), sample_size))
+                line_count = 0
+                valid_samples = 0
+                
+                for pos in positions:
+                    f.seek(pos)
+                    # Skip partial line
+                    f.readline()
+                    # Read next full line
+                    line = f.readline()
+                    if line:
+                        line_count += 1
+                        if line.strip():
+                            valid_samples += 1
+                            
+                # Estimate total lines based on sampling
+                bytes_per_line = file_size / line_count if line_count else 0
+                estimated_total = int((file_size / bytes_per_line) * (valid_samples / line_count))
+                confidence = min(1.0, sample_size / estimated_total)
+                
+                return estimated_total, confidence
+                
+        except Exception as e:
+            console.print(f"[yellow]Warning: Error counting entries in {file_path}: {str(e)}[/yellow]")
+            return 0, 0.0
+
+    def verify_index_completeness(self, release_id: str, dataset: Optional[str] = None, 
+                                sample_size: int = 1000) -> bool:
+        """
+        Verify that indices contain all entries from source files.
+        Uses sampling for large files to estimate counts.
+        """
+        try:
+            self._load_metadata(release_id)
+            if release_id not in self.metadata:
+                console.print(f"[red]No metadata found for release {release_id}[/red]")
+                return False
+
+            datasets_to_check = [dataset] if dataset else {
+                k.split('_')[0] for k in self.metadata[release_id].keys()
+            }
+
+            all_valid = True
+            source_counts = defaultdict(int)
+            confidence_levels = defaultdict(float)
+            
+            # First pass: count entries in source files
+            for dataset_name in datasets_to_check:
+                dataset_dir = Path(self.base_dir) / release_id / dataset_name
+                if not dataset_dir.exists():
+                    console.print(f"[yellow]Dataset directory not found: {dataset_dir}[/yellow]")
+                    continue
+
+                files = [f for f in dataset_dir.glob("*.json") if f.name != 'metadata.json']
+                if not files:
+                    console.print(f"[yellow]No source files found for {dataset_name}[/yellow]")
+                    continue
+
+                total_count = 0
+                min_confidence = 1.0
+                
+                for file_path in files:
+                    count, confidence = self._count_entries_in_file(file_path, sample_size)
+                    total_count += count
+                    min_confidence = min(min_confidence, confidence)
+                    
+                source_counts[dataset_name] = total_count
+                confidence_levels[dataset_name] = min_confidence
+
+            # Second pass: compare with index counts
+            table = Table(
+                "Dataset", 
+                "ID Type",
+                "Index Entries",
+                "Source Entries",
+                "Confidence",
+                "Status",
+                title=f"Index Completeness Check for Release {release_id}"
+            )
+
+            for dataset_name in datasets_to_check:
+                source_count = source_counts[dataset_name]
+                confidence = confidence_levels[dataset_name]
+                
+                # Get all index types for this dataset
+                indices = {
+                    k.split('_', 1)[1]: v 
+                    for k, v in self.metadata[release_id].items() 
+                    if k.startswith(f"{dataset_name}_")
+                }
+
+                if not indices:
+                    table.add_row(
+                        dataset_name,
+                        "N/A",
+                        "No indices",
+                        f"{source_count:,}",
+                        f"{confidence:.1%}",
+                        "[red]Missing[/red]"
+                    )
+                    all_valid = False
+                    continue
+
+                for id_type, meta in indices.items():
+                    index_count = meta['entry_count']
+                    
+                    # Allow for small differences due to sampling
+                    margin = int(source_count * (1 - confidence) * 0.1)
+                    count_match = abs(index_count - source_count) <= margin
+                    
+                    status = "[green]OK[/green]" if count_match else "[red]Mismatch[/red]"
+                    if not count_match:
+                        all_valid = False
+                    
+                    table.add_row(
+                        dataset_name,
+                        id_type,
+                        f"{index_count:,}",
+                        f"{source_count:,}",
+                        f"{confidence:.1%}",
+                        status
+                    )
+
+            console.print(table)
+            return all_valid
+
+        except Exception as e:
+            console.print(f"[red]Error verifying index completeness: {str(e)}[/red]")
             return False
