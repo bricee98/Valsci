@@ -20,7 +20,7 @@ import sqlite3
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
-from .binary_indexer import BinaryIndexer, IndexEntry
+from semantic_scholar.utils.binary_indexer import BinaryIndexer, IndexEntry
 
 # Add project root to path
 project_root = str(Path(__file__).parent.parent.parent)
