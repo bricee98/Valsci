@@ -364,9 +364,15 @@ class S2DatasetDownloader:
 
             # Track entries for each ID type
             entries_by_id_type = defaultdict(list)
+            total_entries = 0
+            
+            console.print(f"[cyan]Processing {len(files)} files for {dataset}...[/cyan]")
             
             # Process each file
             for file_path in files:
+                console.print(f"[cyan]Processing {file_path.name}...[/cyan]")
+                entries_in_file = 0
+                
                 with open(file_path, 'rb') as f:  # Open in binary mode
                     offset = 0
                     for line in f:
@@ -389,18 +395,57 @@ class S2DatasetDownloader:
                                 entries_by_id_type['corpus_id'].append(
                                     IndexEntry(str(data['corpusid']), str(file_path), offset)
                                 )
+                                entries_in_file += 1
                             if 'paperId' in data:
                                 entries_by_id_type['paper_id'].append(
                                     IndexEntry(data['paperId'], str(file_path), offset)
                                 )
+                                entries_in_file += 1
+                                
                         elif dataset == 'authors':
                             if 'authorid' in data:
                                 entries_by_id_type['author_id'].append(
                                     IndexEntry(data['authorid'], str(file_path), offset)
                                 )
-                        # ... (other dataset types)
-                        
+                                entries_in_file += 1
+                                
+                        elif dataset == 'citations':
+                            if 'citingcorpusid' in data:
+                                entries_by_id_type['corpus_id'].append(
+                                    IndexEntry(str(data['citingcorpusid']), str(file_path), offset)
+                                )
+                                entries_in_file += 1
+                            if 'citedcorpusid' in data:
+                                entries_by_id_type['corpus_id'].append(
+                                    IndexEntry(str(data['citedcorpusid']), str(file_path), offset)
+                                )
+                                entries_in_file += 1
+                                
+                        elif dataset == 'abstracts':
+                            if 'corpusid' in data:
+                                entries_by_id_type['corpus_id'].append(
+                                    IndexEntry(str(data['corpusid']), str(file_path), offset)
+                                )
+                                entries_in_file += 1
+                                
+                        elif dataset == 's2orc':
+                            if 'corpusid' in data:
+                                entries_by_id_type['corpus_id'].append(
+                                    IndexEntry(str(data['corpusid']), str(file_path), offset)
+                                )
+                                entries_in_file += 1
+                                
+                        elif dataset == 'tldrs':
+                            if 'corpusid' in data:
+                                entries_by_id_type['corpus_id'].append(
+                                    IndexEntry(str(data['corpusid']), str(file_path), offset)
+                                )
+                                entries_in_file += 1
+                            
                         offset += len(line)
+                        
+                total_entries += entries_in_file
+                console.print(f"[green]Created {entries_in_file:,} index entries from {file_path.name}[/green]")
 
             # Create indices for each ID type
             for id_type, entries in entries_by_id_type.items():
@@ -408,11 +453,12 @@ class S2DatasetDownloader:
                     console.print(f"[yellow]No entries found for {dataset}_{id_type}[/yellow]")
                     continue
                     
-                console.print(f"Creating index for {dataset}_{id_type} with {len(entries):,} entries")
+                console.print(f"[cyan]Creating index for {dataset}_{id_type} with {len(entries):,} entries[/cyan]")
                 if not self.indexer.create_index(release_id, dataset, id_type, entries):
                     console.print(f"[red]Failed to create index for {dataset}_{id_type}[/red]")
                     return False
 
+            console.print(f"[green]Successfully created {total_entries:,} total index entries for {dataset}[/green]")
             return True
 
         except Exception as e:

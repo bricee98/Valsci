@@ -97,7 +97,10 @@ class BinaryIndexer:
         """
         tmp_path = None
         try:
+            console.print(f"[cyan]Creating index for {dataset}_{id_type}...[/cyan]")
+            
             # Sort entries by ID for binary search
+            console.print(f"[cyan]Sorting {len(entries):,} entries...[/cyan]")
             entries.sort(key=lambda x: x.id)
             
             # Create unique temporary file
@@ -105,16 +108,19 @@ class BinaryIndexer:
             final_path = self._get_index_path(release_id, dataset, id_type)
 
             # Write sorted entries to temporary file
+            console.print(f"[cyan]Writing entries to temporary file {tmp_path.name}...[/cyan]")
             with open(tmp_path, 'wb') as f:
                 for entry in entries:
                     f.write(entry.to_bytes())
 
             # Verify the temporary index
             if verify:
+                console.print("[cyan]Verifying index integrity...[/cyan]")
                 if not self._verify_index(tmp_path, entries):
                     raise ValueError("Index verification failed")
 
             # Calculate checksum
+            console.print("[cyan]Calculating index checksum...[/cyan]")
             checksum = self._calculate_file_checksum(tmp_path)
 
             # Update metadata
@@ -129,6 +135,7 @@ class BinaryIndexer:
             }
             
             # Move temporary file to final location
+            console.print(f"[cyan]Moving index to final location: {final_path.name}...[/cyan]")
             if final_path.exists():
                 final_path.unlink()
             shutil.move(str(tmp_path), str(final_path))
@@ -136,6 +143,7 @@ class BinaryIndexer:
             # Save updated metadata
             self._save_metadata(release_id)
             
+            console.print(f"[green]Successfully created index with {len(entries):,} entries[/green]")
             return True
 
         except Exception as e:
