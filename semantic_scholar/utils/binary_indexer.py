@@ -14,6 +14,7 @@ from datetime import datetime
 from collections import defaultdict
 import random
 from rich.table import Table
+import heapq
 
 console = Console()
 
@@ -144,6 +145,87 @@ class BinaryIndexer:
             self._save_metadata(release_id)
             
             console.print(f"[green]Successfully created index with {len(entries):,} entries[/green]")
+            return True
+
+        except Exception as e:
+            console.print(f"[red]Error creating index: {str(e)}[/red]")
+            # Clean up temporary file if it exists
+            if tmp_path and tmp_path.exists():
+                tmp_path.unlink()
+            return False
+
+    def create_index_from_chunks(self, release_id: str, dataset: str, id_type: str, 
+                               chunk_paths: List[Path], verify: bool = True) -> bool:
+        """
+        Create a new binary index file from sorted chunks.
+        Uses a temporary file and only replaces existing index if successful.
+        """
+        tmp_path = None
+        try:
+            console.print(f"[cyan]Creating index for {dataset}_{id_type} from chunks...[/cyan]")
+            
+            # Create unique temporary file
+            tmp_path = self.tmp_dir / f"{release_id}_{dataset}_{id_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.idx.tmp"
+            final_path = self._get_index_path(release_id, dataset, id_type)
+
+            # Merge chunks directly to temporary file
+            entry_count = 0
+            with open(tmp_path, 'wb') as out_f:
+                # Initialize heap with first entry from each chunk
+                heap = []
+                chunk_files = []
+                
+                for chunk_path in chunk_paths:
+                    f = open(chunk_path, 'rb')
+                    chunk_files.append(f)
+                    data = f.read(IndexEntry.ENTRY_SIZE)
+                    if data:
+                        entry = IndexEntry.from_bytes(data)
+                        heap.append((entry.id, entry, f))
+                
+                heapq.heapify(heap)
+                
+                # Merge chunks
+                while heap:
+                    _, entry, chunk_f = heapq.heappop(heap)
+                    out_f.write(entry.to_bytes())
+                    entry_count += 1
+                    
+                    # Read next entry from this chunk
+                    data = chunk_f.read(IndexEntry.ENTRY_SIZE)
+                    if data:
+                        next_entry = IndexEntry.from_bytes(data)
+                        heapq.heappush(heap, (next_entry.id, next_entry, chunk_f))
+
+            # Close all chunk files
+            for f in chunk_files:
+                f.close()
+
+            # Calculate checksum
+            console.print("[cyan]Calculating index checksum...[/cyan]")
+            checksum = self._calculate_file_checksum(tmp_path)
+
+            # Update metadata
+            if release_id not in self.metadata:
+                self._load_metadata(release_id)
+            
+            self.metadata[release_id][f"{dataset}_{id_type}"] = {
+                'entry_count': entry_count,
+                'checksum': checksum,
+                'entry_size': IndexEntry.ENTRY_SIZE,
+                'created': str(datetime.now())
+            }
+            
+            # Move temporary file to final location
+            console.print(f"[cyan]Moving index to final location: {final_path.name}...[/cyan]")
+            if final_path.exists():
+                final_path.unlink()
+            shutil.move(str(tmp_path), str(final_path))
+            
+            # Save updated metadata
+            self._save_metadata(release_id)
+            
+            console.print(f"[green]Successfully created index with {entry_count:,} entries[/green]")
             return True
 
         except Exception as e:

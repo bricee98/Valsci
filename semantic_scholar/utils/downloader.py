@@ -362,18 +362,23 @@ class S2DatasetDownloader:
                 console.print(f"[yellow]No files found to index in {dataset_dir}[/yellow]")
                 return False
 
+            # Create temporary directory for chunks
+            chunk_dir = self.indexer.tmp_dir / f"{release_id}_{dataset}_chunks"
+            chunk_dir.mkdir(parents=True, exist_ok=True)
+
             # Track entries for each ID type
-            entries_by_id_type = defaultdict(list)
+            id_types_seen = set()
             total_entries = 0
             
             console.print(f"[cyan]Processing {len(files)} files for {dataset}...[/cyan]")
             
-            # Process each file
-            for file_path in files:
+            # Process each file and write sorted chunks
+            for file_num, file_path in enumerate(files):
                 console.print(f"[cyan]Processing {file_path.name}...[/cyan]")
+                entries_by_id_type = defaultdict(list)
                 entries_in_file = 0
                 
-                with open(file_path, 'rb') as f:  # Open in binary mode
+                with open(file_path, 'rb') as f:
                     offset = 0
                     for line in f:
                         try:
@@ -401,14 +406,12 @@ class S2DatasetDownloader:
                                     IndexEntry(data['paperId'], str(file_path), offset)
                                 )
                                 entries_in_file += 1
-                                
                         elif dataset == 'authors':
                             if 'authorid' in data:
                                 entries_by_id_type['author_id'].append(
                                     IndexEntry(data['authorid'], str(file_path), offset)
                                 )
                                 entries_in_file += 1
-                                
                         elif dataset == 'citations':
                             if 'citingcorpusid' in data:
                                 entries_by_id_type['corpus_id'].append(
@@ -420,21 +423,18 @@ class S2DatasetDownloader:
                                     IndexEntry(str(data['citedcorpusid']), str(file_path), offset)
                                 )
                                 entries_in_file += 1
-                                
                         elif dataset == 'abstracts':
                             if 'corpusid' in data:
                                 entries_by_id_type['corpus_id'].append(
                                     IndexEntry(str(data['corpusid']), str(file_path), offset)
                                 )
                                 entries_in_file += 1
-                                
                         elif dataset == 's2orc':
                             if 'corpusid' in data:
                                 entries_by_id_type['corpus_id'].append(
                                     IndexEntry(str(data['corpusid']), str(file_path), offset)
                                 )
                                 entries_in_file += 1
-                                
                         elif dataset == 'tldrs':
                             if 'corpusid' in data:
                                 entries_by_id_type['corpus_id'].append(
@@ -443,26 +443,39 @@ class S2DatasetDownloader:
                                 entries_in_file += 1
                             
                         offset += len(line)
-                        
+
+                # Write sorted chunks for each ID type
+                for id_type, entries in entries_by_id_type.items():
+                    id_types_seen.add(id_type)
+                    entries.sort(key=lambda x: x.id)  # Sort chunk
+                    chunk_path = chunk_dir / f"{id_type}_chunk_{file_num:03d}.idx"
+                    with open(chunk_path, 'wb') as f:
+                        for entry in entries:
+                            f.write(entry.to_bytes())
+
                 total_entries += entries_in_file
                 console.print(f"[green]Created {entries_in_file:,} index entries from {file_path.name}[/green]")
 
-            # Create indices for each ID type
-            for id_type, entries in entries_by_id_type.items():
-                if not entries:
-                    console.print(f"[yellow]No entries found for {dataset}_{id_type}[/yellow]")
+            # Create final indices from chunks
+            for id_type in id_types_seen:
+                chunks = sorted(chunk_dir.glob(f"{id_type}_chunk_*.idx"))
+                if not chunks:
                     continue
                     
-                console.print(f"[cyan]Creating index for {dataset}_{id_type} with {len(entries):,} entries[/cyan]")
-                if not self.indexer.create_index(release_id, dataset, id_type, entries):
+                if not self.indexer.create_index_from_chunks(release_id, dataset, id_type, chunks):
                     console.print(f"[red]Failed to create index for {dataset}_{id_type}[/red]")
                     return False
+
+            # Clean up chunk directory
+            shutil.rmtree(chunk_dir)
 
             console.print(f"[green]Successfully created {total_entries:,} total index entries for {dataset}[/green]")
             return True
 
         except Exception as e:
             console.print(f"[red]Error indexing dataset {dataset}: {str(e)}[/red]")
+            if 'chunk_dir' in locals() and chunk_dir.exists():
+                shutil.rmtree(chunk_dir)
             return False
 
     def __enter__(self):
