@@ -1104,6 +1104,26 @@ class S2DatasetDownloader:
         """This method is no longer needed with binary indexer"""
         pass
 
+    def verify_all_indices(self, release_id: str = 'latest', show_details: bool = False) -> bool:
+        """Verify all indices for a release."""
+        try:
+            if release_id == 'latest':
+                release_id = self._get_latest_local_release()
+                if not release_id:
+                    console.print("[red]No local releases found[/red]")
+                    return False
+            
+            console.print(f"\n[bold cyan]Verifying indices for release {release_id}...[/bold cyan]")
+            
+            # Use binary indexer to verify indices
+            with BinaryIndexer(self.base_dir) as indexer:
+                # Let the binary indexer handle all verification and reporting
+                return indexer.verify_all_indices(release_id, show_details=True)
+                
+        except Exception as e:
+            console.print(f"[red]Error verifying indices: {str(e)}[/red]")
+            return False
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Download Semantic Scholar datasets')
