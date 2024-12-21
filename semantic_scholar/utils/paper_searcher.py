@@ -156,6 +156,7 @@ class PaperSearcher:
                     console.print("[red]No releases found in datasets directory[/red]")
                     return {}
                 release_id = sorted(releases)[-1]
+                console.print(f"[cyan]Using latest release: {release_id}[/cyan]")
             
             # Define datasets and their ID types
             dataset_ids = {
@@ -165,43 +166,68 @@ class PaperSearcher:
                 'tldrs': ['corpus_id']
             }
             
+            console.print(f"[cyan]Looking for indices in: {self.indexer.index_dir}[/cyan]")
+            
             samples = {}
+            
+            # Import IndexEntry here to avoid circular imports
+            from .binary_indexer import IndexEntry
+            console.print(f"[cyan]Index entry size: {IndexEntry.ENTRY_SIZE} bytes[/cyan]")
             
             # Get samples from each dataset and ID type
             for dataset, id_types in dataset_ids.items():
                 dataset_dir = self.base_dir / release_id / dataset
                 if not dataset_dir.exists():
+                    console.print(f"[yellow]Dataset directory not found: {dataset_dir}[/yellow]")
                     continue
                     
                 for id_type in id_types:
                     index_path = self.indexer.index_dir / f"{release_id}_{dataset}_{id_type}.idx"
                     if not index_path.exists():
+                        console.print(f"[yellow]Index not found: {index_path.name}[/yellow]")
                         continue
                         
                     # Get total entries in index
-                    total_entries = index_path.stat().st_size // self.indexer._mmaps[f"{release_id}_{dataset}_{id_type}"].ENTRY_SIZE
+                    file_size = index_path.stat().st_size
+                    total_entries = file_size // IndexEntry.ENTRY_SIZE
+                    console.print(f"[cyan]Found index {index_path.name} ({file_size:,} bytes, {total_entries:,} entries)[/cyan]")
+                    
                     if total_entries == 0:
+                        console.print(f"[yellow]Index {index_path.name} is empty[/yellow]")
                         continue
                     
                     # Get random sample positions
                     sample_positions = random.sample(range(total_entries), min(sample_size, total_entries))
+                    console.print(f"[cyan]Sampling {len(sample_positions)} entries from positions: {sample_positions}[/cyan]")
                     
-                    # Read samples using the indexer's search functionality
+                    # Read samples
                     sample_ids = []
                     with open(index_path, 'rb') as f:
                         for pos in sample_positions:
-                            f.seek(pos * self.indexer._mmaps[f"{release_id}_{dataset}_{id_type}"].ENTRY_SIZE)
-                            data = f.read(self.indexer._mmaps[f"{release_id}_{dataset}_{id_type}"].ENTRY_SIZE)
-                            from .binary_indexer import IndexEntry
+                            offset = pos * IndexEntry.ENTRY_SIZE
+                            f.seek(offset)
+                            data = f.read(IndexEntry.ENTRY_SIZE)
+                            if len(data) != IndexEntry.ENTRY_SIZE:
+                                console.print(f"[yellow]Warning: Incomplete read at position {pos} (offset {offset})[/yellow]")
+                                continue
                             entry = IndexEntry.from_bytes(data)
                             sample_ids.append(entry.id)
+                            console.print(f"[dim]Read ID: {entry.id} from position {pos}[/dim]")
                     
+                    console.print(f"[green]Successfully sampled {len(sample_ids)} IDs from {index_path.name}[/green]")
                     samples[f"{dataset}_{id_type}"] = sample_ids
+            
+            if not samples:
+                console.print("[yellow]No valid indices found to sample from[/yellow]")
+            else:
+                console.print(f"[green]Successfully sampled from {len(samples)} indices[/green]")
             
             return samples
             
         except Exception as e:
             console.print(f"[red]Error getting sample IDs: {str(e)}[/red]")
+            import traceback
+            console.print(f"[red]{traceback.format_exc()}[/red]")
             return {}
 
 def main():
