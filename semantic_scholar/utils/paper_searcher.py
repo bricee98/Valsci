@@ -30,7 +30,7 @@ class PaperSearcher:
         Search for a paper and its related information across multiple datasets.
         
         Args:
-            paper_id: The paper ID to search for (can be paper_id or corpus_id)
+            paper_id: The paper ID to search for (can be paper_id or corpusid)
             release_id: Release ID to search in (defaults to latest)
             
         Returns:
@@ -60,29 +60,34 @@ class PaperSearcher:
             
             # Search in papers dataset
             if is_corpus_id:
-                paper_data = self.indexer.lookup(release_id, 'papers', 'corpus_id', paper_id)
+                # Try both corpusid and corpus_id fields since data format varies
+                paper_data = (
+                    self.indexer.lookup(release_id, 'papers', 'corpus_id', paper_id) or
+                    self.indexer.lookup(release_id, 'papers', 'corpusid', paper_id)
+                )
             else:
                 paper_data = self.indexer.lookup(release_id, 'papers', 'paper_id', paper_id)
             
             if paper_data:
                 results['paper'] = paper_data
                 # Get corpus_id for searching other datasets
-                corpus_id = str(paper_data.get('corpusid'))
+                corpus_id = str(paper_data.get('corpusid') or paper_data.get('corpus_id'))
                 
-                # Search for abstract
-                abstract_data = self.indexer.lookup(release_id, 'abstracts', 'corpus_id', corpus_id)
-                if abstract_data:
-                    results['abstract'] = abstract_data
-                
-                # Search for S2ORC full text
-                s2orc_data = self.indexer.lookup(release_id, 's2orc', 'corpus_id', corpus_id)
-                if s2orc_data:
-                    results['s2orc'] = s2orc_data
-                
-                # Search for TLDR
-                tldr_data = self.indexer.lookup(release_id, 'tldrs', 'corpus_id', corpus_id)
-                if tldr_data:
-                    results['tldr'] = tldr_data
+                if corpus_id:
+                    # Search for abstract
+                    abstract_data = self.indexer.lookup(release_id, 'abstracts', 'corpus_id', corpus_id)
+                    if abstract_data:
+                        results['abstract'] = abstract_data
+                    
+                    # Search for S2ORC full text
+                    s2orc_data = self.indexer.lookup(release_id, 's2orc', 'corpus_id', corpus_id)
+                    if s2orc_data:
+                        results['s2orc'] = s2orc_data
+                    
+                    # Search for TLDR
+                    tldr_data = self.indexer.lookup(release_id, 'tldrs', 'corpus_id', corpus_id)
+                    if tldr_data:
+                        results['tldr'] = tldr_data
             
             return results
             
@@ -107,7 +112,7 @@ class PaperSearcher:
             
             table.add_row("Title", paper.get('title', 'N/A'))
             table.add_row("Paper ID", paper.get('paperId', 'N/A'))
-            table.add_row("Corpus ID", str(paper.get('corpusid', 'N/A')))
+            table.add_row("Corpus ID", str(paper.get('corpusid') or paper.get('corpus_id', 'N/A')))
             table.add_row("Year", str(paper.get('year', 'N/A')))
             table.add_row("Venue", paper.get('venue', 'N/A'))
             

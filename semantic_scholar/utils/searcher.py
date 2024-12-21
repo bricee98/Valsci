@@ -245,19 +245,18 @@ class S2Searcher:
         try:
             # Map all known ID types to their JSON field names
             id_mappings = {
-                'paper_id': 'paperId',
                 'corpus_id': 'corpusid',  # Used by papers, abstracts, s2orc, tldrs
                 'author_id': 'authorid'
             }
 
-            # For abstracts and tldrs, default to corpus_id if no id_type specified
-            if dataset in ['abstracts', 'tldrs', 's2orc'] and not id_type:
+            # For all paper-related datasets, default to corpus_id
+            if dataset in ['papers', 'abstracts', 'tldrs', 's2orc'] and not id_type:
                 id_type = 'corpus_id'
 
             record = self.indexer.lookup(
                 release_id=self.current_release,
                 dataset=dataset,
-                id_type=id_mappings.get(id_type or 'paper_id', id_type),
+                id_type=id_mappings.get(id_type, id_type),
                 search_id=str(item_id).lower()
             )
             return record
@@ -265,31 +264,20 @@ class S2Searcher:
             console.print(f"[red]Binary index lookup error: {str(e)}[/red]")
             return None
 
-    def get_paper_content(self, paper_id: str, corpus_id: Optional[int] = None) -> Optional[Dict]:
+    def get_paper_content(self, corpus_id: str) -> Optional[Dict]:
         """Get full paper content from S2ORC or abstract data, using the BinaryIndexer."""
         try:
-            if corpus_id:
-                s2orc_data = self._find_in_dataset('s2orc', str(corpus_id), id_type='corpus_id')
-                if s2orc_data and s2orc_data.get('content', {}).get('text'):
-                    return {
-                        'text': s2orc_data['content']['text'],
-                        'source': 's2orc',
-                        'pdf_hash': s2orc_data.get('content', {}).get('source', {}).get('pdfsha')
-                    }
+            # Try S2ORC first
+            s2orc_data = self._find_in_dataset('s2orc', str(corpus_id), id_type='corpus_id')
+            if s2orc_data and s2orc_data.get('content', {}).get('text'):
+                return {
+                    'text': s2orc_data['content']['text'],
+                    'source': 's2orc',
+                    'pdf_hash': s2orc_data.get('content', {}).get('source', {}).get('pdfsha')
+                }
 
-            # Otherwise try the paper dataset to find corpusId, etc.
-            paper_data = self._find_in_dataset('papers', paper_id, id_type='paper_id')
-            if paper_data and paper_data.get('corpusid'):
-                s2orc_data = self._find_in_dataset('s2orc', str(paper_data['corpusid']), id_type='corpus_id')
-                if s2orc_data and s2orc_data.get('content', {}).get('text'):
-                    return {
-                        'text': s2orc_data['content']['text'],
-                        'source': 's2orc',
-                        'pdf_hash': s2orc_data.get('content', {}).get('source', {}).get('pdfsha')
-                    }
-
-            # fallback to 'abstracts' dataset
-            abstract_data = self._find_in_dataset('abstracts', paper_id, id_type='paper_id')
+            # Fallback to abstracts dataset
+            abstract_data = self._find_in_dataset('abstracts', str(corpus_id), id_type='corpus_id')
             if abstract_data and abstract_data.get('abstract'):
                 return {
                     'text': abstract_data['abstract'],
@@ -299,7 +287,7 @@ class S2Searcher:
             
             return None
         except Exception as e:
-            console.print(f"[red]Error getting paper content for {paper_id}: {str(e)}[/red]")
+            console.print(f"[red]Error getting paper content for {corpus_id}: {str(e)}[/red]")
             return None
 
 class RateLimiter:

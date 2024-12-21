@@ -55,18 +55,17 @@ class LiteratureSearcher:
     def fetch_paper_content(self, paper: Paper, claim: Claim) -> Tuple[str, str]:
         """Fetch the full text content of a paper."""
         try:
-            # Add error logging
-            logger.info(f"Fetching content for paper ID: {paper.paper_id}")
+            logger.info(f"Fetching content for corpus ID: {paper.corpus_id}")
             
-            content = self.s2_searcher.get_paper_content(paper.paper_id)
+            content = self.s2_searcher.get_paper_content(str(paper.corpus_id))
             if content:
-                logger.info(f"Successfully retrieved content for paper ID: {paper.paper_id}")
+                logger.info(f"Successfully retrieved content for corpus ID: {paper.corpus_id}")
                 return content['text'], content['source']
             
-            logger.warning(f"No content found for paper ID: {paper.paper_id}, falling back to abstract")
+            logger.warning(f"No content found for corpus ID: {paper.corpus_id}, falling back to abstract")
             return paper.abstract or "", "abstract_only"
             
         except Exception as e:
-            logger.error(f"Error fetching paper content for {paper.paper_id}: {str(e)}")
+            logger.error(f"Error fetching paper content for {paper.corpus_id}: {str(e)}")
             return paper.abstract or "", "abstract_only"
 

@@ -55,6 +55,15 @@ class BinaryIndexer:
         self._mmaps: Dict[str, mmap.mmap] = {}
         self.metadata: Dict[str, Dict] = {}
         
+        # Define which IDs to index for each dataset
+        self.dataset_id_fields = {
+            'papers': [('corpusid', 'corpus_id')],  # Remove paper_id entry
+            'abstracts': [('corpusid', 'corpus_id')],
+            's2orc': [('corpusid', 'corpus_id')],
+            'authors': [('authorid', 'author_id')],
+            'tldrs': [('corpusid', 'corpus_id')]
+        }
+        
     def close(self):
         """Close all open memory maps"""
         for mmap_obj in self._mmaps.values():
