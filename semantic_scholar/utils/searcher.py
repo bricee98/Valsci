@@ -99,19 +99,19 @@ class S2Searcher:
                 search_results = self.search_papers(query, limit=results_per_query)
                 
                 for paper in search_results:
-                    paper_id = paper.get('paperId')
+                    corpus_id = paper.get('corpusId')
 
-                    console.print(f"[green]Paper ID: {paper_id}[/green]")
-                    if paper_id and paper_id not in seen_paper_ids:
+                    console.print(f"[green]Corpus ID: {corpus_id}[/green]")
+                    if corpus_id and corpus_id not in seen_paper_ids:
                         # Get full content
-                        content = self.get_paper_content(paper_id)
+                        content = self.get_paper_content(corpus_id)
                         console.print(f"[green]Content: {content}[/green]")
                         if content:
                             paper['full_text'] = content['text']
                             paper['content_source'] = content['source']
                             paper['pdf_hash'] = content['pdf_hash']
                         
-                        seen_paper_ids.add(paper_id)
+                        seen_paper_ids.add(corpus_id)
                         papers.append(paper)
                         
             except Exception as e:
