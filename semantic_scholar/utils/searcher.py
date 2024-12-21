@@ -8,11 +8,13 @@ import ijson
 from openai import OpenAI
 import asyncio
 import mmap
-import sqlite3
 
 project_root = str(Path(__file__).parent.parent.parent)
 from app.config.settings import Config
 from app.services.openai_service import OpenAIService
+
+# Import the BinaryIndexer so we can do direct lookups from the .idx files
+from semantic_scholar.utils.binary_indexer import BinaryIndexer
 
 console = Console()
 
@@ -36,10 +38,8 @@ class S2Searcher:
         if not self.has_local_data:
             console.print("[yellow]Warning: No local datasets found. Running in API-only mode.[/yellow]")
 
-        # Initialize index
-        self.index_dir = self.base_dir / "indices"
-        self.index_dir.mkdir(exist_ok=True)
-        self._init_indices()
+        # Now we hold a BinaryIndexer for local lookups:
+        self.indexer = BinaryIndexer(self.base_dir)
 
     def _get_latest_local_release(self) -> Optional[str]:
         """Get the latest release from local datasets."""
@@ -235,55 +235,34 @@ class S2Searcher:
         return paper_data
 
     def _find_in_dataset(self, dataset: str, item_id: str, id_type: str = None) -> Optional[Dict]:
-        """Find an item in a dataset using the index."""
+        """
+        Look up an item in a local dataset using our BinaryIndexer, instead of SQLite.
+        dataset might be 'papers', 'abstracts', 's2orc', etc.
+        item_id is typically a paperId or corpusId, depending on id_type.
+        """
         if not self.has_local_data:
             return None
         
-        index_path = self.index_dir / f"{self.current_release}.db"
-        if not index_path.exists():
+        try:
+            # This is a hypothetical new method you’d add to BinaryIndexer.
+            # It should perform a binary search in the .idx file for the given release, dataset, id_type, and item_id,
+            # then parse and return the JSON record, or None if not found.
+            record = self.indexer.lookup(
+                release_id=self.current_release,
+                dataset=dataset,
+                id_type=id_type or "paper_id",
+                search_id=str(item_id).lower()
+            )
+            return record
+        except Exception as e:
+            console.print(f"[red]Binary index lookup error: {str(e)}[/red]")
             return None
 
-        try:
-            with sqlite3.connect(str(index_path)) as conn:
-                # Match the schema from downloader.py
-                if id_type:
-                    cursor = conn.execute(
-                        """
-                        SELECT file_path, line_offset 
-                        FROM paper_locations 
-                        WHERE id = ? AND id_type = ? AND dataset = ?
-                        LIMIT 1
-                        """,
-                        (str(item_id).lower(), id_type, dataset)
-                    )
-                else:
-                    # Try both paper_id and corpus_id if id_type not specified
-                    cursor = conn.execute(
-                        """
-                        SELECT file_path, line_offset 
-                        FROM paper_locations 
-                        WHERE id = ? AND dataset = ?
-                        LIMIT 1
-                        """,
-                        (str(item_id).lower(), dataset)
-                    )
-                
-                result = cursor.fetchone()
-                if result:
-                    file_path, offset = result
-                    return self._get_item_by_offset(file_path, offset)
-                    
-        except Exception as e:
-            console.print(f"[red]Error querying index: {str(e)}[/red]")
-            
-        return None
-
     def get_paper_content(self, paper_id: str, corpus_id: Optional[int] = None) -> Optional[Dict]:
-        """Get full paper content from S2ORC dataset."""
+        """Get full paper content from S2ORC or abstract data, using the BinaryIndexer."""
         try:
-            # If we have a corpusId, use it directly for S2ORC lookup
             if corpus_id:
-                s2orc_data = self._find_in_dataset('s2orc', str(corpus_id))
+                s2orc_data = self._find_in_dataset('s2orc', str(corpus_id), id_type='corpus_id')
                 if s2orc_data and s2orc_data.get('content', {}).get('text'):
                     return {
                         'text': s2orc_data['content']['text'],
@@ -291,19 +270,19 @@ class S2Searcher:
                         'pdf_hash': s2orc_data.get('content', {}).get('source', {}).get('pdfsha')
                     }
 
-            # Otherwise try to get paper data to find corpusId
-            paper_data = self._find_in_dataset('papers', paper_id)
+            # Otherwise try the paper dataset to find corpusId, etc.
+            paper_data = self._find_in_dataset('papers', paper_id, id_type='paper_id')
             if paper_data and paper_data.get('corpusid'):
-                s2orc_data = self._find_in_dataset('s2orc', str(paper_data['corpusid']))
+                s2orc_data = self._find_in_dataset('s2orc', str(paper_data['corpusid']), id_type='corpus_id')
                 if s2orc_data and s2orc_data.get('content', {}).get('text'):
                     return {
                         'text': s2orc_data['content']['text'],
                         'source': 's2orc',
                         'pdf_hash': s2orc_data.get('content', {}).get('source', {}).get('pdfsha')
                     }
-            
-            # Fallback to abstract
-            abstract_data = self._find_in_dataset('abstracts', paper_id)
+
+            # fallback to 'abstracts' dataset
+            abstract_data = self._find_in_dataset('abstracts', paper_id, id_type='paper_id')
             if abstract_data and abstract_data.get('abstract'):
                 return {
                     'text': abstract_data['abstract'],
@@ -312,81 +291,8 @@ class S2Searcher:
                 }
             
             return None
-            
         except Exception as e:
             console.print(f"[red]Error getting paper content for {paper_id}: {str(e)}[/red]")
-            return None
-
-    def _init_indices(self):
-        """Initialize SQLite indices for faster lookups."""
-        if not self.has_local_data:
-            return
-
-        index_path = self.index_dir / f"{self.current_release}.db"
-        
-        # Create new index if needed
-        if not index_path.exists():
-            console.print("[yellow]Building dataset indices (this may take a while)...[/yellow]")
-            
-            with sqlite3.connect(str(index_path)) as conn:
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS paper_locations (
-                        id TEXT,              
-                        id_type TEXT,         
-                        dataset TEXT,         
-                        file_path TEXT,       
-                        line_offset INTEGER,  
-                        PRIMARY KEY (id, id_type, dataset)
-                    )
-                """)
-                
-                # Create indices for faster lookups
-                conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_paper_locations_id 
-                    ON paper_locations(id, id_type)
-                """)
-                
-                conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_paper_locations_dataset 
-                    ON paper_locations(dataset)
-                """)
-                
-                # Index papers, abstracts, and s2orc
-                for dataset in ['papers', 'abstracts', 's2orc']:
-                    dataset_dir = self.base_dir / self.current_release / dataset
-                    if not dataset_dir.exists():
-                        continue
-                        
-                    for file_path in dataset_dir.glob('*.json'):
-                        if file_path.name == 'metadata.json':
-                            continue
-                            
-                        with open(file_path, 'r', encoding='utf-8') as f:
-                            offset = 0
-                            for line in f:
-                                try:
-                                    item = json.loads(line.strip())
-                                    corpus_id = str(item.get('corpusid')).lower()
-                                    if corpus_id:
-                                        conn.execute(
-                                            "INSERT OR REPLACE INTO paper_locations VALUES (?, ?, ?, ?, ?)",
-                                            (str(item.get('id')).lower(), str(item.get('id_type')).lower(), str(item.get('dataset')).lower(), str(file_path), offset)
-                                        )
-                                except json.JSONDecodeError:
-                                    pass
-                                offset += len(line.encode('utf-8'))
-                
-                conn.commit()
-
-    def _get_item_by_offset(self, file_path: str, offset: int) -> Optional[Dict]:
-        """Get item from file at specific offset."""
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                f.seek(offset)
-                line = f.readline()
-                return json.loads(line)
-        except Exception as e:
-            console.print(f"[red]Error reading at offset: {str(e)}[/red]")
             return None
 
 class RateLimiter:
