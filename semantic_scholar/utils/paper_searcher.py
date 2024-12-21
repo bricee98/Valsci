@@ -179,20 +179,21 @@ class PaperSearcher:
                         continue
                         
                     # Get total entries in index
-                    total_entries = index_path.stat().st_size // self.indexer.IndexEntry.ENTRY_SIZE
+                    total_entries = index_path.stat().st_size // self.indexer._mmaps[f"{release_id}_{dataset}_{id_type}"].ENTRY_SIZE
                     if total_entries == 0:
                         continue
                     
                     # Get random sample positions
                     sample_positions = random.sample(range(total_entries), min(sample_size, total_entries))
                     
-                    # Read samples
+                    # Read samples using the indexer's search functionality
                     sample_ids = []
                     with open(index_path, 'rb') as f:
                         for pos in sample_positions:
-                            f.seek(pos * self.indexer.IndexEntry.ENTRY_SIZE)
-                            data = f.read(self.indexer.IndexEntry.ENTRY_SIZE)
-                            entry = self.indexer.IndexEntry.from_bytes(data)
+                            f.seek(pos * self.indexer._mmaps[f"{release_id}_{dataset}_{id_type}"].ENTRY_SIZE)
+                            data = f.read(self.indexer._mmaps[f"{release_id}_{dataset}_{id_type}"].ENTRY_SIZE)
+                            from .binary_indexer import IndexEntry
+                            entry = IndexEntry.from_bytes(data)
                             sample_ids.append(entry.id)
                     
                     samples[f"{dataset}_{id_type}"] = sample_ids
