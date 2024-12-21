@@ -109,41 +109,57 @@ class CorpusIDFinder:
         return results
 
     def _search_files_for_corpus_id(self, dataset_dir: Path, corpus_id: str) -> Optional[Dict]:
-        """Search through raw files for a corpus ID."""
-        for file_path in dataset_dir.glob("*.json"):
-            if file_path.name == 'metadata.json':
-                continue
+        """Search for a corpus ID using the index to find the correct file."""
+        try:
+            # First get the index entry
+            entry = self.indexer.search(
+                release_id=self.current_release,
+                dataset=dataset_dir.name,
+                id_type='corpus_id',
+                search_id=str(corpus_id)
+            )
+            
+            if not entry:
+                return None
                 
-            try:
-                with open(file_path, 'r') as f:
-                    line_number = 0
-                    for line in f:
-                        line_number += 1
-                        try:
-                            # Try hex-encoded JSON first
-                            try:
-                                decoded = bytes.fromhex(line.strip().decode('ascii')).decode('utf-8')
-                                data = json.loads(decoded)
-                            except:
-                                # Fall back to regular JSON
-                                data = json.loads(line.strip())
-                            
-                            # Check for corpus ID in various possible field names
-                            found_id = data.get('corpusid') or data.get('corpus_id') or data.get('corpusId')
-                            if str(found_id) == str(corpus_id):
-                                return {
-                                    'file': file_path.name,
-                                    'line_number': line_number,
-                                    'offset': f.tell()
-                                }
-                        except json.JSONDecodeError:
-                            continue
-                            
-            except Exception as e:
-                console.print(f"[yellow]Error reading {file_path}: {str(e)}[/yellow]")
-                continue
+            # Use the index entry to go directly to the right file and offset
+            file_path = Path(entry.file_path)
+            if not file_path.exists():
+                console.print(f"[yellow]Warning: Index points to missing file: {file_path}[/yellow]")
+                return None
                 
-        return None
+            with open(file_path, 'r') as f:
+                f.seek(entry.offset)
+                line = f.readline()
+                try:
+                    # Try hex-encoded JSON first
+                    try:
+                        decoded = bytes.fromhex(line.strip().decode('ascii')).decode('utf-8')
+                        data = json.loads(decoded)
+                    except:
+                        # Fall back to regular JSON
+                        data = json.loads(line.strip())
+                    
+                    # Verify we found the right record
+                    found_id = str(data.get('corpusid') or data.get('corpus_id') or data.get('corpusId'))
+                    if found_id == str(corpus_id):
+                        return {
+                            'file': file_path.name,
+                            'line_number': None,  # We don't need line number since we use offset
+                            'offset': entry.offset,
+                            'data': data
+                        }
+                    else:
+                        console.print(f"[yellow]Warning: Index pointed to wrong record (found ID: {found_id})[/yellow]")
+                        
+                except Exception as e:
+                    console.print(f"[yellow]Error parsing JSON at offset {entry.offset}: {str(e)}[/yellow]")
+                    
+            return None
+                    
+        except Exception as e:
+            console.print(f"[yellow]Error searching files: {str(e)}[/yellow]")
+            return None
 
     def _display_results(self, corpus_id: str, release_id: str, results: Dict):
         """Display search results in a formatted table."""
@@ -162,16 +178,22 @@ class CorpusIDFinder:
             file_info = info.get('file_info')
             if file_info:
                 file_status = f"[green]✓[/green]"
-                details = f"File: {file_info['file']}\nLine: {file_info['line_number']}"
+                details = [f"File: {file_info['file']}"]
+                if file_info.get('offset'):
+                    details.append(f"Offset: {file_info['offset']}")
+                if file_info.get('data'):
+                    # Show a preview of the data
+                    data_preview = str(file_info['data'])[:100] + "..." if len(str(file_info['data'])) > 100 else str(file_info['data'])
+                    details.append(f"Data: {data_preview}")
             else:
                 file_status = "[red]✗[/red]"
-                details = ""
+                details = []
             
             # Add error information if any
             if 'error' in info:
-                details += f"\n[red]Error: {info['error']}[/red]"
+                details.append(f"[red]Error: {info['error']}[/red]")
             
-            table.add_row(dataset, index_status, file_status, details)
+            table.add_row(dataset, index_status, file_status, "\n".join(details))
         
         console.print(f"\n[bold]Results for release {release_id}:[/bold]")
         console.print(table)
