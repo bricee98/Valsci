@@ -17,6 +17,9 @@ class CorpusIDFinder:
         self.base_dir = Path(base_dir)
         self.indexer = BinaryIndexer(self.base_dir)
         
+        # Load metadata to get latest release
+        self.current_release = self._get_latest_release()
+        
         # Datasets that should contain corpus IDs
         self.corpus_id_datasets = [
             'papers',
@@ -25,17 +28,25 @@ class CorpusIDFinder:
             'tldrs'
         ]
 
+    def _get_latest_release(self) -> Optional[str]:
+        """Get the latest release ID from metadata files."""
+        metadata_files = list(self.base_dir.glob("binary_indices/*_metadata.json"))
+        if not metadata_files:
+            return None
+        # Extract release IDs from metadata filenames and get the latest
+        releases = [f.name.split('_')[0] for f in metadata_files]
+        return max(releases) if releases else None
+
     def find_corpus_id(self, corpus_id: str, release_id: str = 'latest', show_index_samples: bool = True) -> Dict[str, Dict]:
         """
         Search for a corpus ID across all relevant datasets and their indices.
         Returns a dictionary with results from each dataset.
         """
         if release_id == 'latest':
-            releases = sorted([d.name for d in self.base_dir.iterdir() if d.is_dir()])
-            if not releases:
-                console.print("[red]No releases found in datasets directory[/red]")
+            release_id = self.current_release
+            if not release_id:
+                console.print("[red]No release metadata found[/red]")
                 return {}
-            release_id = releases[-1]
 
         results = {}
         
@@ -165,28 +176,26 @@ class CorpusIDFinder:
     def inspect_index(self, dataset: str, release_id: str = 'latest', sample_size: int = 5) -> None:
         """
         Inspect a binary index file by showing sample entries.
-        
-        Args:
-            dataset: Name of dataset to inspect
-            release_id: Release ID to inspect
-            sample_size: Number of sample entries to show
         """
         if release_id == 'latest':
-            releases = sorted([d.name for d in self.base_dir.iterdir() if d.is_dir()])
-            if not releases:
-                console.print("[red]No releases found in datasets directory[/red]")
+            release_id = self.current_release
+            if not release_id:
+                console.print("[red]No release metadata found[/red]")
                 return
-            release_id = releases[-1]
 
-        index_path = self.indexer._get_index_path(release_id, dataset, 'corpus_id')
+        # Construct correct index path
+        index_path = self.base_dir / "binary_indices" / f"{release_id}_{dataset}_corpus_id.idx"
         if not index_path.exists():
             console.print(f"[red]No index file found at {index_path}[/red]")
             return
 
         try:
             # Get index metadata
-            if release_id in self.indexer.metadata:
-                meta = self.indexer.metadata[release_id].get(f"{dataset}_corpus_id", {})
+            metadata_path = self.base_dir / "binary_indices" / f"{release_id}_metadata.json"
+            if metadata_path.exists():
+                with open(metadata_path) as f:
+                    metadata = json.load(f)
+                meta = metadata.get(f"{dataset}_corpus_id", {})
                 total_entries = meta.get('entry_count', 0)
             else:
                 total_entries = index_path.stat().st_size // self.indexer.IndexEntry.ENTRY_SIZE
