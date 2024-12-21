@@ -236,21 +236,28 @@ class S2Searcher:
 
     def _find_in_dataset(self, dataset: str, item_id: str, id_type: str = None) -> Optional[Dict]:
         """
-        Look up an item in a local dataset using our BinaryIndexer, instead of SQLite.
-        dataset might be 'papers', 'abstracts', 's2orc', etc.
-        item_id is typically a paperId or corpusId, depending on id_type.
+        Look up an item in a local dataset using our BinaryIndexer.
+        dataset might be 'papers', 'abstracts', 's2orc', 'tldrs', etc.
         """
         if not self.has_local_data:
             return None
         
         try:
-            # This is a hypothetical new method you’d add to BinaryIndexer.
-            # It should perform a binary search in the .idx file for the given release, dataset, id_type, and item_id,
-            # then parse and return the JSON record, or None if not found.
+            # Map all known ID types to their JSON field names
+            id_mappings = {
+                'paper_id': 'paperId',
+                'corpus_id': 'corpusid',  # Used by papers, abstracts, s2orc, tldrs
+                'author_id': 'authorid'
+            }
+
+            # For abstracts and tldrs, default to corpus_id if no id_type specified
+            if dataset in ['abstracts', 'tldrs', 's2orc'] and not id_type:
+                id_type = 'corpus_id'
+
             record = self.indexer.lookup(
                 release_id=self.current_release,
                 dataset=dataset,
-                id_type=id_type or "paper_id",
+                id_type=id_mappings.get(id_type or 'paper_id', id_type),
                 search_id=str(item_id).lower()
             )
             return record

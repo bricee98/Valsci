@@ -790,3 +790,42 @@ class BinaryIndexer:
         except Exception as e:
             console.print(f"[red]Error verifying index completeness: {str(e)}[/red]")
             return False
+
+    def lookup(self, release_id: str, dataset: str, id_type: str, search_id: str) -> Optional[Dict]:
+        """
+        Look up a record by ID in the binary index and return the parsed JSON.
+        
+        Args:
+            release_id: The release ID (e.g. "2023-12-01")
+            dataset: Dataset name (e.g. "papers", "abstracts", "s2orc")
+            id_type: Type of ID to search for (e.g. "paper_id", "corpus_id")
+            search_id: The ID to find
+        
+        Returns:
+            Dict containing the parsed JSON record, or None if not found
+        """
+        try:
+            # Search the binary index
+            entry = self.search(release_id, dataset, id_type, search_id)
+            if not entry:
+                return None
+            
+            # Read and parse the JSON at the given offset
+            with open(entry.file_path, 'r', encoding='utf-8') as f:
+                f.seek(entry.offset)
+                line = f.readline()
+                try:
+                    # Try hex-encoded JSON first
+                    decoded = bytes.fromhex(line.strip().decode('ascii')).decode('utf-8')
+                    return json.loads(decoded)
+                except:
+                    # Fall back to regular JSON
+                    try:
+                        return json.loads(line.strip())
+                    except:
+                        console.print(f"[red]Failed to parse JSON at offset {entry.offset}[/red]")
+                        return None
+                    
+        except Exception as e:
+            console.print(f"[red]Error in binary index lookup: {str(e)}[/red]")
+            return None
