@@ -267,25 +267,60 @@ class S2Searcher:
     def get_paper_content(self, corpus_id: str) -> Optional[Dict]:
         """Get full paper content from S2ORC or abstract data, using the BinaryIndexer."""
         try:
-            # Try S2ORC first
-            s2orc_data = self._find_in_dataset('s2orc', str(corpus_id), id_type='corpus_id')
-            if s2orc_data and s2orc_data.get('content', {}).get('text'):
+            # Try S2ORC first for full text
+            s2orc_record = self.indexer.lookup(
+                release_id=self.current_release,
+                dataset='s2orc',
+                id_type='corpus_id',
+                search_id=str(corpus_id)
+            )
+            
+            if s2orc_record and s2orc_record.get('pdf_parse', {}).get('body_text'):
+                # Extract full text from body_text sections
+                full_text = "\n\n".join(
+                    section.get('text', '')
+                    for section in s2orc_record['pdf_parse']['body_text']
+                )
                 return {
-                    'text': s2orc_data['content']['text'],
+                    'text': full_text,
                     'source': 's2orc',
-                    'pdf_hash': s2orc_data.get('content', {}).get('source', {}).get('pdfsha')
+                    'pdf_hash': s2orc_record.get('pdf_parse', {}).get('pdf_hash')
+                }
+
+            # Try TLDR dataset
+            tldr_record = self.indexer.lookup(
+                release_id=self.current_release,
+                dataset='tldrs',
+                id_type='corpus_id', 
+                search_id=str(corpus_id)
+            )
+            
+            if tldr_record and tldr_record.get('text'):
+                return {
+                    'text': tldr_record['text'],
+                    'source': 'tldr',
+                    'pdf_hash': None
                 }
 
             # Fallback to abstracts dataset
-            abstract_data = self._find_in_dataset('abstracts', str(corpus_id), id_type='corpus_id')
-            if abstract_data and abstract_data.get('abstract'):
+            abstract_record = self.indexer.lookup(
+                release_id=self.current_release,
+                dataset='abstracts',
+                id_type='corpus_id',
+                search_id=str(corpus_id)
+            )
+            
+            if abstract_record and abstract_record.get('abstract'):
                 return {
-                    'text': abstract_data['abstract'],
+                    'text': abstract_record['abstract'],
                     'source': 'abstract',
                     'pdf_hash': None
                 }
-            
+
+            # If no content found in any dataset
+            console.print(f"[yellow]No content found for corpus ID: {corpus_id}[/yellow]")
             return None
+
         except Exception as e:
             console.print(f"[red]Error getting paper content for {corpus_id}: {str(e)}[/red]")
             return None

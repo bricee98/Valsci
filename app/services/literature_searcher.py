@@ -55,16 +55,28 @@ class LiteratureSearcher:
     def fetch_paper_content(self, paper: Paper, claim: Claim) -> Tuple[str, str]:
         """Fetch the full text content of a paper."""
         try:
+            if not paper.corpus_id:
+                logger.warning(f"No corpus ID available for paper {paper.paper_id}")
+                return paper.abstract or "", "abstract_only"
+
             logger.info(f"Fetching content for corpus ID: {paper.corpus_id}")
-            
             content = self.s2_searcher.get_paper_content(str(paper.corpus_id))
+            
             if content:
-                logger.info(f"Successfully retrieved content for corpus ID: {paper.corpus_id}")
+                logger.info(f"Successfully retrieved {content['source']} content for corpus ID: {paper.corpus_id}")
+                
+                # If we got just an abstract but the paper has a longer one, use the longer version
+                if (content['source'] == 'abstract' and 
+                    paper.abstract and 
+                    len(paper.abstract) > len(content['text'])):
+                    return paper.abstract, "abstract_only"
+                    
                 return content['text'], content['source']
             
+            # Fallback to paper's abstract if no content found
             logger.warning(f"No content found for corpus ID: {paper.corpus_id}, falling back to abstract")
             return paper.abstract or "", "abstract_only"
-            
+                
         except Exception as e:
             logger.error(f"Error fetching paper content for {paper.corpus_id}: {str(e)}")
             return paper.abstract or "", "abstract_only"
