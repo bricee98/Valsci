@@ -454,8 +454,14 @@ class S2DatasetDownloader:
                 # Write sorted chunks for each ID type
                 for id_type, entries in entries_by_id_type.items():
                     id_types_seen.add(id_type)
-                    entries.sort(key=lambda x: x.id)  # Sort chunk
+                    entries.sort(key=lambda x: x.id)
                     chunk_path = chunk_dir / f"{id_type}_chunk_{file_num:03d}.idx"
+
+                    # Skip rewriting if chunk file already exists
+                    if chunk_path.exists():
+                        console.print(f"[yellow]Skipping existing chunk {chunk_path.name}[/yellow]")
+                        continue
+
                     with open(chunk_path, 'wb') as f:
                         for entry in entries:
                             f.write(entry.to_bytes())
@@ -473,8 +479,8 @@ class S2DatasetDownloader:
                     console.print(f"[red]Failed to create index for {dataset}_{id_type}[/red]")
                     return False
 
-            # Clean up chunk directory
-            shutil.rmtree(chunk_dir)
+            # Comment out or remove the cleanup:
+            # shutil.rmtree(chunk_dir)
 
             console.print(f"[green]Successfully created {total_entries:,} total index entries for {dataset}[/green]")
             return True
