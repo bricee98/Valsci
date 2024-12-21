@@ -3,7 +3,7 @@ import json
 from rich.console import Console
 from rich.table import Table
 from typing import Dict, List, Optional, Tuple
-from semantic_scholar.utils.binary_indexer import BinaryIndexer
+from semantic_scholar.utils.binary_indexer import BinaryIndexer, IndexEntry
 
 console = Console()
 
@@ -19,6 +19,9 @@ class CorpusIDFinder:
         
         # Load metadata to get latest release
         self.current_release = self._get_latest_release()
+        
+        # Store IndexEntry class for convenience
+        self.IndexEntry = IndexEntry
         
         # Datasets that should contain corpus IDs
         self.corpus_id_datasets = [
@@ -198,7 +201,7 @@ class CorpusIDFinder:
                 meta = metadata.get(f"{dataset}_corpus_id", {})
                 total_entries = meta.get('entry_count', 0)
             else:
-                total_entries = index_path.stat().st_size // self.indexer.IndexEntry.ENTRY_SIZE
+                total_entries = index_path.stat().st_size // IndexEntry.ENTRY_SIZE
 
             console.print(f"\n[bold]Index File: {index_path.name}[/bold]")
             console.print(f"Total entries: {total_entries:,}")
@@ -208,37 +211,38 @@ class CorpusIDFinder:
             console.print(f"\n[cyan]First {sample_size} entries:[/cyan]")
             with open(index_path, 'rb') as f:
                 for i in range(sample_size):
-                    data = f.read(self.indexer.IndexEntry.ENTRY_SIZE)
+                    data = f.read(IndexEntry.ENTRY_SIZE)
                     if not data:
                         break
-                    entry = self.indexer.IndexEntry.from_bytes(data)
+                    entry = IndexEntry.from_bytes(data)
                     console.print(f"{i+1}. ID: {entry.id}, File: {Path(entry.file_path).name}, Offset: {entry.offset}")
 
             # Show entries from middle
             mid_point = (total_entries // 2) - (sample_size // 2)
             console.print(f"\n[cyan]Middle {sample_size} entries (around position {mid_point:,}):[/cyan]")
             with open(index_path, 'rb') as f:
-                f.seek(mid_point * self.indexer.IndexEntry.ENTRY_SIZE)
+                f.seek(mid_point * IndexEntry.ENTRY_SIZE)
                 for i in range(sample_size):
-                    data = f.read(self.indexer.IndexEntry.ENTRY_SIZE)
+                    data = f.read(IndexEntry.ENTRY_SIZE)
                     if not data:
                         break
-                    entry = self.indexer.IndexEntry.from_bytes(data)
+                    entry = IndexEntry.from_bytes(data)
                     console.print(f"{i+1}. ID: {entry.id}, File: {Path(entry.file_path).name}, Offset: {entry.offset}")
 
             # Show last few entries
             console.print(f"\n[cyan]Last {sample_size} entries:[/cyan]")
             with open(index_path, 'rb') as f:
-                f.seek(-self.indexer.IndexEntry.ENTRY_SIZE * sample_size, 2)  # Seek from end
+                f.seek(-IndexEntry.ENTRY_SIZE * sample_size, 2)  # Seek from end
                 for i in range(sample_size):
-                    data = f.read(self.indexer.IndexEntry.ENTRY_SIZE)
+                    data = f.read(IndexEntry.ENTRY_SIZE)
                     if not data:
                         break
-                    entry = self.indexer.IndexEntry.from_bytes(data)
+                    entry = IndexEntry.from_bytes(data)
                     console.print(f"{i+1}. ID: {entry.id}, File: {Path(entry.file_path).name}, Offset: {entry.offset}")
 
         except Exception as e:
             console.print(f"[red]Error inspecting index: {str(e)}[/red]")
+            raise  # Add this to see full traceback during development
 
 def main():
     import argparse
