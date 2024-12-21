@@ -4,6 +4,7 @@ from typing import Dict, Optional
 from rich.console import Console
 from rich.table import Table
 from .binary_indexer import BinaryIndexer
+import random
 
 console = Console()
 
@@ -136,16 +137,103 @@ class PaperSearcher:
         else:
             console.print("[yellow]No paper found with this ID[/yellow]")
 
+    def get_sample_ids(self, release_id: str = 'latest', sample_size: int = 5) -> Dict[str, list]:
+        """
+        Get sample IDs from each dataset index.
+        
+        Args:
+            release_id: Release ID to get samples from
+            sample_size: Number of samples to get from each index
+            
+        Returns:
+            Dictionary mapping dataset and ID type to list of sample IDs
+        """
+        try:
+            # Get actual release ID if using latest
+            if release_id == 'latest':
+                releases = [d.name for d in self.base_dir.iterdir() if d.is_dir() and d.name[0].isdigit()]
+                if not releases:
+                    console.print("[red]No releases found in datasets directory[/red]")
+                    return {}
+                release_id = sorted(releases)[-1]
+            
+            # Define datasets and their ID types
+            dataset_ids = {
+                'papers': ['paper_id', 'corpus_id'],
+                'abstracts': ['corpus_id'],
+                's2orc': ['corpus_id'],
+                'tldrs': ['corpus_id']
+            }
+            
+            samples = {}
+            
+            # Get samples from each dataset and ID type
+            for dataset, id_types in dataset_ids.items():
+                dataset_dir = self.base_dir / release_id / dataset
+                if not dataset_dir.exists():
+                    continue
+                    
+                for id_type in id_types:
+                    index_path = self.indexer.index_dir / f"{release_id}_{dataset}_{id_type}.idx"
+                    if not index_path.exists():
+                        continue
+                        
+                    # Get total entries in index
+                    total_entries = index_path.stat().st_size // self.indexer.IndexEntry.ENTRY_SIZE
+                    if total_entries == 0:
+                        continue
+                    
+                    # Get random sample positions
+                    sample_positions = random.sample(range(total_entries), min(sample_size, total_entries))
+                    
+                    # Read samples
+                    sample_ids = []
+                    with open(index_path, 'rb') as f:
+                        for pos in sample_positions:
+                            f.seek(pos * self.indexer.IndexEntry.ENTRY_SIZE)
+                            data = f.read(self.indexer.IndexEntry.ENTRY_SIZE)
+                            entry = self.indexer.IndexEntry.from_bytes(data)
+                            sample_ids.append(entry.id)
+                    
+                    samples[f"{dataset}_{id_type}"] = sample_ids
+            
+            return samples
+            
+        except Exception as e:
+            console.print(f"[red]Error getting sample IDs: {str(e)}[/red]")
+            return {}
+
 def main():
     """Command line interface for paper searching."""
     import argparse
     parser = argparse.ArgumentParser(description='Search for papers across multiple datasets')
-    parser.add_argument('paper_id', help='Paper ID or Corpus ID to search for')
+    parser.add_argument('paper_id', nargs='?', help='Paper ID or Corpus ID to search for')
     parser.add_argument('--release', default='latest', help='Release ID to search in')
     parser.add_argument('--raw', action='store_true', help='Display raw JSON results')
+    parser.add_argument('--sample', type=int, nargs='?', const=5, help='Print sample IDs from each index (default: 5)')
     args = parser.parse_args()
     
     searcher = PaperSearcher()
+    
+    if args.sample is not None:
+        # Get and display sample IDs
+        samples = searcher.get_sample_ids(args.release, args.sample)
+        if samples:
+            console.print(f"\n[bold cyan]Sample IDs from Release: {args.release}[/bold cyan]")
+            table = Table(title="Sample IDs from Each Index")
+            table.add_column("Dataset_IDType", style="cyan")
+            table.add_column("Sample IDs")
+            
+            for dataset_id_type, ids in samples.items():
+                table.add_row(dataset_id_type, "\n".join(ids))
+            
+            console.print(table)
+        return
+    
+    if not args.paper_id:
+        parser.print_help()
+        return
+    
     results = searcher.search_paper(args.paper_id, args.release)
     
     if args.raw:
