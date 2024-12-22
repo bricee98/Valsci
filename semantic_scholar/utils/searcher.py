@@ -8,6 +8,13 @@ import ijson
 from openai import OpenAI
 import asyncio
 import mmap
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 project_root = str(Path(__file__).parent.parent.parent)
 from app.config.settings import Config
@@ -20,32 +27,40 @@ console = Console()
 
 class S2Searcher:
     def __init__(self):
+        logger.info(f"Initializing S2Searcher with project root: {project_root}")
         self.api_key = Config.SEMANTIC_SCHOLAR_API_KEY
         self.session = requests.Session()
         self.session.headers.update({
             'x-api-key': self.api_key
         })
         self.base_dir = Path(project_root) / "semantic_scholar/datasets"
+        logger.info(f"Base directory set to: {self.base_dir}")
+        
         self.rate_limiter = RateLimiter(requests_per_second=1.0)
         self.openai_service = OpenAIService()
-        
-        # Track search queries for reporting
         self.saved_search_queries = []
         
         # Find latest release
         self.current_release = self._get_latest_local_release()
+        logger.info(f"Found latest release: {self.current_release}")
+        
         self.has_local_data = self.current_release is not None
+        logger.info(f"Has local data: {self.has_local_data}")
         if not self.has_local_data:
-            console.print("[yellow]Warning: No local datasets found. Running in API-only mode.[/yellow]")
+            logger.warning("No local datasets found. Running in API-only mode.")
 
         # Now we hold a BinaryIndexer for local lookups:
         self.indexer = BinaryIndexer(self.base_dir)
+        logger.info(f"Initialized BinaryIndexer with base dir: {self.base_dir}")
 
     def _get_latest_local_release(self) -> Optional[str]:
         """Get the latest release from local datasets."""
+        logger.info(f"Looking for releases in: {self.base_dir}")
         if not self.base_dir.exists():
+            logger.warning(f"Base directory does not exist: {self.base_dir}")
             return None
         releases = [d.name for d in self.base_dir.iterdir() if d.is_dir()]
+        logger.info(f"Found releases: {releases}")
         return max(releases) if releases else None
 
     def generate_search_queries(self, claim_text: str, num_queries: int = 5) -> List[str]:
@@ -235,11 +250,11 @@ class S2Searcher:
         return paper_data
 
     def _find_in_dataset(self, dataset: str, item_id: str, id_type: str = None) -> Optional[Dict]:
-        """
-        Look up an item in a local dataset using our BinaryIndexer.
-        dataset might be 'papers', 'abstracts', 's2orc', 'tldrs', etc.
-        """
+        """Look up an item in a local dataset using our BinaryIndexer."""
+        logger.info(f"Looking up item in dataset: {dataset}, item_id: {item_id}, id_type: {id_type}")
+        
         if not self.has_local_data:
+            logger.warning("No local data available, skipping dataset lookup")
             return None
         
         try:
@@ -248,26 +263,46 @@ class S2Searcher:
                 'corpus_id': 'corpusid',  # Used by papers, abstracts, s2orc, tldrs
                 'author_id': 'authorid'
             }
+            logger.info(f"ID mappings: {id_mappings}")
 
             # For all paper-related datasets, default to corpus_id
             if dataset in ['papers', 'abstracts', 'tldrs', 's2orc'] and not id_type:
                 id_type = 'corpus_id'
+                logger.info(f"Using default id_type 'corpus_id' for dataset {dataset}")
+
+            mapped_id_type = id_mappings.get(id_type, id_type)
+            logger.info(f"Mapped id_type '{id_type}' to '{mapped_id_type}'")
 
             record = self.indexer.lookup(
                 release_id=self.current_release,
                 dataset=dataset,
-                id_type=id_mappings.get(id_type, id_type),
+                id_type=mapped_id_type,
                 search_id=str(item_id).lower()
             )
+            
+            if record:
+                logger.info(f"Found record in {dataset}")
+            else:
+                logger.info(f"No record found in {dataset}")
+                
             return record
+            
         except Exception as e:
-            console.print(f"[red]Binary index lookup error: {str(e)}[/red]")
+            logger.error(f"Binary index lookup error: {str(e)}", exc_info=True)
             return None
 
     def get_paper_content(self, corpus_id: str) -> Optional[Dict]:
         """Get full paper content from S2ORC or abstract data, using the BinaryIndexer."""
+        logger.info(f"Attempting to get content for corpus ID: {corpus_id}")
+        logger.info(f"Current release: {self.current_release}")
+        logger.info(f"Has local data: {self.has_local_data}")
+        
         try:
             # Try S2ORC first for full text
+            logger.info("Attempting S2ORC lookup...")
+            index_path = self.base_dir / "binary_indices" / f"{self.current_release}_s2orc_corpus_id.idx"
+            logger.info(f"Looking for S2ORC index at: {index_path}")
+            
             s2orc_record = self.indexer.lookup(
                 release_id=self.current_release,
                 dataset='s2orc',
@@ -275,19 +310,27 @@ class S2Searcher:
                 search_id=str(corpus_id)
             )
             
-            if s2orc_record and s2orc_record.get('pdf_parse', {}).get('body_text'):
-                # Extract full text from body_text sections
-                full_text = "\n\n".join(
-                    section.get('text', '')
-                    for section in s2orc_record['pdf_parse']['body_text']
-                )
-                return {
-                    'text': full_text,
-                    'source': 's2orc',
-                    'pdf_hash': s2orc_record.get('pdf_parse', {}).get('pdf_hash')
-                }
+            if s2orc_record:
+                logger.info("Found record in S2ORC")
+                if s2orc_record.get('pdf_parse', {}).get('body_text'):
+                    logger.info("Found full text in S2ORC record")
+                    full_text = "\n\n".join(
+                        section.get('text', '')
+                        for section in s2orc_record['pdf_parse']['body_text']
+                    )
+                    return {
+                        'text': full_text,
+                        'source': 's2orc',
+                        'pdf_hash': s2orc_record.get('pdf_parse', {}).get('pdf_hash')
+                    }
+                else:
+                    logger.info("S2ORC record found but no body text available")
 
             # Try TLDR dataset
+            logger.info("Attempting TLDR lookup...")
+            index_path = self.base_dir / "binary_indices" / f"{self.current_release}_tldrs_corpus_id.idx"
+            logger.info(f"Looking for TLDR index at: {index_path}")
+            
             tldr_record = self.indexer.lookup(
                 release_id=self.current_release,
                 dataset='tldrs',
@@ -295,14 +338,22 @@ class S2Searcher:
                 search_id=str(corpus_id)
             )
             
-            if tldr_record and tldr_record.get('text'):
-                return {
-                    'text': tldr_record['text'],
-                    'source': 'tldr',
-                    'pdf_hash': None
-                }
+            if tldr_record:
+                logger.info("Found record in TLDR dataset")
+                if tldr_record.get('text'):
+                    return {
+                        'text': tldr_record['text'],
+                        'source': 'tldr',
+                        'pdf_hash': None
+                    }
+                else:
+                    logger.info("TLDR record found but no text available")
 
             # Fallback to abstracts dataset
+            logger.info("Attempting abstracts lookup...")
+            index_path = self.base_dir / "binary_indices" / f"{self.current_release}_abstracts_corpus_id.idx"
+            logger.info(f"Looking for abstracts index at: {index_path}")
+            
             abstract_record = self.indexer.lookup(
                 release_id=self.current_release,
                 dataset='abstracts',
@@ -310,19 +361,23 @@ class S2Searcher:
                 search_id=str(corpus_id)
             )
             
-            if abstract_record and abstract_record.get('abstract'):
-                return {
-                    'text': abstract_record['abstract'],
-                    'source': 'abstract',
-                    'pdf_hash': None
-                }
+            if abstract_record:
+                logger.info("Found record in abstracts dataset")
+                if abstract_record.get('abstract'):
+                    return {
+                        'text': abstract_record['abstract'],
+                        'source': 'abstract',
+                        'pdf_hash': None
+                    }
+                else:
+                    logger.info("Abstract record found but no abstract text available")
 
             # If no content found in any dataset
-            console.print(f"[yellow]No content found for corpus ID: {corpus_id}[/yellow]")
+            logger.warning(f"No content found for corpus ID: {corpus_id}")
             return None
 
         except Exception as e:
-            console.print(f"[red]Error getting paper content for {corpus_id}: {str(e)}[/red]")
+            logger.error(f"Error getting paper content for {corpus_id}: {str(e)}", exc_info=True)
             return None
 
 class RateLimiter:
