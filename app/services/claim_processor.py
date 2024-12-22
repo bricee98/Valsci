@@ -37,6 +37,7 @@ class ClaimProcessor:
             # Search for relevant papers using S2
             search_start = time()
             papers = self.literature_searcher.search_papers(claim)
+            print("Got papers")
             timing_stats['search_papers'] = time() - search_start
 
             if not papers:
@@ -60,6 +61,7 @@ class ClaimProcessor:
             total_papers = len(papers)
             
             paper_processing_start = time()
+            print("Processing papers")
             
             for i, paper in enumerate(papers):
                 self.update_claim_status(
@@ -69,8 +71,9 @@ class ClaimProcessor:
                 )
                 
                 try:
-                    # Get paper content from local dataset or S2ORC
-                    content, content_type = self.literature_searcher.fetch_paper_content(paper, claim)
+                    # We already have the content in the paper object
+                    content = paper.text
+                    content_type = paper.content_source
                     
                     if not content:
                         inaccessible_papers.append({
@@ -80,10 +83,11 @@ class ClaimProcessor:
                         continue
 
                     # Analyze relevance
+                    print("Analyzing relevance")
                     relevance, excerpts, explanations, non_relevant_explanation, excerpt_pages = (
                         self.paper_analyzer.analyze_relevance_and_extract(content, claim)
                     )
-
+                    print("Analyzed relevance")
                     if relevance >= 0.1:
                         # Calculate paper weight score using S2 metrics
                         weight_score = self.evidence_scorer.calculate_paper_weight(paper)
@@ -97,13 +101,14 @@ class ClaimProcessor:
                             'content_type': content_type,
                             'excerpt_pages': excerpt_pages
                         })
+                        print("Added to processed papers")
                     else:
                         non_relevant_papers.append({
                             'paper': paper,
                             'explanation': non_relevant_explanation,
                             'content_type': content_type
                         })
-
+                        print("Added to non relevant papers")
                 except Exception as e:
                     logger.error(f"Error processing paper {paper.paper_id}: {str(e)}")
                     continue
@@ -113,11 +118,13 @@ class ClaimProcessor:
             # Generate final report
             self.update_claim_status(batch_id, claim_id, "generating_report")
             report_start = time()
+            print("Generating report")
             
             if processed_papers:
                 claim.report = self.generate_final_report(
                     claim, processed_papers, non_relevant_papers, inaccessible_papers
                 )
+                print("Generated report")
                 timing_stats['report_generation'] = time() - report_start
                 timing_stats['total_time'] = time() - start_time
                 claim.report['timing_stats'] = timing_stats

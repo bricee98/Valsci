@@ -30,7 +30,10 @@ class Paper(BaseModel):
             url=paper_data.get('url', ''),
             citation_count=paper_data.get('citation_count', 0),
             fields_of_study=paper_data.get('fields_of_study', []),
-            references=paper_data.get('references', [])
+            references=paper_data.get('references', []),
+            text=paper_data.get('text', ''),
+            content_source=paper_data.get('content_source', ''),
+            pdf_hash=paper_data.get('pdf_hash', '')
         )
 
 class PaperMetadata:

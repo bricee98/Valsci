@@ -149,7 +149,7 @@ class S2Searcher:
                         content = self.get_paper_content(corpus_id)
                         console.print(f"[green]Content: {content}[/green]")
                         if content:
-                            paper['full_text'] = content['text']
+                            paper['text'] = content['text']
                             paper['content_source'] = content['source']
                             paper['pdf_hash'] = content['pdf_hash']
                         
