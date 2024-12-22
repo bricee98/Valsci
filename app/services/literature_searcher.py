@@ -34,6 +34,7 @@ class LiteratureSearcher:
             # Convert to Paper objects with error handling
             papers = []
             for raw_paper in raw_papers:
+                print("raw_paper", raw_paper)
                 try:
                     # Ensure fields_of_study is a list
                     if raw_paper.get('fields_of_study') is None:

@@ -354,25 +354,6 @@ class S2Searcher:
                 else:
                     logger.info("S2ORC record found but no body text available")
 
-            # Try TLDR dataset
-            logger.info("Attempting TLDR lookup...")
-            tldr_record = self.indexer.lookup(
-                release_id=self.current_release,
-                dataset='tldrs',
-                id_type='corpus_id', 
-                search_id=str(corpus_id)
-            )
-            
-            if tldr_record:
-                logger.info("Found record in TLDR dataset")
-                if tldr_record.get('text'):
-                    return {
-                        'text': tldr_record['text'],
-                        'source': 'tldr',
-                        'pdf_hash': None
-                    }
-                else:
-                    logger.info("TLDR record found but no text available")
 
             # Fallback to abstracts dataset
             logger.info("Attempting abstracts lookup...")
@@ -393,6 +374,28 @@ class S2Searcher:
                     }
                 else:
                     logger.info("Abstract record found but no abstract text available")
+
+                    
+            # Try TLDR dataset
+            logger.info("Attempting TLDR lookup...")
+            tldr_record = self.indexer.lookup(
+                release_id=self.current_release,
+                dataset='tldrs',
+                id_type='corpus_id', 
+                search_id=str(corpus_id)
+            )
+
+            if tldr_record:
+                logger.info("Found record in TLDR dataset")
+                if tldr_record.get('text'):
+                    return {
+                        'text': tldr_record['text'],
+                        'source': 'tldr',
+                        'pdf_hash': None
+                    }
+                else:
+                    logger.info("TLDR record found but no text available")
+
 
             # If no content found in any dataset
             logger.warning(f"No content found for corpus ID: {corpus_id}")
