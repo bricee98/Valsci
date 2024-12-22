@@ -34,14 +34,14 @@ class LiteratureSearcher:
             # Convert to Paper objects with error handling
             papers = []
             for raw_paper in raw_papers:
-                print("raw_paper", raw_paper)
+                
                 try:
                     # Ensure fields_of_study is a list
                     if raw_paper.get('fields_of_study') is None:
                         raw_paper['fields_of_study'] = []
                     papers.append(Paper.from_s2_paper(raw_paper))
                 except Exception as e:
-                    logger.error(f"Error converting paper {raw_paper.get('paper_id')}: {str(e)}")
+                    logger.error(f"Error converting paper {raw_paper.get('corpusId')}: {str(e)}")
                     continue
             
             # Sort by citation count (most cited first)
