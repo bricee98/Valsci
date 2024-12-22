@@ -339,7 +339,6 @@ def get_batch_status(batch_id):
         return jsonify({"error": "Batch not found"}), 404
     
     claims = []
-    review_type = "regular"  # Default to regular
     for file in os.listdir(batch_dir):
         if file.endswith('.txt') and not file.endswith('claims.txt'):
             file_path = os.path.join(batch_dir, file)
@@ -351,7 +350,7 @@ def get_batch_status(batch_id):
                             "claim_id": file[:-4],
                             "text": "",
                             "status": "Error",
-                            "additional_info": {"error": "Empty file"}
+                            "report": {"error": "Empty file"}
                         })
                     else:
                         claim_data = json.loads(content)
@@ -359,25 +358,22 @@ def get_batch_status(batch_id):
                             "claim_id": file[:-4],
                             "text": claim_data.get('text', ''),
                             "status": claim_data.get('status', 'Unknown'),
-                            "additional_info": claim_data.get('additional_info', {}),
-                            "review_type": claim_data.get('review_type', 'regular')  # Get review_type
+                            "report": claim_data.get('report', {}),  # Changed from additional_info to report
+                            "review_type": claim_data.get('review_type', 'regular')
                         })
-                        # Set batch review_type based on the first claim (assuming consistency)
-                        if 'review_type' in claim_data:
-                            review_type = claim_data['review_type']
             except json.JSONDecodeError as e:
                 claims.append({
                     "claim_id": file[:-4],
                     "text": "",
                     "status": "Error",
-                    "additional_info": {"error": f"Invalid JSON in file: {str(e)}"}
+                    "report": {"error": f"Invalid JSON in file: {str(e)}"}
                 })
             except Exception as e:
                 claims.append({
                     "claim_id": file[:-4],
                     "text": "",
                     "status": "Error",
-                    "additional_info": {"error": f"Error reading file: {str(e)}"}
+                    "report": {"error": f"Error reading file: {str(e)}"}
                 })
     
     overall_status = "processed" if all(claim['status'] == 'processed' for claim in claims) else "processing"
@@ -386,7 +382,7 @@ def get_batch_status(batch_id):
         "batch_id": batch_id,
         "status": overall_status,
         "claims": claims,
-        "review_type": review_type  # Include at batch level
+        "review_type": "regular"  # Default to regular review type
     }), 200
 
 @api.route('/api/v1/batch/<batch_id>/progress', methods=['GET'])
