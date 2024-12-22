@@ -204,6 +204,11 @@ class ClaimProcessor:
             f"Relevance: {p['relevance']}\nReliability Weight: {p['score']}\nExcerpts: {p['excerpts']}"
             for p in processed_papers
         ])
+
+        print("Processed papers: ", processed_papers)
+        print("Paper summaries: ", paper_summaries)
+        print("Non relevant papers: ", non_relevant_papers)
+        print("Inaccessible papers: ", inaccessible_papers)
         
         prompt = dedent(f"""
         Evaluate the following claim based on the provided evidence from scientific papers:
