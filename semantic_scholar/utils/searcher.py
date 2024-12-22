@@ -44,6 +44,16 @@ class S2Searcher:
         self.current_release = self._get_latest_local_release()
         logger.info(f"Found latest release: {self.current_release}")
         
+        # Check for index files
+        if self.current_release:
+            index_dir = self.base_dir / "binary_indices"
+            logger.info(f"Checking index directory: {index_dir}")
+            if index_dir.exists():
+                index_files = list(index_dir.glob(f"{self.current_release}_*_corpus_id.idx"))
+                logger.info(f"Found index files: {[f.name for f in index_files]}")
+            else:
+                logger.warning(f"Index directory not found: {index_dir}")
+        
         self.has_local_data = self.current_release is not None
         logger.info(f"Has local data: {self.has_local_data}")
         if not self.has_local_data:
@@ -56,11 +66,28 @@ class S2Searcher:
     def _get_latest_local_release(self) -> Optional[str]:
         """Get the latest release from local datasets."""
         logger.info(f"Looking for releases in: {self.base_dir}")
+        
+        # First check binary_indices directory for metadata
+        binary_indices_dir = self.base_dir / "binary_indices"
+        logger.info(f"Checking binary indices directory: {binary_indices_dir}")
+        
+        if binary_indices_dir.exists():
+            # Look for metadata files like "2024-12-10_metadata.json"
+            metadata_files = list(binary_indices_dir.glob("*_metadata.json"))
+            if metadata_files:
+                # Extract release IDs from metadata filenames
+                releases = [f.name.split('_')[0] for f in metadata_files]
+                latest = max(releases) if releases else None
+                logger.info(f"Found releases in binary_indices: {releases}, using latest: {latest}")
+                return latest
+        
+        # Fallback to checking main directory
         if not self.base_dir.exists():
             logger.warning(f"Base directory does not exist: {self.base_dir}")
             return None
-        releases = [d.name for d in self.base_dir.iterdir() if d.is_dir()]
-        logger.info(f"Found releases: {releases}")
+        
+        releases = [d.name for d in self.base_dir.iterdir() if d.is_dir() and not d.name == 'binary_indices']
+        logger.info(f"Found releases in base directory: {releases}")
         return max(releases) if releases else None
 
     def generate_search_queries(self, claim_text: str, num_queries: int = 5) -> List[str]:
@@ -297,12 +324,13 @@ class S2Searcher:
         logger.info(f"Current release: {self.current_release}")
         logger.info(f"Has local data: {self.has_local_data}")
         
+        if not self.current_release:
+            logger.warning("No release ID available")
+            return None
+        
         try:
             # Try S2ORC first for full text
             logger.info("Attempting S2ORC lookup...")
-            index_path = self.base_dir / "binary_indices" / f"{self.current_release}_s2orc_corpus_id.idx"
-            logger.info(f"Looking for S2ORC index at: {index_path}")
-            
             s2orc_record = self.indexer.lookup(
                 release_id=self.current_release,
                 dataset='s2orc',
@@ -328,9 +356,6 @@ class S2Searcher:
 
             # Try TLDR dataset
             logger.info("Attempting TLDR lookup...")
-            index_path = self.base_dir / "binary_indices" / f"{self.current_release}_tldrs_corpus_id.idx"
-            logger.info(f"Looking for TLDR index at: {index_path}")
-            
             tldr_record = self.indexer.lookup(
                 release_id=self.current_release,
                 dataset='tldrs',
@@ -351,9 +376,6 @@ class S2Searcher:
 
             # Fallback to abstracts dataset
             logger.info("Attempting abstracts lookup...")
-            index_path = self.base_dir / "binary_indices" / f"{self.current_release}_abstracts_corpus_id.idx"
-            logger.info(f"Looking for abstracts index at: {index_path}")
-            
             abstract_record = self.indexer.lookup(
                 release_id=self.current_release,
                 dataset='abstracts',

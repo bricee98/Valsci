@@ -15,8 +15,10 @@ from collections import defaultdict
 import random
 from rich.table import Table
 import heapq
+import logging
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 @dataclass
 class IndexEntry:
@@ -78,7 +80,11 @@ class BinaryIndexer:
 
     def _get_index_path(self, release_id: str, dataset: str, id_type: str) -> Path:
         """Get path for a specific index file"""
-        return self.index_dir / f"{release_id}_{dataset}_{id_type}.idx"
+        path = self.index_dir / f"{release_id}_{dataset}_{id_type}.idx"
+        logger.info(f"Constructing index path: {path}")
+        if not path.exists():
+            logger.warning(f"Index file does not exist: {path}")
+        return path
         
     def _get_metadata_path(self, release_id: str) -> Path:
         """Get path for index metadata file"""
