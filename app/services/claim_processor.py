@@ -122,6 +122,7 @@ class ClaimProcessor:
             print("Generating report")
             
             if processed_papers:
+                print("Processed papers is not empty")
                 claim.report = self.generate_final_report(
                     claim, processed_papers, non_relevant_papers, inaccessible_papers
                 )
@@ -229,12 +230,15 @@ class ClaimProcessor:
         }
         """).strip()
 
+        print("Prompt: ", prompt)
+
         response = self.openai_service.generate_json(prompt, system_prompt)
 
         # Format the final report
-        return {
-            "supportingPapers": [
-                {
+        try:
+            return {
+                "supportingPapers": [
+                    {
                     "title": p['paper'].title,
                     "authors": [
                         {
@@ -265,8 +269,19 @@ class ClaimProcessor:
             "explanation": response['explanation'],
             "claimRating": response['claimRating'],
             "searchQueries": self.literature_searcher.saved_search_queries,
-            "usage_stats": self.openai_service.get_usage_stats()
-        }
+                "usage_stats": self.openai_service.get_usage_stats()
+            }
+        except Exception as e:
+            print("Error generating final report: ", e)
+            return {
+                "supportingPapers": [],
+                "nonRelevantPapers": [],
+                "inaccessiblePapers": [],
+                "explanation": "Error generating final report",
+                "claimRating": 0,
+                "searchQueries": self.literature_searcher.saved_search_queries,
+                "usage_stats": self.openai_service.get_usage_stats()
+                }
 
     def _format_citation(self, paper, page_number):
         """Format citation in RIS format."""
