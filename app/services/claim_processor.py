@@ -156,34 +156,42 @@ class ClaimProcessor:
 
     def _format_non_relevant_papers(self, papers: List[Dict]) -> List[Dict]:
         """Format non-relevant papers for the report."""
-        return [{
-            "title": paper['paper'].title,
-            "authors": [
-                {
-                    "name": author['name'],
-                    "hIndex": author.get('hIndex', 0)
-                }
-                for author in paper['paper'].authors
-            ],
-            "link": paper['paper'].url,
-            "explanation": paper['explanation'],
-            "content_type": paper['content_type']
-        } for paper in papers]
+        try:
+            return [{
+                "title": paper['paper'].title,
+                "authors": [
+                    {
+                        "name": author['name'],
+                        "hIndex": author.get('hIndex', 0)
+                    }
+                    for author in paper['paper'].authors
+                ],
+                "link": paper['paper'].url,
+                "explanation": paper['explanation'],
+                    "content_type": paper['content_type']
+                } for paper in papers]
+        except Exception as e:
+            print("Error formatting non-relevant papers: ", e)
+            return []
 
     def _format_inaccessible_papers(self, papers: List[Dict]) -> List[Dict]:
         """Format inaccessible papers for the report."""
-        return [{
-            "title": paper['paper'].title,
-            "authors": [
+        try:
+            return [{
+                "title": paper['paper'].title,
+                "authors": [
                 {
                     "name": author['name'],
                     "hIndex": author.get('hIndex', 0)
                 }
                 for author in paper['paper'].authors
             ],
-            "link": paper['paper'].url,
-            "reason": paper['reason']
-        } for paper in papers]
+                "link": paper['paper'].url,
+                "reason": paper['reason']
+            } for paper in papers]
+        except Exception as e:
+            print("Error formatting inaccessible papers: ", e)
+            return []
 
     def generate_final_report(self, claim: Claim, processed_papers: List[dict], 
                             non_relevant_papers: List[dict], 
