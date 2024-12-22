@@ -193,6 +193,10 @@
                     } else {
                         reportContent.textContent = 'Report not found.';
                     }
+                })
+                .catch(error => {
+                    console.error('Error fetching report:', error);
+                    reportContent.textContent = 'Error loading report.';
                 });
         }
 

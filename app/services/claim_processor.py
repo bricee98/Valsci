@@ -127,6 +127,7 @@ class ClaimProcessor:
                     claim, processed_papers, non_relevant_papers, inaccessible_papers
                 )
                 print("Generated report")
+                print("Claim report: ", claim.report)
                 timing_stats['report_generation'] = time() - report_start
                 timing_stats['total_time'] = time() - start_time
                 claim.report['timing_stats'] = timing_stats

@@ -90,28 +90,16 @@
 
         function initializeTable(data) {
             const tableData = data.claims.map(claim => {
-                let reportData = {};
-                if (claim.additional_info) {
-                    if (typeof claim.additional_info === 'string') {
-                        try {
-                            reportData = JSON.parse(claim.additional_info);
-                        } catch (e) {
-                            console.error('Error parsing additional_info:', e);
-                            reportData = {};
-                        }
-                    } else {
-                        reportData = claim.additional_info;
-                    }
-                }
+                const report = claim.report || {};
                 
                 if (claim.status === 'processed') {
                     return {
                         text: claim.text || 'N/A',
                         status: claim.status,
-                        claimRating: reportData.claimRating || null,
-                        supporting_papers_count: reportData.supportingPapers?.length || 0,
-                        non_relevant_papers_count: reportData.nonRelevantPapers?.length || 0,
-                        price: reportData.usage_stats?.total_cost || 0,
+                        claimRating: report.claimRating || null,
+                        supporting_papers_count: report.supportingPapers?.length || 0,
+                        non_relevant_papers_count: report.nonRelevantPapers?.length || 0,
+                        price: report.usage_stats?.total_cost || 0,
                         claim_id: claim.claim_id
                     };
                 }

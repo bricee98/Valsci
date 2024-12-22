@@ -113,12 +113,12 @@ def get_claim_report(claim_id):
         if f"{claim_id}.txt" in files:
             with open(os.path.join(root, f"{claim_id}.txt"), 'r') as f:
                 claim_data = json.load(f)
-            return jsonify({
-                "claim_id": claim_id,
-                "text": claim_data.get('text', ''),
-                "status": claim_data.get('status', ''),
-                "report": claim_data.get('additional_info', {})
-            }), 200
+                return jsonify({
+                    "claim_id": claim_id,
+                    "text": claim_data.get('text', ''),
+                    "status": claim_data.get('status', ''),
+                    "report": claim_data.get('report', {})  # Get report directly
+                }), 200
     return jsonify({"error": "Claim not found"}), 404
 
 @api.route('/api/v1/batch', methods=['POST'])
