@@ -2,7 +2,7 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict
 
 class Paper(BaseModel):
-    paper_id: str
+    corpus_id: str
     title: str
     abstract: Optional[str] = ""
     authors: List[Dict] = []
@@ -13,6 +13,9 @@ class Paper(BaseModel):
     is_open_access: Optional[bool] = False
     fields_of_study: List[str] = []
     references: List[str] = []
+    text: Optional[str] = ""
+    content_source: Optional[str] = ""
+    pdf_hash: Optional[str] = ""
 
     class Config:
         allow_population_by_dict = True
