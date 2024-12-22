@@ -38,6 +38,7 @@ class ClaimProcessor:
             search_start = time()
             papers = self.literature_searcher.search_papers(claim)
             print("Got papers")
+            print("Papers: ", papers)
             timing_stats['search_papers'] = time() - search_start
 
             if not papers:
