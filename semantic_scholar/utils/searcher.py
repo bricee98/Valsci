@@ -152,6 +152,9 @@ class S2Searcher:
                             paper['text'] = content['text']
                             paper['content_source'] = content['source']
                             paper['pdf_hash'] = content['pdf_hash']
+
+                        # Enrich the data with author h-index
+                        paper['authors'] = self._enrich_author_data(paper['authors'])
                         
                         seen_paper_ids.add(corpus_id)
                         papers.append(paper)
@@ -207,43 +210,6 @@ class S2Searcher:
         except Exception as e:
             console.print(f"[red]Error in search_papers: {str(e)}[/red]")
             return []
-
-    def _api_search(self, query: str, limit: int) -> List[Dict]:
-        """Search papers using Semantic Scholar API."""
-        self.rate_limiter.wait()
-        response = self.session.get(
-            'https://api.semanticscholar.org/graph/v1/paper/search',
-            params={
-                'query': query,
-                'limit': limit,
-                'fields': ','.join([
-                    'paperId',
-                    'title',
-                    'abstract',
-                    'year',
-                    'authors',
-                    'venue',
-                    'url',
-                    'isOpenAccess',
-                    'fieldsOfStudy',
-                    'citationCount',  # Add citation count from API
-                    'authors.name',
-                    'authors.authorId',
-                    'authors.affiliations',
-                    'authors.paperCount',
-                    'authors.citationCount',
-                    'authors.hIndex'
-                ])
-            }
-        )
-        response.raise_for_status()
-        data = response.json()
-        
-        if not data.get('data'):
-            console.print(f"[yellow]No results found for query: {query}[/yellow]")
-            return []
-            
-        return data.get('data', [])
 
     def _get_citation_count(self, paper_id: str) -> int:
         """Get citation count for a paper."""

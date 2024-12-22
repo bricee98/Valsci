@@ -39,6 +39,10 @@ class LiteratureSearcher:
                     # Ensure fields_of_study is a list
                     if raw_paper.get('fields_of_study') is None:
                         raw_paper['fields_of_study'] = []
+
+                    # Look up the authors to get their h-index
+                    
+
                     papers.append(Paper.from_s2_paper(raw_paper))
                 except Exception as e:
                     logger.error(f"Error converting paper {raw_paper.get('corpusId')}: {str(e)}")

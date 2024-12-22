@@ -179,7 +179,8 @@ def start_batch_job():
             EmailService.send_batch_start_notification(
                 notification_email,
                 batch_id,
-                len(claims)
+                len(claims),
+                'regular'
             )
         
         # Start processing
