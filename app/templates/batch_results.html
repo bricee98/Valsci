@@ -97,7 +97,7 @@
                         text: claim.text || 'N/A',
                         status: claim.status,
                         claimRating: report.claimRating || null,
-                        supporting_papers_count: report.supportingPapers?.length || 0,
+                        supporting_papers_count: report.relevantPapers?.length || 0,
                         non_relevant_papers_count: report.nonRelevantPapers?.length || 0,
                         price: report.usage_stats?.total_cost || 0,
                         claim_id: claim.claim_id

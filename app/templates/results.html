@@ -62,10 +62,10 @@
                 <h3>Explanation:</h3>
                 <p style="white-space: pre-line;">${data.report?.explanation ?? 'No explanation available'}</p>
                 <p><strong>Status:</strong> ${data.status}</p>
-                <h3>Supporting Papers:</h3>
+                <h3>Relevant Papers:</h3>
                 <div class="papers-section">
-                    ${data.report?.supportingPapers && Array.isArray(data.report.supportingPapers) ? 
-                        data.report.supportingPapers.map(paper => `
+                    ${data.report?.relevantPapers && Array.isArray(data.report.relevantPapers) ? 
+                        data.report.relevantPapers.map(paper => `
                             <div class="mechanism-section">
                                 <h4>${paper.title}</h4>
                                 <div class="paper-details">
@@ -102,7 +102,7 @@
                                 </div>
                             </div>
                         `).join('')
-                        : '<div class="error-message">No supporting papers available</div>'
+                        : '<div class="error-message">No relevant papers available</div>'
                     }
                 </div>
 

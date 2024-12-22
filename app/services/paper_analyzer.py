@@ -17,7 +17,7 @@ class PaperAnalyzer:
         claim: Claim
     ) -> Tuple[float, List[str], List[str], Optional[str], List[int]]:
         """
-        Analyze paper content for relevance to the claim and extract supporting evidence.
+        Analyze paper content for relevance to the claim and extract supporting, contradicting, or generally relevant evidence.
         
         Returns:
         - relevance score (0-1)

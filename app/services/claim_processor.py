@@ -32,7 +32,7 @@ class ClaimProcessor:
         timing_stats = {}
 
         try:
-            self.update_claim_status(batch_id, claim_id, "searching_papers")
+            self.update_claim_status(batch_id, claim_id, "searching_papers", claim_text=claim.text)
             
             # Search for relevant papers using S2
             search_start = time()
@@ -44,16 +44,16 @@ class ClaimProcessor:
             if not papers:
                 claim.status = "processed"
                 claim.report = {
-                    "supportingPapers": [],
+                    "relevantPapers": [],
                     "explanation": "No relevant papers were found for this claim.",
                     "claimRating": 0,
                     "timing_stats": timing_stats,
                     "searchQueries": self.literature_searcher.saved_search_queries
                 }
-                self.update_claim_status(batch_id, claim_id, "processed", claim.report)
+                self.update_claim_status(batch_id, claim_id, "processed", claim.report, claim_text=claim.text)
                 return
 
-            self.update_claim_status(batch_id, claim_id, "analyzing_papers")
+            self.update_claim_status(batch_id, claim_id, "analyzing_papers", claim_text=claim.text)
             
             # Process papers
             processed_papers = []
@@ -68,7 +68,8 @@ class ClaimProcessor:
                 self.update_claim_status(
                     batch_id, 
                     claim_id, 
-                    f"analyzing_paper_{i+1}_of_{total_papers}"
+                    f"analyzing_paper_{i+1}_of_{total_papers}",
+                    claim_text=claim.text
                 )
                 
                 try:
@@ -132,11 +133,11 @@ class ClaimProcessor:
                 timing_stats['total_time'] = time() - start_time
                 claim.report['timing_stats'] = timing_stats
                 claim.status = "processed"
-                self.update_claim_status(batch_id, claim_id, "processed", claim.report)
+                self.update_claim_status(batch_id, claim_id, "processed", claim.report, claim_text=claim.text)
             else:
                 claim.status = "processed"
                 claim.report = {
-                    "supportingPapers": [],
+                    "relevantPapers": [],
                     "nonRelevantPapers": self._format_non_relevant_papers(non_relevant_papers),
                     "inaccessiblePapers": self._format_inaccessible_papers(inaccessible_papers),
                     "explanation": "No relevant papers were found that support or refute this claim.",
@@ -144,7 +145,7 @@ class ClaimProcessor:
                     "timing_stats": timing_stats,
                     "searchQueries": self.literature_searcher.saved_search_queries
                 }
-                self.update_claim_status(batch_id, claim_id, "processed", claim.report)
+                self.update_claim_status(batch_id, claim_id, "processed", claim.report, claim_text=claim.text)
 
         except Exception as e:
             logger.error(f"Error processing claim: {str(e)}")
@@ -153,7 +154,7 @@ class ClaimProcessor:
                 "error": str(e),
                 "timing_stats": timing_stats
             }
-            self.update_claim_status(batch_id, claim_id, "error", claim.report)
+            self.update_claim_status(batch_id, claim_id, "error", claim.report, claim_text=claim.text)
 
     def _format_non_relevant_papers(self, papers: List[Dict]) -> List[Dict]:
         """Format non-relevant papers for the report."""
@@ -231,7 +232,7 @@ class ClaimProcessor:
 
             # Prepare input for the LLM
             prompt = dedent(f"""
-            Evaluate the following claim based on the provided evidence from scientific papers:
+            Evaluate the following claim based on the provided evidence and counter-evidence from scientific papers:
 
             Claim: {claim.text}
 
@@ -269,7 +270,7 @@ class ClaimProcessor:
 
             # Format the final report
             return {
-                "supportingPapers": [
+                "relevantPapers": [
                     {
                         "title": p.get('paper', {}).title,
                         "authors": [
@@ -312,7 +313,7 @@ class ClaimProcessor:
             logger.error(f"Error in generate_final_report: {str(e)}")
             # Return a safe fallback response
             return {
-                "supportingPapers": [],
+                "relevantPapers": [],
                 "nonRelevantPapers": [],
                 "inaccessiblePapers": [],
                 "explanation": f"Error generating final report: {str(e)}",
@@ -335,7 +336,7 @@ class ClaimProcessor:
         ER  -
         """.strip()
 
-    def update_claim_status(self, batch_id: str, claim_id: str, status: str, report: dict = None):
+    def update_claim_status(self, batch_id: str, claim_id: str, status: str, report: dict = None, claim_text: str = None):
         """Update claim status and report in saved_jobs directory."""
         try:
             claim_dir = os.path.join('saved_jobs', batch_id)
@@ -344,6 +345,7 @@ class ClaimProcessor:
             
             data = {
                 "status": status,
+                "text": claim_text,
                 "additional_info": ""
             }
             if report:
