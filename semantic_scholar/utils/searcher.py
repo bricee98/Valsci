@@ -160,6 +160,11 @@ class S2Searcher:
                 console.print(f"[red]Error in search_papers_for_claim: {str(e)}[/red]")
                 continue
 
+        print("are any papers none? ", any(paper is None for paper in papers))
+
+        # remove None papers
+        papers = [paper for paper in papers if paper is not None]
+
         return papers
 
     def search_papers(self, query: str, limit: int = 10) -> List[Dict]:
@@ -375,7 +380,7 @@ class S2Searcher:
                 else:
                     logger.info("Abstract record found but no abstract text available")
 
-                    
+
             # Try TLDR dataset
             logger.info("Attempting TLDR lookup...")
             tldr_record = self.indexer.lookup(
