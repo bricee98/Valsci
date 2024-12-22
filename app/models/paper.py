@@ -24,7 +24,7 @@ class Paper(BaseModel):
     def from_s2_paper(cls, paper_data: dict):
         """Create a Paper instance from Semantic Scholar paper data."""
         return cls(
-            corpus_id=paper_data.get('corpusId'),
+            corpus_id=str(paper_data.get('corpusId')),
             title=paper_data.get('title', ''),
             abstract=paper_data.get('abstract', ''),
             authors=paper_data.get('authors', []),
