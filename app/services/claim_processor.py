@@ -158,20 +158,20 @@ class ClaimProcessor:
         """Format non-relevant papers for the report."""
         try:
             return [{
-                "title": paper['paper'].title,
+                "title": paper.get('paper', {}).title,
                 "authors": [
                     {
-                        "name": author['name'],
+                        "name": author.get('name', 'Unknown'),
                         "hIndex": author.get('hIndex', 0)
                     }
-                    for author in paper['paper'].authors
+                    for author in (paper.get('paper', {}).authors or [])
                 ],
-                "link": paper['paper'].url,
-                "explanation": paper['explanation'],
-                    "content_type": paper['content_type']
-                } for paper in papers]
+                "link": paper.get('paper', {}).url,
+                "explanation": paper.get('explanation', 'No explanation available'),
+                "content_type": paper.get('content_type', 'unknown')
+            } for paper in (papers or [])]
         except Exception as e:
-            print("Error formatting non-relevant papers: ", e)
+            logger.error(f"Error formatting non-relevant papers: {str(e)}")
             return []
 
     def _format_inaccessible_papers(self, papers: List[Dict]) -> List[Dict]:
@@ -197,104 +197,128 @@ class ClaimProcessor:
                             non_relevant_papers: List[dict], 
                             inaccessible_papers: List[dict]) -> dict:
         """Generate the final report for a claim."""
-        # Prepare input for the LLM
-        paper_summaries = "\n".join([
-            f"Paper: {p['paper'].title}\n"
-            f"Authors: {', '.join(author['name'] + ' (H-index: ' + str(author.get('hIndex', 0)) + ')' for author in p['paper'].authors)}\n"
-            f"Relevance: {p['relevance']}\nReliability Weight: {p['score']}\nExcerpts: {p['excerpts']}"
-            for p in processed_papers
-        ])
-
-        print("Processed papers: ", processed_papers)
-        print("Paper summaries: ", paper_summaries)
-        print("Non relevant papers: ", non_relevant_papers)
-        print("Inaccessible papers: ", inaccessible_papers)
-        
-        prompt = dedent(f"""
-        Evaluate the following claim based on the provided evidence from scientific papers:
-
-        Claim: {claim.text}
-
-        Evidence:
-        {paper_summaries}
-        """).strip()
-
-        system_prompt = dedent("""
-        You are an AI assistant tasked with evaluating scientific claims based on evidence from papers.
-        Provide an explanation in an essay format with newlines between paragraphs, including specific references to the scientific papers. 
-        The essay should have:
-        1. A paragraph highlighting supporting evidence
-        2. A paragraph highlighting caveats or contradictions
-        3. An analysis of which evidence outweighs the other and how strongly the claim is supported
-        
-        Assign a claim rating between -10 (completely refuted) and 10 (strongly supported):
-        -10 to -7: Contradicted by strong evidence
-        -6 to -4: Somewhat refuted
-        -3 to -1: Slightly refuted
-        0: No evidence either way
-        1 to 3: Slightly supported
-        4 to 6: Reasonably supported
-        7 to 10: Strongly supported
-
-        The JSON response should have:
-        {
-            "explanation": <str: detailed essay explaining the rating>,
-            "claimRating": <int: rating from -10 to 10>
-        }
-        """).strip()
-
-        print("Prompt: ", prompt)
-
-        response = self.openai_service.generate_json(prompt, system_prompt)
-
-        # Format the final report
         try:
+            # Debug logging
+            logger.info(f"Processed papers: {len(processed_papers) if processed_papers else 'None'}")
+            
+            # Safely process paper summaries
+            paper_summaries = []
+            for p in (processed_papers or []):
+                try:
+                    if not p.get('paper'):
+                        logger.error(f"Missing paper object in processed paper: {p}")
+                        continue
+                        
+                    authors_str = ', '.join(
+                        f"{author.get('name', 'Unknown')} (H-index: {author.get('hIndex', 0)})"
+                        for author in (p['paper'].authors or [])
+                    )
+                    
+                    summary = (
+                        f"Paper: {p['paper'].title}\n"
+                        f"Authors: {authors_str}\n"
+                        f"Relevance: {p.get('relevance', 'Unknown')}\n"
+                        f"Reliability Weight: {p.get('score', 'Unknown')}\n"
+                        f"Excerpts: {p.get('excerpts', [])}"
+                    )
+                    paper_summaries.append(summary)
+                except Exception as e:
+                    logger.error(f"Error processing paper summary: {str(e)}")
+                    continue
+
+            paper_summaries_text = "\n".join(paper_summaries)
+
+            # Prepare input for the LLM
+            prompt = dedent(f"""
+            Evaluate the following claim based on the provided evidence from scientific papers:
+
+            Claim: {claim.text}
+
+            Evidence:
+            {paper_summaries_text}
+            """).strip()
+
+            system_prompt = dedent("""
+            You are an AI assistant tasked with evaluating scientific claims based on evidence from papers.
+            Provide an explanation in an essay format with newlines between paragraphs, including specific references to the scientific papers. 
+            The essay should have:
+            1. A paragraph highlighting supporting evidence
+            2. A paragraph highlighting caveats or contradictions
+            3. An analysis of which evidence outweighs the other and how strongly the claim is supported
+            
+            Assign a claim rating between -10 (completely refuted) and 10 (strongly supported):
+            -10 to -7: Contradicted by strong evidence
+            -6 to -4: Somewhat refuted
+            -3 to -1: Slightly refuted
+            0: No evidence either way
+            1 to 3: Slightly supported
+            4 to 6: Reasonably supported
+            7 to 10: Strongly supported
+
+            The JSON response should have:
+            {
+                "explanation": <str: detailed essay explaining the rating>,
+                "claimRating": <int: rating from -10 to 10>
+            }
+            """).strip()
+
+            print("Prompt: ", prompt)
+
+            response = self.openai_service.generate_json(prompt, system_prompt)
+
+            # Format the final report
             return {
                 "supportingPapers": [
                     {
-                    "title": p['paper'].title,
-                    "authors": [
-                        {
-                            "name": author['name'],
-                            "hIndex": author.get('hIndex', 0)
-                        }
-                        for author in p['paper'].authors
-                    ],
-                    "link": p['paper'].url,
-                    "relevance": p['relevance'],
-                    "weight_score": p['score'],
-                    "content_type": p['content_type'],
-                    "excerpts": p['excerpts'],
-                    "explanations": p['explanations'],
-                    "citations": [
-                        {
-                            "text": excerpt,
-                            "page": page,
-                            "citation": self._format_citation(p['paper'], page)
-                        }
-                        for excerpt, page in zip(p['excerpts'], p.get('excerpt_pages', []))
-                    ]
-                }
-                for p in processed_papers
-            ],
-            "nonRelevantPapers": self._format_non_relevant_papers(non_relevant_papers),
-            "inaccessiblePapers": self._format_inaccessible_papers(inaccessible_papers),
-            "explanation": response['explanation'],
-            "claimRating": response['claimRating'],
-            "searchQueries": self.literature_searcher.saved_search_queries,
+                        "title": p.get('paper', {}).title,
+                        "authors": [
+                            {
+                                "name": author.get('name', 'Unknown'),
+                                "hIndex": author.get('hIndex', 0)
+                            }
+                            for author in (p.get('paper', {}).authors or [])
+                        ],
+                        "link": p.get('paper', {}).url,
+                        "relevance": p.get('relevance', 0),
+                        "weight_score": p.get('score', 0),
+                        "content_type": p.get('content_type', 'unknown'),
+                        "excerpts": p.get('excerpts', []),
+                        "explanations": p.get('explanations', []),
+                        "citations": [
+                            {
+                                "text": excerpt,
+                                "page": page,
+                                "citation": self._format_citation(p['paper'], page)
+                            }
+                            for excerpt, page in zip(
+                                p.get('excerpts', []), 
+                                p.get('excerpt_pages', []) or [None] * len(p.get('excerpts', []))
+                            )
+                        ]
+                    }
+                    for p in (processed_papers or [])
+                    if p.get('paper')  # Only include papers that have a paper object
+                ],
+                "nonRelevantPapers": self._format_non_relevant_papers(non_relevant_papers or []),
+                "inaccessiblePapers": self._format_inaccessible_papers(inaccessible_papers or []),
+                "explanation": response.get('explanation', 'No explanation available'),
+                "claimRating": response.get('claimRating', 0),
+                "searchQueries": getattr(self.literature_searcher, 'saved_search_queries', []),
                 "usage_stats": self.openai_service.get_usage_stats()
             }
+
         except Exception as e:
-            print("Error generating final report: ", e)
+            logger.error(f"Error in generate_final_report: {str(e)}")
+            # Return a safe fallback response
             return {
                 "supportingPapers": [],
                 "nonRelevantPapers": [],
                 "inaccessiblePapers": [],
-                "explanation": "Error generating final report",
+                "explanation": f"Error generating final report: {str(e)}",
                 "claimRating": 0,
-                "searchQueries": self.literature_searcher.saved_search_queries,
+                "searchQueries": [],
                 "usage_stats": self.openai_service.get_usage_stats()
-                }
+            }
 
     def _format_citation(self, paper, page_number):
         """Format citation in RIS format."""
