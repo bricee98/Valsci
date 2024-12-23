@@ -2,6 +2,7 @@ from typing import List, Union
 import pandas as pd
 from app.models.claim import Claim
 from app.models.batch_job import BatchJob
+from app.models.paper import Paper
 from app.services.literature_searcher import LiteratureSearcher
 from app.services.paper_analyzer import PaperAnalyzer
 from app.services.evidence_scorer import EvidenceScorer
