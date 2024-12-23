@@ -100,10 +100,11 @@ class S2Searcher:
             1. Identify core concepts and their relationships in the claim
             2. Include field-specific terminology, common synonyms, and alternative phrasings
             3. Decompose complex claims into testable components
-            4. Utilize boolean operators (AND, OR, NOT) and proximity operators when beneficial
-            5. Balance specificity with recall - avoid overly narrow or broad queries
-            6. Consider both direct evidence and mechanistic studies
-            7. Account for competing hypotheses and alternative explanations
+            4. Use only plain text search queries, no boolean operators or special syntax
+            5. Break hyphenated terms into separate words (e.g. "drug-resistant" -> "drug resistant")
+            6. Balance specificity with recall - avoid overly narrow or broad queries
+            7. Consider both direct evidence and mechanistic studies
+            8. Account for competing hypotheses and alternative explanations
 
             Search Strategy:
             - Generate queries for direct evidence testing the claim
@@ -140,7 +141,8 @@ class S2Searcher:
             - Include a mix of specific and broader search strategies
             - Consider both direct evidence and mechanistic studies
             - Account for different research methodologies and study types
-            - Use standard search syntax (boolean operators, parentheses, quotation marks)
+            - Use only plain text search queries, no boolean operators or special syntax
+            - Break hyphenated terms into separate words (e.g. "drug-resistant" -> "drug resistant")
 
             Return results as a JSON object with 'explanations' and 'queries' arrays.
             """)
