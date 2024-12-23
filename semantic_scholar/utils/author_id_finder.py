@@ -54,28 +54,37 @@ class AuthorIDFinder:
         console.print(f"\n[cyan]Checking binary indices for release {release_id}...[/cyan]")
         for dataset in self.author_id_datasets:
             try:
-                record = self.indexer.lookup(
+                # First get the index entry
+                index_entry = self.indexer.search(
                     release_id=release_id,
                     dataset=dataset,
                     id_type='author_id',
                     search_id=str(author_id)
                 )
                 
-                if record:
+                # Then get the record data if we found an entry
+                record = None
+                if index_entry:
+                    record = self.indexer.read_entry_data(index_entry)
+                
+                if index_entry:
                     results[dataset] = {
                         'found_in_index': True,
+                        'index_entry': index_entry,  # Store the actual IndexEntry
                         'record': record,
                         'file_info': None
                     }
                 else:
                     results[dataset] = {
                         'found_in_index': False,
+                        'index_entry': None,
                         'record': None,
                         'file_info': None
                     }
             except Exception as e:
                 results[dataset] = {
                     'found_in_index': False,
+                    'index_entry': None,
                     'record': None,
                     'error': str(e)
                 }
@@ -175,10 +184,11 @@ class AuthorIDFinder:
             details = []
             
             # Add index record info if found
-            if info.get('record'):
+            if info.get('index_entry'):  # Use index_entry instead of record
+                entry = info['index_entry']
                 details.append("[cyan]Index points to:[/cyan]")
-                details.append(f"File: {info['record'].get('file_path', 'unknown')}")
-                details.append(f"Offset: {info['record'].get('offset', 'unknown')}")
+                details.append(f"File: {Path(entry.file_path).name}")
+                details.append(f"Offset: {entry.offset}")
             
             # Add file info if found
             if file_info:
