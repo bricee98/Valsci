@@ -222,15 +222,21 @@ class S2Searcher:
         for author in authors:
             author_id = author.get('authorId')
             if author_id:
-                local_data = self._find_in_dataset('authors', author_id, 'author_id')
+                # Use the binary indexer to look up the author
+                local_data = self.indexer.lookup(
+                    release_id=self.current_release,
+                    dataset='authors',
+                    id_type='author_id',
+                    search_id=str(author_id)
+                )
                 if local_data:
-                    # Add h-index and other metrics
-                    author['hIndex'] = local_data.get('hIndex', 0)
-                    print("Author h-index: ", author['hIndex'])
-                    author['paperCount'] = local_data.get('paperCount', 0)
-                    author['citationCount'] = local_data.get('citationCount', 0)
+                    # Map fields using correct field names from authors dataset
+                    author['hIndex'] = local_data.get('hindex', 0)
+                    author['paperCount'] = local_data.get('papercount', 0)
+                    author['citationCount'] = local_data.get('citationcount', 0)
+                    logger.info(f"Enriched author {author_id} with h-index: {author['hIndex']}")
                 else:
-                    print("No local data found for author: ", author_id)
+                    logger.warning(f"No local data found for author: {author_id}")
             enriched_authors.append(author)
         return enriched_authors
 
