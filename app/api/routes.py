@@ -251,7 +251,7 @@ def process_batch_in_background(app, batch_job: BatchJob, batch_id: str):
                         notification_data['email'],
                         batch_id,
                         notification_data['num_claims'],
-                        notification_data['review_type']
+                        'regular'
                     )
 
         except Exception as e:
