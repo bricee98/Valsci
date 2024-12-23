@@ -134,7 +134,7 @@ class AuthorIDFinder:
                 console.print(f"[yellow]Warning: Index points to missing file: {file_path}[/yellow]")
                 return None
                 
-            with open(file_path, 'r') as f:
+            with open(file_path, 'rb') as f:  # Open in binary mode
                 f.seek(entry.offset)
                 line = f.readline()
                 try:
@@ -144,10 +144,10 @@ class AuthorIDFinder:
                         data = json.loads(decoded)
                     except:
                         # Fall back to regular JSON
-                        data = json.loads(line.strip())
+                        data = json.loads(line.strip().decode('utf-8'))
                     
                     # Verify we found the right record
-                    found_id = str(data.get('authorId') or data.get('author_id'))
+                    found_id = str(data.get('authorid') or data.get('authorId'))
                     if found_id == str(author_id):
                         return {
                             'file': file_path.name,
