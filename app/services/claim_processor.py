@@ -40,9 +40,10 @@ class ClaimProcessor:
                     "explanation": "No relevant papers were found for this claim.",
                     "claimRating": 0,
                     "timing_stats": timing_stats,
-                    "searchQueries": self.literature_searcher.saved_search_queries
+                    "searchQueries": self.literature_searcher.saved_search_queries,
+                    "claim_text": claim_text
                 }
-                self.update_claim_status(batch_id, claim_id, "processed", report)
+                self.update_claim_status(batch_id, claim_id, "processed", report, claim_text)
                 return
 
             # Process papers
@@ -113,18 +114,21 @@ class ClaimProcessor:
             if processed_papers:
                 logger.info("Processed papers is not empty")
                 report = await self.generate_final_report(
-                    claim_text,  # Use the claim text as the claim text
+                    claim_text,
                     processed_papers, 
                     non_relevant_papers, 
                     inaccessible_papers
                 )
                 logger.info("Generated report")
                 
+                # Ensure claim text is in report
+                report["claim_text"] = claim_text
+                
                 timing_stats['report_generation'] = time() - report_start
                 timing_stats['total_time'] = time() - start_time
                 report['timing_stats'] = timing_stats
                 
-                self.update_claim_status(batch_id, claim_id, "processed", report)
+                self.update_claim_status(batch_id, claim_id, "processed", report, claim_text)
             else:
                 report = {
                     "relevantPapers": [],
@@ -133,17 +137,19 @@ class ClaimProcessor:
                     "explanation": "No relevant papers were found that support or refute this claim.",
                     "claimRating": 0,
                     "timing_stats": timing_stats,
-                    "searchQueries": self.literature_searcher.saved_search_queries
+                    "searchQueries": self.literature_searcher.saved_search_queries,
+                    "claim_text": claim_text
                 }
-                self.update_claim_status(batch_id, claim_id, "processed", report)
+                self.update_claim_status(batch_id, claim_id, "processed", report, claim_text)
 
         except Exception as e:
             logger.error(f"Error processing claim: {str(e)}")
             report = {
                 "error": str(e),
-                "timing_stats": timing_stats
+                "timing_stats": timing_stats,
+                "claim_text": claim_text
             }
-            self.update_claim_status(batch_id, claim_id, "error", report)
+            self.update_claim_status(batch_id, claim_id, "error", report, claim_text)
 
     def _format_non_relevant_papers(self, papers: List[Dict]) -> List[Dict]:
         """Format non-relevant papers for the report."""
@@ -332,13 +338,17 @@ class ClaimProcessor:
             os.makedirs(claim_dir, exist_ok=True)
             claim_file = os.path.join(claim_dir, f"{claim_id}.txt")
             
+            # Ensure claim_text is included in the data
             data = {
                 "status": status,
-                "text": claim_text,
+                "text": claim_text,  # This was being set but not used when claim_text was None
                 "additional_info": ""
             }
             if report:
                 data["report"] = report
+                # Also store claim text in report for consistency
+                if claim_text:
+                    data["report"]["claim_text"] = claim_text
                 
             with open(claim_file, 'w') as f:
                 json.dump(data, f, indent=2)

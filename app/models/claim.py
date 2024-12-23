@@ -7,4 +7,13 @@ class Claim:
         self.status: str = 'queued'
         self.report: Optional[Dict[str, Any]] = None
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert claim to dictionary representation"""
+        return {
+            "text": self.text,
+            "source": self.source,
+            "status": self.status,
+            "report": self.report
+        }
+
 
