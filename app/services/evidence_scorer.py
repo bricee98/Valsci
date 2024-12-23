@@ -12,13 +12,13 @@ class EvidenceScorer:
     def __init__(self):
         self.openai_service = OpenAIService()
 
-    def calculate_paper_weight(self, paper: Paper) -> float:
+    async def calculate_paper_weight(self, paper: Paper) -> float:
         """Calculate the weight/reliability score for a paper."""
         try:
             # Get metrics
             max_h_index = self._get_max_author_h_index(paper.authors)
             citation_impact = self._calculate_citation_impact(paper)
-            venue_impact = self._calculate_venue_impact(paper)
+            venue_impact = await self._calculate_venue_impact(paper)
             
             # Normalize scores
             normalized_h_index = min(max_h_index / 100, 1.0)  # S2 h-indices can be higher than OpenAlex
