@@ -9,6 +9,7 @@ from openai import OpenAI
 import asyncio
 import mmap
 import logging
+from textwrap import dedent
 
 logging.basicConfig(
     level=logging.INFO,
@@ -92,29 +93,57 @@ class S2Searcher:
 
     def generate_search_queries(self, claim_text: str, num_queries: int = 5) -> List[str]:
         """Generate search queries for a claim using GPT."""
-        system_prompt = """
-        You are an expert at converting scientific claims into effective search queries.
-        Generate search queries that will find papers relevant to validating or refuting the claim.
-        
-        Guidelines:
-        1. Focus on key scientific concepts and their relationships
-        2. Include specific technical terms and their synonyms
-        3. Break down complex claims into simpler search components
-        4. Use boolean operators (AND, OR) when helpful
-        5. Keep queries concise but precise
-        6. Include both broad and specific variations
-        7. Consider alternative terminology used in the field
-        
-        Format each query to maximize relevance for academic paper search.
-        """
+        system_prompt = dedent("""
+            You are an expert at converting scientific claims into strategic literature search queries. Specifically, your queries will be used to search the Semantic Scholar database. Your goal is to generate queries that will comprehensively evaluate both supporting and contradicting evidence for a given claim.
 
-        user_prompt = f"""
-        Generate {num_queries} different search queries for the following scientific claim:
-        "{claim_text}"
+            Guidelines for Query Generation:
+            1. Identify core concepts and their relationships in the claim
+            2. Include field-specific terminology, common synonyms, and alternative phrasings
+            3. Decompose complex claims into testable components
+            4. Utilize boolean operators (AND, OR, NOT) and proximity operators when beneficial
+            5. Balance specificity with recall - avoid overly narrow or broad queries
+            6. Consider both direct evidence and mechanistic studies
+            7. Account for competing hypotheses and alternative explanations
 
-        Make the queries specific enough to find relevant papers but not so narrow that they miss important results.
-        Return the queries as a JSON array of strings.
-        """
+            Search Strategy:
+            - Generate queries for direct evidence testing the claim
+            - Include queries for underlying mechanisms and pathways
+            - Consider related phenomena that could provide indirect evidence
+            - Look for potential confounding factors or methodological challenges
+            - Search for systematic reviews and meta-analyses when applicable
+
+            Example Approach:
+            For "Metformin increases lifespan", you could consider:
+            - Direct evidence: clinical studies, epidemiological data
+            - Mechanisms: AMPK pathway, insulin sensitivity, mitochondrial function
+            - Related outcomes: mortality, age-related diseases, biomarkers of aging
+            - Potential confounds: diabetes status, age, concurrent medications
+            when generating your queries.
+
+            Output Format:
+            {
+                "explanations": [
+                    "string explaining the rationale and strategy behind each query"
+                ],
+                "queries": [
+                    "search query strings formatted for academic databases"
+                ]
+            }
+            """)
+
+        user_prompt = dedent(f"""
+            Generate {num_queries} strategic search queries to evaluate this scientific claim:
+            "{claim_text}"
+
+            Requirements:
+            - Each query should be precisely formulated for Semantic Scholar database searching
+            - Include a mix of specific and broader search strategies
+            - Consider both direct evidence and mechanistic studies
+            - Account for different research methodologies and study types
+            - Use standard search syntax (boolean operators, parentheses, quotation marks)
+
+            Return results as a JSON object with 'explanations' and 'queries' arrays.
+            """)
 
         response = self.openai_service.generate_json(user_prompt, system_prompt)
         queries = response.get('queries', [])
