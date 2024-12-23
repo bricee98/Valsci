@@ -272,7 +272,10 @@ async def run_batch_processing(loop, batch_job: BatchJob, batch_id: str):
     results_dict = {}
 
     # Create a map of claim_id to claim_text
-    claim_text_map = {claim.id: claim.text for claim in batch_job.claims}
+    claim_text_map = {}
+    for claim in batch_job.claims:
+        claim_id = str(uuid.uuid4())[:8]
+        claim_text_map[claim_id] = claim.text
     
     # Start the search worker
     search_worker_task = asyncio.create_task(
