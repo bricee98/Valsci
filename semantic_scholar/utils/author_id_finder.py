@@ -170,20 +170,29 @@ class AuthorIDFinder:
             # Determine index status
             index_status = "[green]✓[/green]" if info.get('found_in_index') else "[red]✗[/red]"
             
-            # Determine file status
+            # Determine file status and details
             file_info = info.get('file_info')
+            details = []
+            
+            # Add index record info if found
+            if info.get('record'):
+                details.append("[cyan]Index points to:[/cyan]")
+                details.append(f"File: {info['record'].get('file_path', 'unknown')}")
+                details.append(f"Offset: {info['record'].get('offset', 'unknown')}")
+            
+            # Add file info if found
             if file_info:
                 file_status = f"[green]✓[/green]"
-                details = [f"File: {file_info['file']}"]
+                if file_info.get('file'):
+                    details.append(f"Found in file: {file_info['file']}")
                 if file_info.get('offset'):
-                    details.append(f"Offset: {file_info['offset']}")
+                    details.append(f"At offset: {file_info['offset']}")
                 if file_info.get('data'):
                     # Show a preview of the data
                     data_preview = str(file_info['data'])[:100] + "..." if len(str(file_info['data'])) > 100 else str(file_info['data'])
                     details.append(f"Data: {data_preview}")
             else:
                 file_status = "[red]✗[/red]"
-                details = []
             
             # Add error information if any
             if 'error' in info:
