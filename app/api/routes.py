@@ -154,17 +154,25 @@ def start_batch_job():
         with open(file_path, 'r', encoding='utf-8') as f:
             claims = [line.strip() for line in f if line.strip()]
         
-        # Create claims with search config
+        # Create claims with search config and save them
         batch_claims = []
+        claim_ids = {}  # Map to store claim_text -> claim_id
         for claim_text in claims:
             claim = Claim(text=claim_text)
             claim.search_config = {
                 'num_queries': num_queries,
                 'results_per_query': results_per_query
             }
+            claim_id = str(uuid.uuid4())[:8]
+            claim_ids[claim_text] = claim_id
+            save_claim_to_file(claim, batch_id, claim_id)
             batch_claims.append(claim)
         
         batch_job = BatchJob(claims=batch_claims)
+        
+        # Store claim_ids mapping for the batch
+        with open(os.path.join(batch_dir, 'claim_ids.json'), 'w') as f:
+            json.dump(claim_ids, f)
         
         # Save notification settings
         if notification_email:
@@ -271,22 +279,20 @@ async def run_batch_processing(loop, batch_job: BatchJob, batch_id: str):
     search_queue = asyncio.Queue()
     results_dict = {}
 
-    # Create a map of claim_id to claim_text
-    claim_text_map = {}
+    # Load claim IDs mapping
+    with open(os.path.join(SAVED_JOBS_DIR, batch_id, 'claim_ids.json'), 'r') as f:
+        claim_ids = json.load(f)
+    
+    # Enqueue claims with their existing IDs
     for claim in batch_job.claims:
-        claim_id = str(uuid.uuid4())[:8]
-        claim_text_map[claim_id] = claim.text
+        claim_id = claim_ids[claim.text]
+        await search_queue.put((claim_id, claim))
     
     # Start the search worker
     search_worker_task = asyncio.create_task(
         search_worker(search_queue, results_dict)
     )
     
-    # Enqueue all claims for searching
-    for i, claim in enumerate(batch_job.claims):
-        claim_id = str(uuid.uuid4())[:8]
-        await search_queue.put((claim_id, claim))
-        
     # Signal search worker to terminate after processing all claims
     await search_queue.put(None)
     
@@ -299,13 +305,18 @@ async def run_batch_processing(loop, batch_job: BatchJob, batch_id: str):
     
     post_search_tasks = []
     for claim_id, papers in results_dict.items():
+        # Load the original claim text from the saved file
+        with open(os.path.join(SAVED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'r') as f:
+            claim_data = json.load(f)
+            claim_text = claim_data['text']
+        
         task = asyncio.create_task(
             process_claim_post_search(
                 claim_id=claim_id,
                 papers=papers,
                 batch_id=batch_id,
                 sem=sem,
-                claim_text=claim_text_map[claim_id]
+                claim_text=claim_text
             )
         )
         post_search_tasks.append(task)
