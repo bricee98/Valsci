@@ -25,8 +25,7 @@ class AuthorIDFinder:
         
         # Datasets that should contain author IDs
         self.author_id_datasets = [
-            'authors',
-            'papers'  # Papers contain author references
+            'authors'  # Only search in authors dataset
         ]
 
     def _get_latest_release(self) -> Optional[str]:
@@ -273,11 +272,13 @@ def main():
     args = parser.parse_args()
     
     finder = AuthorIDFinder()
+    # Always do the search first
+    results = finder.find_author_id(args.author_id, args.release)
+    
+    # Then show index samples if requested
     if args.inspect:
         for dataset in finder.author_id_datasets:
             finder.inspect_index(dataset, args.release, args.samples)
-    else:
-        finder.find_author_id(args.author_id, args.release)
 
 if __name__ == "__main__":
     main() 
