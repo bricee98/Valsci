@@ -11,10 +11,10 @@ class PaperAnalyzer:
     def __init__(self):
         self.openai_service = OpenAIService()
 
-    def analyze_relevance_and_extract(
+    async def analyze_relevance_and_extract(
         self, 
         paper_content: str, 
-        claim: Claim
+        claim_text: str
     ) -> Tuple[float, List[str], List[str], Optional[str], List[int]]:
         """
         Analyze paper content for relevance to the claim and extract supporting, contradicting, or generally relevant evidence.
@@ -55,7 +55,7 @@ class PaperAnalyzer:
         user_prompt = dedent(f"""
             Analyze this paper content for evidence related to the following claim:
             
-            Claim: {claim.text}
+            Claim: {claim_text}
             
             Paper content:
             {cleaned_content}
@@ -67,7 +67,8 @@ class PaperAnalyzer:
         """).strip()
 
         try:
-            result = self.openai_service.generate_json(user_prompt, system_prompt)
+            # Use the async version of generate_json
+            result = await self.openai_service.generate_json_async(user_prompt, system_prompt)
             
             # Log the analysis results
             logger.info(f"Paper analysis results:")

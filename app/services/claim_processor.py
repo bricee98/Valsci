@@ -14,6 +14,7 @@ from textwrap import dedent
 from typing import Dict
 from datetime import datetime
 import logging
+import asyncio
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -26,35 +27,23 @@ class ClaimProcessor:
         self.openai_service = OpenAIService()
         self.timing_stats = {}
 
-    def process_claim(self, claim: Claim, batch_id: str, claim_id: str) -> None:
-        """Process a single claim."""
+    async def process_claim_with_papers(self, papers: List[Paper], batch_id: str, claim_id: str) -> None:
+        """Process a claim when we already have the papers."""
         start_time = time()
         timing_stats = {}
 
         try:
-            self.update_claim_status(batch_id, claim_id, "searching_papers", claim_text=claim.text)
-            
-            # Search for relevant papers using S2
-            search_start = time()
-            papers = self.literature_searcher.search_papers(claim)
-            print("Got papers")
-            print("Papers: ", papers)
-            timing_stats['search_papers'] = time() - search_start
-
             if not papers:
-                claim.status = "processed"
-                claim.report = {
+                report = {
                     "relevantPapers": [],
                     "explanation": "No relevant papers were found for this claim.",
                     "claimRating": 0,
                     "timing_stats": timing_stats,
                     "searchQueries": self.literature_searcher.saved_search_queries
                 }
-                self.update_claim_status(batch_id, claim_id, "processed", claim.report, claim_text=claim.text)
+                self.update_claim_status(batch_id, claim_id, "processed", report)
                 return
 
-            self.update_claim_status(batch_id, claim_id, "analyzing_papers", claim_text=claim.text)
-            
             # Process papers
             processed_papers = []
             non_relevant_papers = []
@@ -62,81 +51,81 @@ class ClaimProcessor:
             total_papers = len(papers)
             
             paper_processing_start = time()
-            print("Processing papers")
+            logger.info("Processing papers")
             
-            for i, paper in enumerate(papers):
-                self.update_claim_status(
-                    batch_id, 
-                    claim_id, 
-                    f"analyzing_paper_{i+1}_of_{total_papers}",
-                    claim_text=claim.text
-                )
-                
-                try:
-                    # We already have the content in the paper object
-                    content = paper.text
-                    content_type = paper.content_source
-                    
-                    if not content:
-                        inaccessible_papers.append({
-                            'paper': paper,
-                            'reason': 'Content not available'
-                        })
-                        continue
-
-                    # Analyze relevance
-                    print("Analyzing relevance")
-                    relevance, excerpts, explanations, non_relevant_explanation, excerpt_pages = (
-                        self.paper_analyzer.analyze_relevance_and_extract(content, claim)
-                    )
-                    print("Analyzed relevance")
-                    if relevance >= 0.1:
-                        # Calculate paper weight score using S2 metrics
-                        weight_score = self.evidence_scorer.calculate_paper_weight(paper)
+            # Process papers concurrently with a semaphore to limit concurrent API calls
+            sem = asyncio.Semaphore(3)  # Limit concurrent paper processing
+            
+            async def process_single_paper(paper, i):
+                async with sem:
+                    try:
+                        # Fetch paper content
+                        content, content_type = await self.literature_searcher.fetch_paper_content(paper, None)
                         
-                        processed_papers.append({
-                            'paper': paper,
-                            'relevance': relevance,
-                            'excerpts': excerpts,
-                            'score': weight_score,
-                            'explanations': explanations,
-                            'content_type': content_type,
-                            'excerpt_pages': excerpt_pages
-                        })
-                        print("Added to processed papers")
-                    else:
-                        non_relevant_papers.append({
-                            'paper': paper,
-                            'explanation': non_relevant_explanation,
-                            'content_type': content_type
-                        })
-                        print("Added to non relevant papers")
-                except Exception as e:
-                    logger.error(f"Error processing paper {paper.paper_id}: {str(e)}")
-                    continue
+                        if not content:
+                            inaccessible_papers.append({
+                                'paper': paper,
+                                'reason': 'Content not available'
+                            })
+                            return
+
+                        # Analyze relevance (we'll need to modify paper_analyzer to be async)
+                        logger.info("Analyzing relevance")
+                        relevance, excerpts, explanations, non_relevant_explanation, excerpt_pages = (
+                            await self.paper_analyzer.analyze_relevance_and_extract(content, paper.title)
+                        )
+                        
+                        if relevance >= 0.1:
+                            # Calculate paper weight score
+                            weight_score = self.evidence_scorer.calculate_paper_weight(paper)
+                            
+                            processed_papers.append({
+                                'paper': paper,
+                                'relevance': relevance,
+                                'excerpts': excerpts,
+                                'score': weight_score,
+                                'explanations': explanations,
+                                'content_type': content_type,
+                                'excerpt_pages': excerpt_pages
+                            })
+                            logger.info("Added to processed papers")
+                        else:
+                            non_relevant_papers.append({
+                                'paper': paper,
+                                'explanation': non_relevant_explanation,
+                                'content_type': content_type
+                            })
+                            logger.info("Added to non relevant papers")
+                    except Exception as e:
+                        logger.error(f"Error processing paper {paper.paper_id}: {str(e)}")
+
+            # Process all papers concurrently
+            paper_tasks = [process_single_paper(paper, i) for i, paper in enumerate(papers)]
+            await asyncio.gather(*paper_tasks)
 
             timing_stats['paper_processing'] = time() - paper_processing_start
 
             # Generate final report
-            self.update_claim_status(batch_id, claim_id, "generating_report")
+            logger.info("Generating report")
             report_start = time()
-            print("Generating report")
             
             if processed_papers:
-                print("Processed papers is not empty")
-                claim.report = self.generate_final_report(
-                    claim, processed_papers, non_relevant_papers, inaccessible_papers
+                logger.info("Processed papers is not empty")
+                report = await self.generate_final_report(
+                    papers[0].text,  # Use the first paper's text as the claim text
+                    processed_papers, 
+                    non_relevant_papers, 
+                    inaccessible_papers
                 )
-                print("Generated report")
-                print("Claim report: ", claim.report)
+                logger.info("Generated report")
+                
                 timing_stats['report_generation'] = time() - report_start
                 timing_stats['total_time'] = time() - start_time
-                claim.report['timing_stats'] = timing_stats
-                claim.status = "processed"
-                self.update_claim_status(batch_id, claim_id, "processed", claim.report, claim_text=claim.text)
+                report['timing_stats'] = timing_stats
+                
+                self.update_claim_status(batch_id, claim_id, "processed", report)
             else:
-                claim.status = "processed"
-                claim.report = {
+                report = {
                     "relevantPapers": [],
                     "nonRelevantPapers": self._format_non_relevant_papers(non_relevant_papers),
                     "inaccessiblePapers": self._format_inaccessible_papers(inaccessible_papers),
@@ -145,16 +134,15 @@ class ClaimProcessor:
                     "timing_stats": timing_stats,
                     "searchQueries": self.literature_searcher.saved_search_queries
                 }
-                self.update_claim_status(batch_id, claim_id, "processed", claim.report, claim_text=claim.text)
+                self.update_claim_status(batch_id, claim_id, "processed", report)
 
         except Exception as e:
             logger.error(f"Error processing claim: {str(e)}")
-            claim.status = "error"
-            claim.report = {
+            report = {
                 "error": str(e),
                 "timing_stats": timing_stats
             }
-            self.update_claim_status(batch_id, claim_id, "error", claim.report, claim_text=claim.text)
+            self.update_claim_status(batch_id, claim_id, "error", report)
 
     def _format_non_relevant_papers(self, papers: List[Dict]) -> List[Dict]:
         """Format non-relevant papers for the report."""
@@ -195,9 +183,9 @@ class ClaimProcessor:
             print("Error formatting inaccessible papers: ", e)
             return []
 
-    def generate_final_report(self, claim: Claim, processed_papers: List[dict], 
-                            non_relevant_papers: List[dict], 
-                            inaccessible_papers: List[dict]) -> dict:
+    async def generate_final_report(self, claim_text: str, processed_papers: List[dict], 
+                                  non_relevant_papers: List[dict], 
+                                  inaccessible_papers: List[dict]) -> dict:
         """Generate the final report for a claim."""
         try:
             # Debug logging
@@ -234,7 +222,7 @@ class ClaimProcessor:
             prompt = dedent(f"""
             Evaluate the following claim based on the provided evidence and counter-evidence from scientific papers:
 
-            Claim: {claim.text}
+            Claim: {claim_text}
 
             Evidence:
             {paper_summaries_text}
@@ -264,9 +252,9 @@ class ClaimProcessor:
             }
             """).strip()
 
-            print("Prompt: ", prompt)
-
-            response = self.openai_service.generate_json(prompt, system_prompt)
+            logger.info("Generating final report with LLM")
+            response = await self.openai_service.generate_json_async(prompt, system_prompt)
+            logger.info("Generated final report")
 
             # Format the final report
             return {
@@ -299,7 +287,7 @@ class ClaimProcessor:
                         ]
                     }
                     for p in (processed_papers or [])
-                    if p.get('paper')  # Only include papers that have a paper object
+                    if p.get('paper')
                 ],
                 "nonRelevantPapers": self._format_non_relevant_papers(non_relevant_papers or []),
                 "inaccessiblePapers": self._format_inaccessible_papers(inaccessible_papers or []),

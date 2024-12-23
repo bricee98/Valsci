@@ -197,6 +197,7 @@ def start_batch_job():
         }), 202
 
 def process_batch_in_background(app, batch_job: BatchJob, batch_id: str):
+    """Process a batch of claims in the background thread."""
     batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
     progress_file = os.path.join(batch_dir, 'progress.json')
     notification_file = os.path.join(batch_dir, 'notification.json')
@@ -213,26 +214,15 @@ def process_batch_in_background(app, batch_job: BatchJob, batch_id: str):
                     "current_claim_id": None
                 }, f)
 
-            # Check if this is an LLM screening batch
-            if batch_job.claims and batch_job.claims[0].search_config.get('reviewType') == 'llm':
-                # Use LLMClaimScreener for batch processing
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    loop.run_until_complete(
-                        LLMClaimScreener.process_batch(batch_job.claims, batch_id, loop=loop)
-                    )
-                finally:
-                    loop.close()
-            else:
-                # Regular claim processing
-                for i, claim in enumerate(batch_job.claims):
-                    claim_id = str(uuid.uuid4())[:8]
-                    save_claim_to_file(claim, batch_id, claim_id)
-                    update_batch_progress(batch_id, i, len(batch_job.claims), current_claim_id=claim_id)
-                    claim_processor = ClaimProcessor()
-                    claim_processor.process_claim(claim, batch_id, claim_id)
-                    update_batch_progress(batch_id, i + 1, len(batch_job.claims))
+            # Set up and run the asyncio event loop
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(
+                    run_batch_processing(loop, batch_job, batch_id)
+                )
+            finally:
+                loop.close()
 
             # Update status to completed when all claims are processed
             update_batch_progress(
@@ -246,7 +236,7 @@ def process_batch_in_background(app, batch_job: BatchJob, batch_id: str):
             if os.path.exists(notification_file):
                 with open(notification_file, 'r') as f:
                     notification_data = json.load(f)
-                
+                    
                     # Send completion email notification
                     EmailService.send_batch_completion_notification(
                         notification_data['email'],
@@ -264,17 +254,85 @@ def process_batch_in_background(app, batch_job: BatchJob, batch_id: str):
                 len(batch_job.claims),
                 status="error"
             )
-            # Add the following code to send an error notification email
+            # Send error notification email
             if os.path.exists(notification_file):
                 with open(notification_file, 'r') as f:
                     notification_data = json.load(f)
-
-                    # Send error email notification
                     EmailService.send_batch_error_notification(
                         notification_data['email'],
                         batch_id,
-                        str(e)  # Include the error message in the email
+                        str(e)
                     )
+
+async def run_batch_processing(loop, batch_job: BatchJob, batch_id: str):
+    """Orchestrate the async processing of claims in the batch."""
+    # Initialize structures for the two-phase processing
+    search_queue = asyncio.Queue()
+    results_dict = {}
+    
+    # Start the search worker
+    search_worker_task = asyncio.create_task(
+        search_worker(search_queue, results_dict)
+    )
+    
+    # Enqueue all claims for searching
+    for i, claim in enumerate(batch_job.claims):
+        claim_id = str(uuid.uuid4())[:8]
+        await search_queue.put((claim_id, claim))
+        
+    # Signal search worker to terminate after processing all claims
+    await search_queue.put(None)
+    
+    # Wait for all searches to complete
+    await search_queue.join()
+    await search_worker_task
+    
+    # Process claims post-search with limited concurrency
+    sem = asyncio.Semaphore(5)  # limit to 5 concurrent post-search tasks
+    
+    post_search_tasks = []
+    for claim_id, papers in results_dict.items():
+        task = asyncio.create_task(
+            process_claim_post_search(
+                claim_id=claim_id,
+                papers=papers,
+                batch_id=batch_id,
+                sem=sem
+            )
+        )
+        post_search_tasks.append(task)
+    
+    # Wait for all post-search processing to complete
+    await asyncio.gather(*post_search_tasks)
+
+async def search_worker(queue: asyncio.Queue, results_dict: dict):
+    """Worker that processes search requests at a rate-limited pace."""
+    while True:
+        # Get the next item from the queue
+        item = await queue.get()
+        if item is None:  # Check for termination signal
+            queue.task_done()
+            break
+            
+        claim_id, claim = item
+        
+        try:
+            # Rate-limit: wait 1 second between searches
+            await asyncio.sleep(1)
+            
+            # Perform the search (we'll need to modify literature_searcher to be async)
+            literature_searcher = LiteratureSearcher()
+            papers = await literature_searcher.search_papers(claim)
+            
+            # Store the results
+            results_dict[claim_id] = papers
+            
+        except Exception as e:
+            logger.error(f"Error searching papers for claim {claim_id}: {str(e)}")
+            results_dict[claim_id] = []  # Store empty list on error
+            
+        finally:
+            queue.task_done()
 
 def update_batch_progress(batch_id: str, processed_claims: int, total_claims: int, status: str = "processing", current_claim_id: str = None):
     progress_file = os.path.join(SAVED_JOBS_DIR, batch_id, 'progress.json')
@@ -718,3 +776,53 @@ def enhance_claim():
     except Exception as e:
         logger.error(f"Error enhancing claim: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
+async def process_claim_post_search(claim_id: str, papers: List[Paper], batch_id: str, sem: asyncio.Semaphore):
+    """Process a claim after papers have been retrieved."""
+    async with sem:  # Limit concurrent processing
+        try:
+            # Initialize claim processor
+            claim_processor = ClaimProcessor()
+            
+            # Save initial claim status
+            save_claim_to_file(
+                Claim(text=papers[0].text if papers else ""),  # We need the original claim text
+                batch_id, 
+                claim_id
+            )
+            
+            # Update status to show we're analyzing papers
+            update_batch_progress(
+                batch_id, 
+                0,  # We'll update this as we process
+                1,  # This is a single claim
+                current_claim_id=claim_id
+            )
+            
+            # Process the papers (we'll need to modify ClaimProcessor for this)
+            await claim_processor.process_claim_with_papers(
+                papers=papers,
+                batch_id=batch_id,
+                claim_id=claim_id
+            )
+            
+            # Update progress to show completion
+            update_batch_progress(
+                batch_id,
+                1,  # This claim is done
+                1,  # Total is still 1
+                current_claim_id=claim_id
+            )
+            
+        except Exception as e:
+            logger.error(f"Error processing claim {claim_id}: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Update status to show error
+            update_batch_progress(
+                batch_id,
+                1,  # Mark as processed even though it errored
+                1,
+                status="error",
+                current_claim_id=claim_id
+            )
