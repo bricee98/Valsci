@@ -84,7 +84,7 @@ class EvidenceScorer:
             logger.error(f"Error calculating citation impact: {str(e)}")
             return 0
 
-    def _calculate_venue_impact(self, paper: Paper) -> float:
+    async def _calculate_venue_impact(self, paper: Paper) -> float:
         """Calculate venue impact using GPT to estimate journal/conference quality."""
         if not paper.journal:
             return 0.0
@@ -99,21 +99,23 @@ class EvidenceScorer:
             - Typical citation rates
             - Publisher reputation
             
-            Return only a number between 0 and 10.
+            Return only json object with a single key "score" and a number between 0 and 10.
             """
 
             prompt = f"""
             Rate the academic impact and prestige of this venue:
             Venue: {paper.journal}
             
-            Return only a number between 0 and 10, where:
+            Return only json object with a single key "score" and a number between 0 and 10, where:
             0-2: Low impact or predatory venues
             3-5: Legitimate but lower impact venues
             6-8: Well-respected, mainstream venues
             9-10: Top venues in the field
             """
 
-            score = self.openai_service.generate_number(prompt, system_prompt)
+            result = await self.openai_service.generate_json_async(prompt, system_prompt)
+            score = result.get('score', 0)
+
             return float(score)
 
         except Exception as e:

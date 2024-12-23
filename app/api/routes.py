@@ -270,6 +270,9 @@ async def run_batch_processing(loop, batch_job: BatchJob, batch_id: str):
     # Initialize structures for the two-phase processing
     search_queue = asyncio.Queue()
     results_dict = {}
+
+    # Create a map of claim_id to claim_text
+    claim_text_map = {claim.id: claim.text for claim in batch_job.claims}
     
     # Start the search worker
     search_worker_task = asyncio.create_task(
@@ -298,7 +301,8 @@ async def run_batch_processing(loop, batch_job: BatchJob, batch_id: str):
                 claim_id=claim_id,
                 papers=papers,
                 batch_id=batch_id,
-                sem=sem
+                sem=sem,
+                claim_text=claim_text_map[claim_id]
             )
         )
         post_search_tasks.append(task)
@@ -315,7 +319,7 @@ async def search_worker(queue: asyncio.Queue, results_dict: dict):
             queue.task_done()
             break
             
-        claim_id, claim = item
+        claim_id, claim_text = item
         
         try:
             # Rate-limit: wait 1 second between searches
@@ -323,7 +327,7 @@ async def search_worker(queue: asyncio.Queue, results_dict: dict):
             
             # Perform the search (we'll need to modify literature_searcher to be async)
             literature_searcher = LiteratureSearcher()
-            papers = await literature_searcher.search_papers(claim)
+            papers = await literature_searcher.search_papers(claim_text)
             
             # Store the results
             results_dict[claim_id] = papers
@@ -778,7 +782,7 @@ def enhance_claim():
         logger.error(f"Error enhancing claim: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-async def process_claim_post_search(claim_id: str, papers: List[Paper], batch_id: str, sem: asyncio.Semaphore):
+async def process_claim_post_search(claim_id: str, papers: List[Paper], batch_id: str, sem: asyncio.Semaphore, claim_text: str):
     """Process a claim after papers have been retrieved."""
     async with sem:  # Limit concurrent processing
         try:
@@ -787,7 +791,7 @@ async def process_claim_post_search(claim_id: str, papers: List[Paper], batch_id
             
             # Save initial claim status
             save_claim_to_file(
-                Claim(text=papers[0].text if papers else ""),  # We need the original claim text
+                Claim(text=claim_text),  # We need the original claim text
                 batch_id, 
                 claim_id
             )
@@ -804,7 +808,8 @@ async def process_claim_post_search(claim_id: str, papers: List[Paper], batch_id
             await claim_processor.process_claim_with_papers(
                 papers=papers,
                 batch_id=batch_id,
-                claim_id=claim_id
+                claim_id=claim_id,
+                claim_text=claim_text
             )
             
             # Update progress to show completion

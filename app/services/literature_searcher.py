@@ -58,7 +58,7 @@ class LiteratureSearcher:
             logger.error(f"Error searching papers: {str(e)}")
             return []
 
-    async def fetch_paper_content(self, paper: Paper, claim: Claim) -> Tuple[str, str]:
+    async def fetch_paper_content(self, paper: Paper) -> Tuple[str, str]:
         """Fetch the full text content of a paper."""
         try:
             if not paper.corpus_id:

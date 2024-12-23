@@ -28,7 +28,7 @@ class ClaimProcessor:
         self.openai_service = OpenAIService()
         self.timing_stats = {}
 
-    async def process_claim_with_papers(self, papers: List[Paper], batch_id: str, claim_id: str) -> None:
+    async def process_claim_with_papers(self, papers: List[Paper], batch_id: str, claim_id: str, claim_text: str) -> None:
         """Process a claim when we already have the papers."""
         start_time = time()
         timing_stats = {}
@@ -55,13 +55,13 @@ class ClaimProcessor:
             logger.info("Processing papers")
             
             # Process papers concurrently with a semaphore to limit concurrent API calls
-            sem = asyncio.Semaphore(3)  # Limit concurrent paper processing
+            sem = asyncio.Semaphore(2)  # Limit concurrent paper processing
             
             async def process_single_paper(paper, i):
                 async with sem:
                     try:
                         # Fetch paper content
-                        content, content_type = await self.literature_searcher.fetch_paper_content(paper, None)
+                        content, content_type = await self.literature_searcher.fetch_paper_content(paper)
                         
                         if not content:
                             inaccessible_papers.append({
@@ -70,15 +70,15 @@ class ClaimProcessor:
                             })
                             return
 
-                        # Analyze relevance (we'll need to modify paper_analyzer to be async)
+                        # Analyze relevance
                         logger.info("Analyzing relevance")
                         relevance, excerpts, explanations, non_relevant_explanation, excerpt_pages = (
-                            await self.paper_analyzer.analyze_relevance_and_extract(content, paper.title)
+                            await self.paper_analyzer.analyze_relevance_and_extract(content, claim_text)
                         )
                         
                         if relevance >= 0.1:
                             # Calculate paper weight score
-                            weight_score = self.evidence_scorer.calculate_paper_weight(paper)
+                            weight_score = await self.evidence_scorer.calculate_paper_weight(paper)
                             
                             processed_papers.append({
                                 'paper': paper,
@@ -113,7 +113,7 @@ class ClaimProcessor:
             if processed_papers:
                 logger.info("Processed papers is not empty")
                 report = await self.generate_final_report(
-                    papers[0].text,  # Use the first paper's text as the claim text
+                    claim_text,  # Use the claim text as the claim text
                     processed_papers, 
                     non_relevant_papers, 
                     inaccessible_papers
