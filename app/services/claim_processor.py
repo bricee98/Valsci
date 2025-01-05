@@ -236,32 +236,54 @@ class ClaimProcessor:
             """).strip()
 
             system_prompt = dedent("""
-            You are an AI assistant tasked with evaluating scientific claims based on evidence from papers.
-            Provide an explanation in an essay format with newlines between paragraphs, including specific references to the scientific papers. 
-            The essay should have:
-            1. A paragraph highlighting supporting evidence
-            2. A paragraph highlighting caveats or contradictions
-            3. An analysis of which evidence outweighs the other and how strongly the claim is supported
-            
-            Assign a claim rating between -10 (completely refuted) and 10 (strongly supported):
-            -10 to -7: Contradicted by strong evidence
-            -6 to -4: Somewhat refuted
-            -3 to -1: Slightly refuted
-            0: No evidence either way
-            1 to 3: Slightly supported
-            4 to 6: Reasonably supported
-            7 to 10: Strongly supported
+            You are an expert scientific reviewer specializing in evaluating the plausibility of scientific claims based on evidence from academic papers and your expert knowledge. Your task is to synthesize a detailed evaluation of the claim and assign a final plausibility rating based on both your scientific knowledge and the evidence provided in the paper excerpts you receive.
 
-            The JSON response should have:
+            The final rating you assign should be one of the following:
+            - Contradicted: Strong evidence refutes the claim.
+            - Implausible: Evidence suggests the claim is highly unlikely but not definitively refuted.
+            - No Evidence: No significant evidence is available to support or refute the claim.
+            - Little Evidence: Limited or weak evidence suggests the claim may be plausible but is not conclusive.
+            - Plausible: The claim is supported by reasonable evidence, though it may not be definitive.
+            - Highly Supported: The claim is strongly supported by compelling and consistent evidence.
+            
+            When formulating your evaluation, consider the following aspects:
+            - Supporting Evidence: Summarize the most robust evidence that supports the claim. Be specific, referencing the findings of relevant papers and their implications.
+            - Caveats or Contradictions: Identify any limitations, contradictory findings, or alternative interpretations that might challenge the claim.
+            - Analysis: Based on your expertise, analyze the systems and structures relevant to the claim for any deeper relationships, mechanisms, or second-order implications that might be relevant.
+            - Assessment: Assess the balance of evidence, explaining which side is more compelling and why. Contextualize caveats but avoid undue hedging; consider the overall weight of the evidence like an expert would.
+            - Rating Assignment: Choose a single category from the list above that best reflects the overall strength of evidence for the claim. Assign this rating based on the preponderance of evidence, contextualizing caveats without allowing minor exceptions to overshadow the dominant trend.
+            
+            Write the explanation as an essay with distinct paragraphs for:
+            - Supporting evidence.
+            - Caveats or contradictory evidence.
+            - Analysis of potential underlying mechanisms, deeper relationships, or second-order implications.
+            - An explanation of which rating is most appropriate based on the relative strength of the evidence.
+            
+            You will receive the text of the claim and excerpts from academic papers that could support or refute the claim. Craft your evaluation, then provide a JSON response in the following format:
             {
-                "explanation": <str: detailed essay explaining the rating>,
-                "claimRating": <int: rating from -10 to 10>
+                "explanationEssay": "<detailed essay explanation>",
+                "claimRating": "<rating, one of the following: Contradicted, Implausible, No Evidence, Little Evidence, Plausible, Highly Supported>"
             }
             """).strip()
 
             logger.info("Generating final report with LLM")
             response = await self.openai_service.generate_json_async(prompt, system_prompt)
             logger.info("Generated final report")
+
+            # Convert the claimRating to a number
+            claimRating = 0
+            if response.get('claimRating') == 'Contradicted':
+                claimRating = 0
+            elif response.get('claimRating') == 'Implausible':
+                claimRating = 1
+            elif response.get('claimRating') == 'No Evidence':
+                claimRating = 2
+            elif response.get('claimRating') == 'Little Evidence':
+                claimRating = 3
+            elif response.get('claimRating') == 'Plausible':
+                claimRating = 4
+            elif response.get('claimRating') == 'Highly Supported':
+                claimRating = 5
 
             # Format the final report
             return {
@@ -298,8 +320,8 @@ class ClaimProcessor:
                 ],
                 "nonRelevantPapers": self._format_non_relevant_papers(non_relevant_papers or []),
                 "inaccessiblePapers": self._format_inaccessible_papers(inaccessible_papers or []),
-                "explanation": response.get('explanation', 'No explanation available'),
-                "claimRating": response.get('claimRating', 0),
+                "explanation": response.get('explanationEssay', 'No explanation available'),
+                "claimRating": claimRating,
                 "searchQueries": getattr(self.literature_searcher, 'saved_search_queries', []),
                 "usage_stats": self.openai_service.get_usage_stats()
             }

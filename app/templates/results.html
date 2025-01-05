@@ -28,23 +28,23 @@
 
         function getRatingText(rating) {
             if (rating === null || rating === undefined) return 'No Rating';
-            if (rating <= -7) return 'Contradicted';
-            if (rating <= -4) return 'Somewhat Refuted';
-            if (rating < 0) return 'Slightly Refuted';
-            if (rating === 0) return 'No Evidence';
-            if (rating <= 3) return 'Slightly Supported';
-            if (rating <= 6) return 'Reasonably Supported';
+            if (rating === 0) return 'Contradicted';
+            if (rating === 1) return 'Implausible';
+            if (rating === 2) return 'No Evidence';
+            if (rating === 3) return 'Little Evidence';
+            if (rating === 4) return 'Plausible';
+            if (rating === 5) return 'Highly Supported';
             return 'Strongly Supported';
         }
 
         function getRatingColor(rating) {
             if (rating === null || rating === undefined) return '#6c757d'; // gray
-            if (rating <= -7) return '#dc3545'; // red
-            if (rating <= -4) return '#e17055'; // orange-red
-            if (rating < 0) return '#fd7e14'; // orange
-            if (rating === 0) return '#6c757d'; // gray
-            if (rating <= 3) return '#74b9ff'; // light blue
-            if (rating <= 6) return '#00b894'; // green-blue
+            if (rating === 0) return '#dc3545'; // red
+            if (rating === 1) return '#e17055'; // orange-red
+            if (rating === 2) return '#fd7e14'; // orange
+            if (rating === 3) return '#6c757d'; // gray
+            if (rating === 4) return '#74b9ff'; // light blue
+            if (rating === 5) return '#00b894'; // green-blue
             return '#00b894'; // green
         }
 

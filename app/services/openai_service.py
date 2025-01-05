@@ -270,3 +270,19 @@ class OpenAIService:
         self._update_token_usage(response.usage)
         logger.info(f"API call completed for model {model}")
         return json.loads(response.choices[0].message.content)
+    
+    async def generate_text_async(self, prompt: str, system_prompt: Optional[str] = None, model: str = "gpt-4o") -> str:
+        # Check that the prompt is not too long - if it is, return a failure message
+        if len(prompt) + len(system_prompt or "") > 320000:
+            return "Error: Prompt is too long"
+
+        messages = [
+            {"role": "system", "content": system_prompt or "You are a helpful assistant."},
+            {"role": "user", "content": prompt}
+        ]
+
+        print(f"Sending message to OpenAI.")
+        response = await self._make_request(model=model, messages=messages, temperature=0.0)
+        self._update_token_usage(response.usage)
+        logger.info(f"API call completed for model {model}")
+        return response.choices[0].message.content

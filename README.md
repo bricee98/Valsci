@@ -124,4 +124,4 @@ This project is licensed under the GNU General Public License. See the [LICENSE]
 For questions or support, please contact [bricee98@gmail.com](mailto:bricee98@gmail.com).
 
 ## Version
-The current version is 0.1.2. This version will increment when any changes are made to the report generation logic that could affect results.
+The current version is 0.1.3. This version will increment when any changes are made to the report generation logic that could affect results.
