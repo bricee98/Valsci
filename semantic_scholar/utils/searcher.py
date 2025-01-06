@@ -91,7 +91,7 @@ class S2Searcher:
         logger.info(f"Found releases in base directory: {releases}")
         return max(releases) if releases else None
 
-    def generate_search_queries(self, claim_text: str, num_queries: int = 5) -> List[str]:
+    async def generate_search_queries(self, claim_text: str, num_queries: int = 5) -> List[str]:
         """Generate search queries for a claim using GPT."""
         system_prompt = dedent("""
             You are an expert at converting scientific claims into strategic literature search queries. Specifically, your queries will be used to search the Semantic Scholar database. Your goal is to generate queries that will comprehensively evaluate both supporting and contradicting evidence for a given claim.
@@ -149,7 +149,7 @@ class S2Searcher:
         
         print("About to generate queries")
 
-        response = self.openai_service.generate_json(user_prompt, system_prompt)
+        response = await self.openai_service.generate_json_async(user_prompt, system_prompt)
         queries = response.get('queries', [])
         
         # Log generated queries for debugging
@@ -160,18 +160,18 @@ class S2Searcher:
         self.saved_search_queries.extend(queries)
         return queries
 
-    def search_papers_for_claim(self, claim_text: str, 
+    async def search_papers_for_claim(self, claim_text: str, 
                               num_queries: int = 5, 
                               results_per_query: int = 5) -> List[Dict]:
         """Search papers relevant to a claim."""
         papers = []
         seen_paper_ids = set()
         
-        queries = self.generate_search_queries(claim_text, num_queries)
+        queries = await self.generate_search_queries(claim_text, num_queries)
         
         for query in queries:
             try:
-                search_results = self.search_papers(query, limit=results_per_query)
+                search_results = await self.search_papers(query, limit=results_per_query)
                 
                 for paper in search_results:
                     corpus_id = paper.get('corpusId')
@@ -179,7 +179,7 @@ class S2Searcher:
                     console.print(f"[green]Corpus ID: {corpus_id}[/green]")
                     if corpus_id and corpus_id not in seen_paper_ids:
                         # Get full content
-                        content = self.get_paper_content(corpus_id)
+                        content = await self.get_paper_content(corpus_id)
                         console.print(f"[green]Content: {content}[/green]")
                         if content:
                             paper['text'] = content['text']
@@ -196,21 +196,20 @@ class S2Searcher:
                 console.print(f"[red]Error in search_papers_for_claim: {str(e)}[/red]")
                 continue
 
-        print("are any papers none? ", any(paper is None for paper in papers))
-
         # remove None papers
         papers = [paper for paper in papers if paper is not None]
 
         return papers
 
-    def search_papers(self, query: str, limit: int = 10) -> List[Dict]:
+    async def search_papers(self, query: str, limit: int = 10) -> List[Dict]:
         """Search papers using S2 API and cross-reference with local data."""
         try:
             # Rate limiting
-            time.sleep(1)  # Add 1 second delay before API call
+            await asyncio.sleep(1)  # Add 1 second delay before API call
 
             console.print(f"[green]Searching for papers with query: {query}[/green]")
             
+            # Use aiohttp or httpx for async HTTP requests
             response = self.session.get(
                 "https://api.semanticscholar.org/graph/v1/paper/search",
                 params={
@@ -331,7 +330,7 @@ class S2Searcher:
             logger.error(f"Binary index lookup error: {str(e)}", exc_info=True)
             return None
 
-    def get_paper_content(self, corpus_id: str) -> Optional[Dict]:
+    async def get_paper_content(self, corpus_id: str) -> Optional[Dict]:
         """Get full paper content from S2ORC or abstract data, using the BinaryIndexer."""
         logger.info(f"Attempting to get content for corpus ID: {corpus_id}")
         logger.info(f"Current release: {self.current_release}")
@@ -424,11 +423,11 @@ class RateLimiter:
         self.last_request = 0
         self.min_interval = 1.0 / requests_per_second
 
-    def wait(self):
+    async def wait(self):
         """Wait if necessary to maintain the rate limit."""
         now = time.time()
         elapsed = now - self.last_request
         if elapsed < self.min_interval:
             sleep_time = self.min_interval - elapsed
-            time.sleep(sleep_time)
+            await asyncio.sleep(sleep_time)
         self.last_request = time.time()

@@ -15,22 +15,26 @@ class LiteratureSearcher:
         self.s2_searcher = S2Searcher()
         self.saved_search_queries = []
 
-    async def search_papers(self, claim: Claim) -> List[Paper]:
+    async def search_papers(self, claim: Union[Claim, str]) -> List[Paper]:
         """Search for papers relevant to the claim."""
         try:
-            # Get search configuration from claim
-            num_queries = claim.search_config.get('numQueries', 5)
-            results_per_query = claim.search_config.get('resultsPerQuery', 5)
+            # Handle both Claim objects and strings
+            if isinstance(claim, str):
+                claim_text = claim
+                search_config = {'numQueries': 5, 'resultsPerQuery': 5}
+            else:
+                claim_text = claim.text
+                search_config = claim.search_config
             
-            # Search using S2 searcher - run in executor since S2 searcher is sync
-            loop = asyncio.get_event_loop()
-            raw_papers = await loop.run_in_executor(
-                None,
-                lambda: self.s2_searcher.search_papers_for_claim(
-                    claim.text, 
-                    num_queries=num_queries,
-                    results_per_query=results_per_query
-                )
+            # Get search configuration
+            num_queries = search_config.get('numQueries', 5)
+            results_per_query = search_config.get('resultsPerQuery', 5)
+            
+            # Use the async version of search_papers_for_claim
+            raw_papers = await self.s2_searcher.search_papers_for_claim(
+                claim_text, 
+                num_queries=num_queries,
+                results_per_query=results_per_query
             )
             
             # Save search queries for reporting
@@ -67,12 +71,8 @@ class LiteratureSearcher:
 
             logger.info(f"Fetching content for corpus ID: {paper.corpus_id}")
             
-            # Run the synchronous get_paper_content in an executor
-            loop = asyncio.get_event_loop()
-            content = await loop.run_in_executor(
-                None,
-                lambda: self.s2_searcher.get_paper_content(str(paper.corpus_id))
-            )
+            # Now we can directly await the async get_paper_content
+            content = await self.s2_searcher.get_paper_content(str(paper.corpus_id))
             
             if content:
                 logger.info(f"Successfully retrieved {content['source']} content for corpus ID: {paper.corpus_id}")
