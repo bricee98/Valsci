@@ -53,16 +53,15 @@ class OpenAIService:
             OpenAIService._reset_time = time.time() + 60
             OpenAIService._initialized = True
             
-            # Start queue processor
-            if loop:
-                OpenAIService._queue_processor = loop.create_task(self._process_queue())
-            else:
-                try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                OpenAIService._queue_processor = loop.create_task(self._process_queue())
+            # Start queue processor using the existing event loop
+            try:
+                if loop:
+                    self._loop = loop
+                else:
+                    self._loop = asyncio.get_event_loop()
+                OpenAIService._queue_processor = self._loop.create_task(self._process_queue())
+            except RuntimeError:
+                logger.warning("No event loop found - queue processor will start with first async call")
 
     async def _respect_rate_limit(self, estimated_tokens: int):
         """Wait if adding these tokens would exceed the rate limit."""
@@ -155,24 +154,26 @@ class OpenAIService:
 
     # Keep existing synchronous methods but make them use asyncio
     def generate_text(self, prompt: str, system_prompt: Optional[str] = None, model: str = "gpt-4o-2") -> str:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
         try:
-            return loop.run_until_complete(
-                self.generate_text_async(prompt, system_prompt, model)
-            )
-        finally:
-            loop.close()
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+        return loop.run_until_complete(
+            self.generate_text_async(prompt, system_prompt, model)
+        )
 
     def generate_json(self, prompt: str, system_prompt: Optional[str] = None, model: str = "gpt-4o-2") -> Any:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
         try:
-            return loop.run_until_complete(
-                self.generate_json_async(prompt, system_prompt, model)
-            )
-        finally:
-            loop.close()
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+        return loop.run_until_complete(
+            self.generate_json_async(prompt, system_prompt, model)
+        )
 
     async def _make_request_with_timeout(self, **kwargs) -> Any:
         """Make a request with timeout and retry logic"""
