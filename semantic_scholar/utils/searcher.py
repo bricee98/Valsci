@@ -112,6 +112,7 @@ class S2Searcher:
             - Consider related phenomena that could provide indirect evidence
             - Look for potential confounding factors or methodological challenges
             - Search for systematic reviews and meta-analyses when applicable
+            - The queries should be sufficiently diverse to capture as much relevant information as possible and avoid overlap
 
             Example Approach:
             For "Metformin increases lifespan", you could consider:

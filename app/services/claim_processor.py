@@ -56,7 +56,7 @@ class ClaimProcessor:
             logger.info("Processing papers")
             
             # Process papers concurrently with a semaphore to limit concurrent API calls
-            sem = asyncio.Semaphore(2)  # Limit concurrent paper processing
+            sem = asyncio.Semaphore(10)  # Limit concurrent paper processing
             
             async def process_single_paper(paper, i):
                 async with sem:
