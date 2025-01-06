@@ -261,7 +261,7 @@ class ClaimProcessor:
             
             You will receive the text of the claim and excerpts from academic papers that could support or refute the claim. Craft your evaluation, then provide a JSON response in the following format:
             {
-                "explanationEssay": "<detailed essay explanation>",
+                "explanationEssay": "<plain text detailed essay explanation>",
                 "claimRating": "<rating, one of the following: Contradicted, Implausible, No Evidence, Little Evidence, Plausible, Highly Supported>"
             }
             """).strip()
