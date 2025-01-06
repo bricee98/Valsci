@@ -7,31 +7,172 @@ import asyncio
 import logging
 from asyncio import TimeoutError
 import time
+from functools import wraps
 
 logger = logging.getLogger(__name__)
 
 class OpenAIService:
+    _instance = None
+    _initialized = False
+    _request_queue = None
+    _queue_processor = None
+    _tokens_used = 0
+    _reset_time = None
+    
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
     def __init__(self, loop=None):
-        self._loop = loop
+        if not OpenAIService._initialized:
+            self._loop = loop
+            
+            if Config.USE_AZURE_OPENAI:
+                self.client = AzureOpenAI(
+                    api_key=Config.AZURE_OPENAI_API_KEY,
+                    azure_endpoint=Config.AZURE_OPENAI_ENDPOINT,
+                    api_version=Config.AZURE_OPENAI_API_VERSION
+                )
+                self.async_client = AsyncAzureOpenAI(
+                    api_key=Config.AZURE_OPENAI_API_KEY,
+                    azure_endpoint=Config.AZURE_OPENAI_ENDPOINT,
+                    api_version=Config.AZURE_OPENAI_API_VERSION
+                )
+            else:
+                self.client = openai.OpenAI(api_key=Config.OPENAI_API_KEY)
+                self.async_client = openai.AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
+            
+            self.total_prompt_tokens = 0
+            self.total_completion_tokens = 0
+            self.total_cost = 0
+            
+            # Initialize rate limiting
+            OpenAIService._request_queue = asyncio.Queue()
+            OpenAIService._tokens_used = 0
+            OpenAIService._reset_time = time.time() + 60
+            OpenAIService._initialized = True
+            
+            # Start queue processor
+            if loop:
+                OpenAIService._queue_processor = loop.create_task(self._process_queue())
+            else:
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                OpenAIService._queue_processor = loop.create_task(self._process_queue())
+
+    async def _respect_rate_limit(self, estimated_tokens: int):
+        """Wait if adding these tokens would exceed the rate limit."""
+        while True:
+            now = time.time()
+            if now >= OpenAIService._reset_time:
+                OpenAIService._tokens_used = 0
+                OpenAIService._reset_time = now + 60
+            
+            if OpenAIService._tokens_used + estimated_tokens <= 450000:  # 100K tokens per minute
+                OpenAIService._tokens_used += estimated_tokens
+                break
+            
+            await asyncio.sleep(0.1)
+
+    async def _process_queue(self):
+        """Process requests from the queue."""
+        while True:
+            request_data = await OpenAIService._request_queue.get()
+            try:
+                kwargs = request_data['kwargs']
+                future = request_data['future']
+                estimated_tokens = request_data.get('estimated_tokens', 1000)  # Default estimate
+                
+                await self._respect_rate_limit(estimated_tokens)
+                response = await self._make_request_with_timeout(**kwargs)
+                future.set_result(response)
+                    
+            except Exception as e:
+                if not request_data['future'].done():
+                    request_data['future'].set_exception(e)
+            finally:
+                OpenAIService._request_queue.task_done()
+
+    async def _enqueue_request(self, **kwargs) -> Any:
+        """Add a request to the queue and wait for its result."""
+        future = asyncio.Future()
+        # More accurate token estimation using 3.5 chars per token
+        messages = kwargs.get('messages', [])
+        total_chars = sum(len(str(m.get('content', ''))) for m in messages)
+        estimated_tokens = int(total_chars / 3.5)  # Using 3.5 chars per token
         
-        if Config.USE_AZURE_OPENAI:
-            self.client = AzureOpenAI(
-                api_key=Config.AZURE_OPENAI_API_KEY,
-                azure_endpoint=Config.AZURE_OPENAI_ENDPOINT,
-                api_version=Config.AZURE_OPENAI_API_VERSION
-            )
-            self.async_client = AsyncAzureOpenAI(
-                api_key=Config.AZURE_OPENAI_API_KEY,
-                azure_endpoint=Config.AZURE_OPENAI_ENDPOINT,
-                api_version=Config.AZURE_OPENAI_API_VERSION
-            )
-        else:
-            self.client = openai.OpenAI(api_key=Config.OPENAI_API_KEY)
-            self.async_client = openai.AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
+        await OpenAIService._request_queue.put({
+            'kwargs': kwargs,
+            'future': future,
+            'estimated_tokens': estimated_tokens
+        })
         
-        self.total_prompt_tokens = 0
-        self.total_completion_tokens = 0
-        self.total_cost = 0
+        return await future
+
+    # Modify existing request methods to use the queue
+    async def generate_json_async(self, prompt: str, system_prompt: Optional[str] = None, model: str = "gpt-4o-2") -> Any:
+        if len(prompt) + len(system_prompt or "") > 320000:
+            return json.loads('{"error": "Prompt is too long"}')
+
+        messages = [
+            {"role": "system", "content": system_prompt or "You are a helpful assistant. Please provide your response in valid JSON format."},
+            {"role": "user", "content": prompt}
+        ]
+
+        response = await self._enqueue_request(
+            model=model,
+            messages=messages,
+            response_format={"type": "json_object"},
+            temperature=0.0
+        )
+        
+        self._update_token_usage(response.usage)
+        logger.info(f"API call completed for model {model}")
+        return json.loads(response.choices[0].message.content)
+
+    async def generate_text_async(self, prompt: str, system_prompt: Optional[str] = None, model: str = "gpt-4o-2") -> str:
+        if len(prompt) + len(system_prompt or "") > 320000:
+            return "Error: Prompt is too long"
+
+        messages = [
+            {"role": "system", "content": system_prompt or "You are a helpful assistant."},
+            {"role": "user", "content": prompt}
+        ]
+
+        response = await self._enqueue_request(
+            model=model,
+            messages=messages,
+            temperature=0.0
+        )
+        
+        self._update_token_usage(response.usage)
+        logger.info(f"API call completed for model {model}")
+        return response.choices[0].message.content
+
+    # Keep existing synchronous methods but make them use asyncio
+    def generate_text(self, prompt: str, system_prompt: Optional[str] = None, model: str = "gpt-4o-2") -> str:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(
+                self.generate_text_async(prompt, system_prompt, model)
+            )
+        finally:
+            loop.close()
+
+    def generate_json(self, prompt: str, system_prompt: Optional[str] = None, model: str = "gpt-4o-2") -> Any:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(
+                self.generate_json_async(prompt, system_prompt, model)
+            )
+        finally:
+            loop.close()
 
     async def _make_request_with_timeout(self, **kwargs) -> Any:
         """Make a request with timeout and retry logic"""
@@ -102,46 +243,6 @@ class OpenAIService:
         return await loop.create_task(
             self._make_request_with_timeout(**kwargs)
         )
-
-    def generate_text(self, prompt: str, system_prompt: Optional[str] = None, model: str = "gpt-4o") -> str:
-        # Check that the prompt is not too long - if it is, return a failure message
-        if len(prompt) + len(system_prompt or "") > 320000:
-            return "Error: Prompt is too long"
-
-        messages = [
-            {"role": "system", "content": system_prompt or "You are a helpful assistant."},
-            {"role": "user", "content": prompt}
-        ]
-        
-        response = self.client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=0.0
-        )
-        self._update_token_usage(response.usage)
-        logger.info(f"API call completed for model {model}")
-        return response.choices[0].message.content
-
-    def generate_json(self, prompt: str, system_prompt: Optional[str] = None, model: str = "gpt-4o") -> Any:
-        # Check that the prompt is not too long - if it is, return a failure message
-        if len(prompt) + len(system_prompt or "") > 320000:
-            return json.loads('{"error": "Prompt is too long"}')
-
-        messages = [
-            {"role": "system", "content": system_prompt or "You are a helpful assistant. Please provide your response in valid JSON format."},
-            {"role": "user", "content": prompt}
-        ]
-        
-        response = self.client.chat.completions.create(
-            model=model,
-            messages=messages,
-            response_format={"type": "json_object"},
-            temperature=0.0
-        )
-        
-        self._update_token_usage(response.usage)
-        logger.info(f"API call completed for model {model}")
-        return json.loads(response.choices[0].message.content)
 
     def _update_token_usage(self, usage):
         self.total_prompt_tokens += usage.prompt_tokens
@@ -217,7 +318,7 @@ class OpenAIService:
             ]
             
             task = self._make_request(
-                model="gpt-4o",
+                model="gpt-4o-2",
                 messages=messages,
                 response_format={"type": "json_object"},
                 temperature=0.0
@@ -247,42 +348,3 @@ class OpenAIService:
         except Exception as e:
             print(f"Batch processing error: {str(e)}")
             raise
-
-    async def generate_json_async(self, prompt: str, system_prompt: Optional[str] = None, model: str = "gpt-4o") -> Any:
-        # Check that the prompt is not too long - if it is, return a failure message
-        if len(prompt) + len(system_prompt or "") > 320000:
-            return json.loads('{"error": "Prompt is too long"}')
-
-        messages = [
-            {"role": "system", "content": system_prompt or "You are a helpful assistant. Please provide your response in valid JSON format."},
-            {"role": "user", "content": prompt}
-        ]
-
-        print(f"Sending message to OpenAI.")
-        
-        response = await self._make_request(
-            model=model,
-            messages=messages,
-            response_format={"type": "json_object"},
-            temperature=0.0
-        )
-        
-        self._update_token_usage(response.usage)
-        logger.info(f"API call completed for model {model}")
-        return json.loads(response.choices[0].message.content)
-    
-    async def generate_text_async(self, prompt: str, system_prompt: Optional[str] = None, model: str = "gpt-4o") -> str:
-        # Check that the prompt is not too long - if it is, return a failure message
-        if len(prompt) + len(system_prompt or "") > 320000:
-            return "Error: Prompt is too long"
-
-        messages = [
-            {"role": "system", "content": system_prompt or "You are a helpful assistant."},
-            {"role": "user", "content": prompt}
-        ]
-
-        print(f"Sending message to OpenAI.")
-        response = await self._make_request(model=model, messages=messages, temperature=0.0)
-        self._update_token_usage(response.usage)
-        logger.info(f"API call completed for model {model}")
-        return response.choices[0].message.content
