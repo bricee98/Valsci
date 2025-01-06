@@ -53,13 +53,16 @@ class OpenAIService:
             OpenAIService._reset_time = time.time() + 60
             OpenAIService._initialized = True
             
-            # Start queue processor using the existing event loop
+            # Start multiple queue processors
             try:
                 if loop:
                     self._loop = loop
                 else:
                     self._loop = asyncio.get_event_loop()
-                OpenAIService._queue_processor = self._loop.create_task(self._process_queue())
+                OpenAIService._queue_processor = [
+                    self._loop.create_task(self._process_queue()) 
+                    for _ in range(10)  # Create 10 queue processors
+                ]
             except RuntimeError:
                 logger.warning("No event loop found - queue processor will start with first async call")
 
@@ -84,12 +87,12 @@ class OpenAIService:
             try:
                 kwargs = request_data['kwargs']
                 future = request_data['future']
-                estimated_tokens = request_data.get('estimated_tokens', 1000)  # Default estimate
+                estimated_tokens = request_data.get('estimated_tokens', 1000)
                 
                 await self._respect_rate_limit(estimated_tokens)
                 response = await self._make_request_with_timeout(**kwargs)
                 future.set_result(response)
-                    
+                
             except Exception as e:
                 if not request_data['future'].done():
                     request_data['future'].set_exception(e)
