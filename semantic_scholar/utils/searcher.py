@@ -146,6 +146,8 @@ class S2Searcher:
 
             Return results as a JSON object with 'explanations' and 'queries' arrays.
             """)
+        
+        print("About to generate queries")
 
         response = self.openai_service.generate_json(user_prompt, system_prompt)
         queries = response.get('queries', [])
