@@ -51,10 +51,7 @@ class PaperAnalyzer:
             {
                 "relevance": float (0-1),
                 "excerpts": list of relevant verbatim sentences or paragraphs (a list of strings),
-                "explanations": list of explanations (a list of strings) for each excerpt addressing:
-                    - How it relates to the claim (direct or mechanistic)
-                    - Strength and limitations of the evidence
-                    - Important methodological considerations
+                "explanations": list of explanations (a list of strings), one for each excerpt, addressing how the excerpt relates to the claim (direct or mechanistic) and the strength and limitations of the evidence
                 "non_relevant_explanation": string (only if relevance < 0.1),
                 "excerpt_pages": list of page numbers (or null if not available)
             }
