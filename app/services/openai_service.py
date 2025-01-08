@@ -23,7 +23,7 @@ class OpenAIService:
             self.client = openai.OpenAI(api_key=Config.OPENAI_API_KEY)
             self.async_client = openai.AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
 
-    async def generate_json_async(self, prompt: str, system_prompt: Optional[str] = None, model: str = "gpt-4") -> Any:
+    async def generate_json_async(self, prompt: str, system_prompt: Optional[str] = None, model: str = "gpt-4o-2") -> Any:
         if len(prompt) + len(system_prompt or "") > 320000:
             return json.loads('{"error": "Prompt is too long"}')
 
@@ -42,7 +42,7 @@ class OpenAIService:
         logger.info(f"API call completed for model {model}")
         return json.loads(response.choices[0].message.content)
 
-    async def generate_text_async(self, prompt: str, system_prompt: Optional[str] = None, model: str = "gpt-4") -> str:
+    async def generate_text_async(self, prompt: str, system_prompt: Optional[str] = None, model: str = "gpt-4o-2") -> str:
         if len(prompt) + len(system_prompt or "") > 320000:
             return "Error: Prompt is too long"
 
