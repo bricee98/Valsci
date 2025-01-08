@@ -169,7 +169,7 @@ class ValsciProcessor:
                 if estimated_tokens_for_analysis + self.calculate_tokens_in_last_minute() < self.max_tokens_per_minute and not self.papers_analyzing_in_progress.get(raw_paper['corpusId']):
                     # Start the analysis without blocking
                     self.request_token_estimates.append({'tokens': estimated_tokens_for_analysis, 'timestamp': time.time()})
-                    self.papers_analyzing_in_progress[raw_paper['corpusId']] = True
+                
                     asyncio.create_task(self.analyze_single_paper(raw_paper, claim_data['text'], batch_id, claim_id))
                 else:
                     # Skip the rest of this claim until the next iteration
@@ -221,6 +221,8 @@ class ValsciProcessor:
                 await self.paper_analyzer.analyze_relevance_and_extract(raw_paper['content'], claim_text, ai_service=self.openai_service)
             )
 
+            print("Analyzed paper", raw_paper['corpusId'])
+
             # Load the latest claim data
             with FileLock(f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"):
                 with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'r') as f:
@@ -245,6 +247,8 @@ class ValsciProcessor:
 
                 # Save the updated data
                 self.save_claim_data(claim_data, batch_id, claim_id)
+
+            print("Saved claim data")
 
         except Exception as e:
             logger.error(f"Error analyzing paper {raw_paper['corpusId']}: {str(e)}")
