@@ -157,8 +157,7 @@ class S2Searcher:
             
         return queries
 
-    async def search_papers_for_claim(self, queries: List[str],
-                              results_per_query: int = 5) -> List[Dict]:
+    async def search_papers_for_claim(self, queries: List[str], results_per_query: int = 5) -> List[Dict]:
         """Search papers relevant to a claim."""
         papers = []
         seen_paper_ids = set()
@@ -169,20 +168,16 @@ class S2Searcher:
                 
                 for paper in search_results:
                     corpus_id = paper.get('corpusId')
-
                     console.print(f"[green]Corpus ID: {corpus_id}[/green]")
                     if corpus_id and corpus_id not in seen_paper_ids:
-                        # Get full content
-                        content = await self.get_paper_content(corpus_id)
+                        # Get full content (remove "await" here, because get_paper_content isn't async)
+                        content = self.get_paper_content(corpus_id)
                         console.print(f"[green]Content: {content}[/green]")
                         if content:
-                            #paper['text'] = content['text']
                             paper['content_source'] = content['source']
                             paper['pdf_hash'] = content['pdf_hash']
 
-                        # Enrich the data with author h-index
                         paper['authors'] = self._enrich_author_data(paper['authors'])
-                        
                         seen_paper_ids.add(corpus_id)
                         papers.append(paper)
                         
@@ -190,9 +185,7 @@ class S2Searcher:
                 console.print(f"[red]Error in search_papers_for_claim: {str(e)}[/red]")
                 continue
 
-        # remove None papers
         papers = [paper for paper in papers if paper is not None]
-
         return papers
 
     async def search_papers(self, query: str, limit: int = 10) -> List[Dict]:
