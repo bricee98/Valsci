@@ -75,32 +75,30 @@ class ValsciProcessor:
     
     async def search_papers(self, claim_data, batch_id: str, claim_id: str) -> List[Paper]:
         """Search for papers relevant to the claim."""
+        try:
+            queries = claim_data['semantic_scholar_queries']
 
-        queries = claim_data['semantic_scholar_queries']
+            raw_papers = await self.s2_searcher.search_papers_for_claim(
+                queries,
+                results_per_query=claim_data['search_config']['results_per_query']
+            )
+            
+            papers = []
+            for raw_paper in raw_papers:
+                try:
+                    if raw_paper.get('fields_of_study') is None:
+                        raw_paper['fields_of_study'] = []
+                    papers.append(raw_paper)
+                except Exception as e:
+                    logger.error(f"Error converting paper {raw_paper.get('corpusId')}: {str(e)}")
+                    continue
+            
+            # Sort by citation count (most cited first)
+            papers.sort(key=lambda p: p.citation_count or 0, reverse=True)
 
-        raw_papers = await self.s2_searcher.search_papers_for_claim(
-            queries,
-            results_per_query=claim_data['search_config']['results_per_query']
-        )
-        
-        papers = []
-        for raw_paper in raw_papers:
-            try:
-                # Ensure fields_of_study is a list
-                if raw_paper.get('fields_of_study') is None:
-                    raw_paper['fields_of_study'] = []
-                papers.append(raw_paper)
-            except Exception as e:
-                logger.error(f"Error converting paper {raw_paper.get('corpusId')}: {str(e)}")
-                continue
-        
-        # Sort by citation count (most cited first)
-        papers.sort(key=lambda p: p.citation_count or 0, reverse=True)
-
-        # If no papers are found, set the status to "no_papers_found"
-        if not papers:
-            claim_data['status'] = 'processed'
-            report = {
+            if not papers:
+                claim_data['status'] = 'processed'
+                report = {
                     "relevantPapers": [],
                     "explanation": "No relevant papers were found for this claim.",
                     "claimRating": 0,
@@ -108,17 +106,23 @@ class ValsciProcessor:
                     "searchQueries": queries,
                     "claim_text": claim_data['text']
                 }
-            claim_data['report'] = report
-        else:
-            claim_data['raw_papers'] = papers
-            claim_data['status'] = 'ready_for_analysis'
+                claim_data['report'] = report
+            else:
+                claim_data['raw_papers'] = papers
+                claim_data['status'] = 'ready_for_analysis'
 
-        # Save the updated claim data back to the file
-        with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'w') as f:
-            json.dump(claim_data, f, indent=2)
+            with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'w') as f:
+                json.dump(claim_data, f, indent=2)
 
-        return
-    
+            return
+        
+        except Exception as e:
+            logger.error(f"Error searching for papers for claim {claim_id}: {str(e)}")
+
+        finally:
+            # Reset the searching flag so new searches can proceed
+            self.claims_searching_in_progress[claim_id] = False
+
     def analyze_claim(self, claim_data, batch_id: str, claim_id: str) -> None:
         """Analyze the claim."""
         
