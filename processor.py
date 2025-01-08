@@ -94,7 +94,7 @@ class ValsciProcessor:
                     continue
             
             # Sort by citation count (most cited first)
-            papers.sort(key=lambda p: p.citation_count or 0, reverse=True)
+            papers.sort(key=lambda p: p.get('citationCount', 0), reverse=True)
 
             if not papers:
                 claim_data['status'] = 'processed'
