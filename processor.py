@@ -286,15 +286,16 @@ class ValsciProcessor:
         finally:
             self.papers_analyzing_in_progress[raw_paper['corpusId']] = False
 
-    async def score_paper(self, raw_paper, claim_data, batch_id: str, claim_id: str) -> None:
+    async def score_paper(self, processed_paper, claim_data, batch_id: str, claim_id: str) -> None:
         """Score a single paper."""
         try:
-            self.papers_scoring_in_progress[raw_paper['corpusId']] = True
-            score = await self.evidence_scorer.calculate_paper_weight(raw_paper, ai_service=self.openai_service)
+            paper_id = processed_paper['paper']['corpusId']
+            self.papers_scoring_in_progress[paper_id] = True
+            score = await self.evidence_scorer.calculate_paper_weight(processed_paper, ai_service=self.openai_service)
 
             # Single lock context for all file operations
             lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
-            self._log_lock("creating", lock_path, f"save score for paper {raw_paper['corpusId']}")
+            self._log_lock("creating", lock_path, f"save score for paper {paper_id}")
             with FileLock(lock_path):
                 # Load current state
                 with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'r') as f:
@@ -302,18 +303,19 @@ class ValsciProcessor:
 
                 # Update score
                 for paper in claim_data['processed_papers']:
-                    if paper['paper']['corpusId'] == raw_paper['corpusId']:
+                    if paper['paper']['corpusId'] == paper_id:
                         paper['score'] = score
                         break
 
                 # Write updated data
                 self._write_claim_data(claim_data, batch_id, claim_id)
-            self._log_lock("released", lock_path, f"save score for paper {raw_paper['corpusId']}")
+            self._log_lock("released", lock_path, f"save score for paper {paper_id}")
 
         except Exception as e:
-            logger.error(f"Error scoring paper {raw_paper['corpusId']}: {str(e)}")
+            logger.error(f"Error scoring paper: {str(e)}")
         finally:
-            self.papers_scoring_in_progress[raw_paper['corpusId']] = False
+            if 'paper_id' in locals():
+                self.papers_scoring_in_progress[paper_id] = False
 
     async def generate_final_report(self, claim_data, batch_id: str, claim_id: str) -> None:
         """Generate the final report."""
