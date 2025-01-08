@@ -24,15 +24,15 @@ class ClaimProcessor:
         """Format non-relevant papers for the report."""
         try:
             return [{
-                "title": paper.get('paper', {}).title,
+                "title": paper['paper'].get('title', 'Unknown Title'),
                 "authors": [
                     {
                         "name": author.get('name', 'Unknown'),
                         "hIndex": author.get('hIndex', 0)
                     }
-                    for author in (paper.get('paper', {}).authors or [])
+                    for author in paper['paper'].get('authors', [])
                 ],
-                "link": paper.get('paper', {}).url,
+                "link": paper['paper'].get('url'),
                 "explanation": paper.get('explanation', 'No explanation available'),
                 "content_type": paper.get('content_type', 'unknown')
             } for paper in (papers or [])]
@@ -77,13 +77,14 @@ class ClaimProcessor:
                         logger.error(f"Missing paper object in processed paper: {p}")
                         continue
                         
+                    paper_data = p['paper']
                     authors_str = ', '.join(
                         f"{author.get('name', 'Unknown')} (H-index: {author.get('hIndex', 0)})"
-                        for author in (p['paper'].authors or [])
+                        for author in paper_data.get('authors', [])
                     )
                     
                     summary = (
-                        f"Paper: {p['paper'].title}\n"
+                        f"Paper: {paper_data.get('title', 'Unknown Title')}\n"
                         f"Authors: {authors_str}\n"
                         f"Relevance: {p.get('relevance', 'Unknown')}\n"
                         f"Reliability Weight: {p.get('score', 'Unknown')}\n"
@@ -160,15 +161,15 @@ class ClaimProcessor:
             return {
                 "relevantPapers": [
                     {
-                        "title": p.get('paper', {}).title,
+                        "title": p['paper'].get('title', 'Unknown Title'),
                         "authors": [
                             {
                                 "name": author.get('name', 'Unknown'),
                                 "hIndex": author.get('hIndex', 0)
                             }
-                            for author in (p.get('paper', {}).authors or [])
+                            for author in p['paper'].get('authors', [])
                         ],
-                        "link": p.get('paper', {}).url,
+                        "link": p['paper'].get('url'),
                         "relevance": p.get('relevance', 0),
                         "weight_score": p.get('score', 0),
                         "content_type": p.get('content_type', 'unknown'),
@@ -212,14 +213,14 @@ class ClaimProcessor:
 
     def _format_citation(self, paper, page_number):
         """Format citation in RIS format."""
-        authors = ' and '.join([author['name'] for author in paper.authors])
+        authors = ' and '.join([author.get('name', 'Unknown') for author in paper.get('authors', [])])
         return f"""
         TY  - JOUR
-        TI  - {paper.title}
+        TI  - {paper.get('title', 'Unknown Title')}
         AU  - {authors}
-        PY  - {paper.year}
-        JO  - {paper.journal}
-        UR  - {paper.url}
+        PY  - {paper.get('year')}
+        JO  - {paper.get('venue')}
+        UR  - {paper.get('url')}
         SP  - {page_number}
         ER  -
         """.strip()

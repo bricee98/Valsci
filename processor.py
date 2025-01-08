@@ -436,7 +436,9 @@ class ValsciProcessor:
                                         with open(notification_file, 'r') as f:
                                             notification_data = json.load(f)
                                         if notification_data['email']:
-                                            self.email_service.send_batch_complete_notification(notification_data['email'], batch_id)
+                                            self.email_service.send_batch_completion_notification(notification_data['email'], batch_id, 
+                                                                                                notification_data.get('num_claims', 0),
+                                                                                                notification_data.get('review_type', 'standard'))
                                         # Also remove the batch directory from the queued_jobs directory
                                         shutil.rmtree(batch_dir)
 

@@ -9,13 +9,16 @@ logger = logging.getLogger(__name__)
 
 class EvidenceScorer:
 
-    async def calculate_paper_weight(self, raw_paper, ai_service) -> float:
+    async def calculate_paper_weight(self, processed_paper, ai_service) -> float:
         """Calculate the weight/reliability score for a paper."""
         try:
+            # Get the nested paper data
+            paper = processed_paper['paper']
+            
             # Get metrics
-            max_h_index = self._get_max_author_h_index(raw_paper['paper'].get('authors', []))
-            citation_impact = self._calculate_citation_impact(raw_paper['paper'])
-            venue_impact = await self._calculate_venue_impact(raw_paper['paper'].get('venue'), ai_service)
+            max_h_index = self._get_max_author_h_index(paper.get('authors', []))
+            citation_impact = self._calculate_citation_impact(paper)
+            venue_impact = await self._calculate_venue_impact(paper.get('venue'), ai_service)
             
             # Normalize scores
             normalized_h_index = min(max_h_index / 100, 1.0)  # S2 h-indices can be higher than OpenAlex
@@ -36,7 +39,7 @@ class EvidenceScorer:
             )
             
             logger.info(f"""
-                Paper weight calculation for {raw_paper['paper'].get('title')}:
+                Paper weight calculation for {paper.get('title', 'Unknown Title')}:
                 - Max h-index: {max_h_index} (normalized: {normalized_h_index:.2f})
                 - Citation impact: {citation_impact} (normalized: {normalized_citation_impact:.2f})
                 - Venue impact: {venue_impact} (normalized: {normalized_venue_impact:.2f})
@@ -46,7 +49,7 @@ class EvidenceScorer:
             return score
 
         except Exception as e:
-            logger.error(f"Error calculating paper weight for {raw_paper['paper'].get('title')}: {str(e)}")
+            logger.error(f"Error calculating paper weight: {str(e)}")
             return 0.0
 
     def _get_max_author_h_index(self, authors: List[Dict]) -> float:
@@ -62,15 +65,15 @@ class EvidenceScorer:
             logger.error(f"Error getting max h-index: {str(e)}")
             return 0
 
-    def _calculate_citation_impact(self, paper: Paper) -> float:
+    def _calculate_citation_impact(self, paper: Dict) -> float:
         """Calculate citation impact score."""
         try:
             # Get citation count
-            citation_count = paper.citation_count or 0
+            citation_count = paper.get('citationCount', 0)
             
             # Calculate years since publication
             current_year = 2024  # TODO: Get dynamically
-            years_since_pub = max(1, current_year - (paper.year or current_year))
+            years_since_pub = max(1, current_year - (paper.get('year', current_year) or current_year))
             
             # Calculate citations per year
             citations_per_year = citation_count / years_since_pub
