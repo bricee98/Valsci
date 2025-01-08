@@ -235,6 +235,12 @@ class ValsciProcessor:
 
         return
     
+    def _write_claim_data(self, claim_data, batch_id, claim_id):
+        """Internal method to write claim data without locking."""
+        file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
+        with open(file_path, 'w') as f:
+            json.dump(claim_data, f, indent=2)
+
     async def analyze_single_paper(self, raw_paper, claim_text, batch_id: str, claim_id: str) -> None:
         """Analyze a single paper."""
         try:
@@ -243,15 +249,17 @@ class ValsciProcessor:
                 await self.paper_analyzer.analyze_relevance_and_extract(raw_paper['content'], claim_text, ai_service=self.openai_service)
             )
 
-            print("Analyzed paper", raw_paper['corpusId'])
+            print(f"Analyzed paper {raw_paper['corpusId']}")
 
-            # Load the latest claim data
+            # Single lock context for all file operations
             lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
             self._log_lock("creating", lock_path, f"save analysis for paper {raw_paper['corpusId']}")
             with FileLock(lock_path):
+                # Load current state
                 with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'r') as f:
                     claim_data = json.load(f)
 
+                # Update claim data
                 if relevance >= 0.1:
                     claim_data['processed_papers'].append({
                         'paper': raw_paper,
@@ -269,58 +277,48 @@ class ValsciProcessor:
                         'content_type': raw_paper['content_type']
                     })
 
-                # Save the updated data
-                self.save_claim_data(claim_data, batch_id, claim_id)
-
-            print("Saved claim data")
+                # Write updated data
+                self._write_claim_data(claim_data, batch_id, claim_id)
+            self._log_lock("released", lock_path, f"save analysis for paper {raw_paper['corpusId']}")
 
         except Exception as e:
             logger.error(f"Error analyzing paper {raw_paper['corpusId']}: {str(e)}")
         finally:
             self.papers_analyzing_in_progress[raw_paper['corpusId']] = False
 
-        self._log_lock("released", lock_path, f"save analysis for paper {raw_paper['corpusId']}")
-
-        return
-    
     async def score_paper(self, raw_paper, claim_data, batch_id: str, claim_id: str) -> None:
         """Score a single paper."""
         try:
             self.papers_scoring_in_progress[raw_paper['corpusId']] = True
             score = await self.evidence_scorer.calculate_paper_weight(raw_paper, ai_service=self.openai_service)
 
-            # Load the latest claim data using FileLock
+            # Single lock context for all file operations
             lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
             self._log_lock("creating", lock_path, f"save score for paper {raw_paper['corpusId']}")
             with FileLock(lock_path):
+                # Load current state
                 with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'r') as f:
                     claim_data = json.load(f)
 
-                # Update the score in the claim data
+                # Update score
                 for paper in claim_data['processed_papers']:
                     if paper['paper']['corpusId'] == raw_paper['corpusId']:
                         paper['score'] = score
                         break
 
-                # Save using the safe method
-                self.save_claim_data(claim_data, batch_id, claim_id)
+                # Write updated data
+                self._write_claim_data(claim_data, batch_id, claim_id)
+            self._log_lock("released", lock_path, f"save score for paper {raw_paper['corpusId']}")
 
         except Exception as e:
             logger.error(f"Error scoring paper {raw_paper['corpusId']}: {str(e)}")
         finally:
             self.papers_scoring_in_progress[raw_paper['corpusId']] = False
 
-        self._log_lock("released", lock_path, f"save score for paper {raw_paper['corpusId']}")
-
-        return
-    
     async def generate_final_report(self, claim_data, batch_id: str, claim_id: str) -> None:
         """Generate the final report."""
-
-        # Check that the length of processed_papers is greater than 0
         if len(claim_data['processed_papers']) == 0:
-            logger.error("No processed papers found for claim {claim_id}")
-            # Set the status to "processed"
+            logger.error(f"No processed papers found for claim {claim_id}")
             claim_data['status'] = "processed"
             report = {
                 "relevantPapers": [],
@@ -333,12 +331,12 @@ class ValsciProcessor:
                 "claim_text": claim_data['text']
             }
             claim_data['report'] = report
-            # Save the updated claim data back to the file
+
+            # Single lock context for file operations
             lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
             self._log_lock("creating", lock_path, f"save empty report for claim {claim_id}")
             with FileLock(lock_path):
-                with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'w') as f:
-                    json.dump(claim_data, f, indent=2)
+                self._write_claim_data(claim_data, batch_id, claim_id)
             self._log_lock("released", lock_path, f"save empty report for claim {claim_id}")
             return
 
@@ -352,21 +350,16 @@ class ValsciProcessor:
                 ai_service=self.openai_service
             )
             claim_data['report'] = report
-
-            # Set the status to "processed"
             claim_data['status'] = "processed"
 
-            # Save the updated claim data back to the file
+            # Single lock context for file operations
             lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
             self._log_lock("creating", lock_path, f"save final report for claim {claim_id}")
             with FileLock(lock_path):
-                with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'w') as f:
-                    json.dump(claim_data, f, indent=2)
+                self._write_claim_data(claim_data, batch_id, claim_id)
             self._log_lock("released", lock_path, f"save final report for claim {claim_id}")
 
         self.claims_final_reporting_in_progress[claim_id] = False
-        return
-
 
     async def check_for_claims(self):
         """Check for any queued claims and process them."""
@@ -452,22 +445,6 @@ class ValsciProcessor:
 
         except Exception as e:
             logger.error(f"Error checking for queued claims: {str(e)}")
-
-    def save_claim_data(self, claim_data, batch_id, claim_id):
-        """Safely save claim data to file using a file lock."""
-        file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
-        # Don't create a new lock if we're already inside a lock context
-        if not hasattr(self, '_current_lock'):
-            lock_path = f"{file_path}.lock"
-            self._log_lock("creating", lock_path, f"save claim data for {claim_id}")
-            with FileLock(lock_path):
-                with open(file_path, 'w') as f:
-                    json.dump(claim_data, f, indent=2)
-            self._log_lock("released", lock_path, f"save claim data for {claim_id}")
-        else:
-            # Just write the file if we're already inside a lock
-            with open(file_path, 'w') as f:
-                json.dump(claim_data, f, indent=2)
 
 async def main():
     """Main function to run the processor."""
