@@ -8,13 +8,12 @@ import re
 logger = logging.getLogger(__name__)
 
 class PaperAnalyzer:
-    def __init__(self):
-        self.openai_service = OpenAIService()
 
     async def analyze_relevance_and_extract(
         self, 
         paper_content: str, 
-        claim_text: str
+        claim_text: str,
+        ai_service
     ) -> Tuple[float, List[str], List[str], Optional[str], List[int]]:
         """
         Analyze paper content for relevance to the claim and extract supporting, contradicting, or generally relevant evidence.
@@ -84,7 +83,7 @@ class PaperAnalyzer:
 
         try:
             # Use the async version of generate_json
-            result = await self.openai_service.generate_json_async(user_prompt, system_prompt)
+            result = await ai_service.generate_json_async(user_prompt, system_prompt)
             
             # Log the analysis results
             logger.info(f"Paper analysis results:")

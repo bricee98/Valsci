@@ -6,8 +6,6 @@ document.addEventListener('DOMContentLoaded', function() {
     const stagedClaimsContainer = document.getElementById('stagedClaims');
     const newClaimText = document.getElementById('newClaimText');
     const addClaimBtn = document.getElementById('addClaimBtn');
-    const enhanceClaimBtn = document.getElementById('enhanceClaimBtn');
-    const enhanceAllBtn = document.getElementById('enhanceAllBtn');
     const processAllBtn = document.getElementById('processAllBtn');
     const fileInput = document.getElementById('claimFile');
     const fileName = document.getElementById('fileName');
@@ -33,10 +31,6 @@ document.addEventListener('DOMContentLoaded', function() {
             <div class="claim-text">${claim}</div>
             <div class="claim-actions">
                 <button class="action-button edit-button" data-index="${index}">Edit</button>
-                <button class="action-button enhance-button" data-index="${index}">
-                    <span>Enhance</span>
-                    <div class="spinner enhance-spinner" style="display: none;"></div>
-                </button>
                 <button class="action-button delete-button" data-index="${index}">Delete</button>
             </div>
         `;
@@ -51,7 +45,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
         
         // Update button states
-        enhanceAllBtn.disabled = stagedClaims.length === 0;
         processAllBtn.disabled = stagedClaims.length === 0;
     }
 
@@ -67,66 +60,6 @@ document.addEventListener('DOMContentLoaded', function() {
     // Event listener for adding a claim
     addClaimBtn.addEventListener('click', () => {
         addClaim(newClaimText.value);
-    });
-
-    // Event listener for enhance and add
-    enhanceClaimBtn.addEventListener('click', async () => {
-        const claim = newClaimText.value.trim();
-        if (!claim) return;
-
-        enhanceClaimBtn.classList.add('loading');
-        const spinner = document.getElementById('enhanceSpinner');
-        spinner.style.display = 'block';
-
-        try {
-            const response = await fetch('/api/v1/enhance-claim', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ text: claim }),
-            });
-            
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
-            const data = await response.json();
-            if (data.suggested) {
-                // Add both original and enhanced claims to staging area
-                addClaim(data.suggested);
-                
-                // Show enhancement feedback
-                const feedback = document.createElement('div');
-                feedback.className = 'enhancement-feedback';
-                feedback.innerHTML = `
-                    <div class="feedback-content">
-                        <p><strong>Enhanced claim:</strong> ${data.suggested}</p>
-                        ${data.explanation ? `<p><small>${data.explanation}</small></p>` : ''}
-                    </div>
-                `;
-                
-                // Insert feedback after the claim input
-                const claimInputContainer = document.querySelector('.claim-input-container');
-                claimInputContainer.appendChild(feedback);
-                
-                // Remove feedback after 5 seconds
-                setTimeout(() => {
-                    feedback.remove();
-                }, 5000);
-                
-                // Clear the input
-                newClaimText.value = '';
-            } else {
-                throw new Error(data.error || 'Unknown error');
-            }
-        } catch (error) {
-            console.error('Error:', error);
-            alert('Error enhancing claim: ' + error.message);
-        } finally {
-            enhanceClaimBtn.classList.remove('loading');
-            spinner.style.display = 'none';
-        }
     });
 
     // Event listener for file upload
@@ -164,58 +97,6 @@ document.addEventListener('DOMContentLoaded', function() {
             if (newText) {
                 stagedClaims[index] = newText.trim();
                 updateStagingArea();
-            }
-        } else if (button.classList.contains('enhance-button')) {
-            const spinner = button.querySelector('.enhance-spinner');
-            const buttonText = button.querySelector('span');
-            
-            button.disabled = true;
-            spinner.style.display = 'inline-block';
-            buttonText.style.opacity = '0.5';
-            
-            try {
-                const response = await fetch('/api/v1/enhance-claim', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ text: stagedClaims[index] }),
-                });
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                
-                const data = await response.json();
-                if (data.suggested) {
-                    stagedClaims[index] = data.suggested;
-                    updateStagingArea();
-                    
-                    // Show enhancement feedback
-                    const claimElement = button.closest('.staged-claim');
-                    const feedback = document.createElement('div');
-                    feedback.className = 'enhancement-feedback';
-                    feedback.innerHTML = `
-                        <div class="feedback-content">
-                            <p><small>${data.explanation || 'Claim enhanced successfully'}</small></p>
-                        </div>
-                    `;
-                    claimElement.appendChild(feedback);
-                    
-                    // Remove feedback after 5 seconds
-                    setTimeout(() => {
-                        feedback.remove();
-                    }, 5000);
-                } else {
-                    throw new Error(data.error || 'Unknown error');
-                }
-            } catch (error) {
-                console.error('Error:', error);
-                alert('Error enhancing claim: ' + error.message);
-            } finally {
-                button.disabled = false;
-                spinner.style.display = 'none';
-                buttonText.style.opacity = '1';
             }
         }
     });
@@ -305,66 +186,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Enhance all claims
-    enhanceAllBtn.addEventListener('click', async () => {
-        enhanceAllBtn.disabled = true;
-        
-        // Add spinner to button
-        const originalButtonText = enhanceAllBtn.innerHTML;
-        enhanceAllBtn.innerHTML = `
-            <span>Enhancing Claims...</span>
-            <div class="spinner enhance-spinner" style="display: inline-block;"></div>
-        `;
-        
-        try {
-            const enhancedClaims = [];
-            for (let i = 0; i < stagedClaims.length; i++) {
-                // Update button text to show progress
-                const progressSpan = enhanceAllBtn.querySelector('span');
-                progressSpan.textContent = `Enhancing Claim ${i + 1}/${stagedClaims.length}...`;
-                
-                const response = await fetch('/api/v1/enhance-claim', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ text: stagedClaims[i] }),
-                });
-                
-                const data = await response.json();
-                enhancedClaims.push(data.suggested || stagedClaims[i]);
-            }
-            
-            stagedClaims = enhancedClaims;
-            updateStagingArea();
-            
-            // Show success feedback
-            const feedback = document.createElement('div');
-            feedback.className = 'enhancement-feedback';
-            feedback.innerHTML = `
-                <div class="feedback-content">
-                    <p><strong>All claims enhanced successfully!</strong></p>
-                </div>
-            `;
-            
-            // Insert feedback after the enhance all button
-            enhanceAllBtn.parentElement.appendChild(feedback);
-            
-            // Remove feedback after 5 seconds
-            setTimeout(() => {
-                feedback.remove();
-            }, 5000);
-            
-        } catch (error) {
-            console.error('Error:', error);
-            alert('Error enhancing claims: ' + error.message);
-        } finally {
-            // Restore button to original state
-            enhanceAllBtn.innerHTML = originalButtonText;
-            enhanceAllBtn.disabled = false;
-        }
-    });
-
+  
     // Add email validation feedback
     const emailInput = document.getElementById('notificationEmail');
     const emailCheckbox = document.getElementById('emailNotification');

@@ -1,7 +1,6 @@
 import logging
 from typing import Dict, List
 from app.models.paper import Paper
-from app.services.openai_service import OpenAIService
 from textwrap import dedent
 from app.config.settings import Config
 
@@ -9,16 +8,14 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class EvidenceScorer:
-    def __init__(self):
-        self.openai_service = OpenAIService()
 
-    async def calculate_paper_weight(self, paper: Paper) -> float:
+    async def calculate_paper_weight(self, raw_paper, ai_service) -> float:
         """Calculate the weight/reliability score for a paper."""
         try:
             # Get metrics
-            max_h_index = self._get_max_author_h_index(paper.authors)
-            citation_impact = self._calculate_citation_impact(paper)
-            venue_impact = await self._calculate_venue_impact(paper)
+            max_h_index = self._get_max_author_h_index(raw_paper['paper'].get('authors', []))
+            citation_impact = self._calculate_citation_impact(raw_paper['paper'])
+            venue_impact = await self._calculate_venue_impact(raw_paper['paper'].get('venue'), ai_service)
             
             # Normalize scores
             normalized_h_index = min(max_h_index / 100, 1.0)  # S2 h-indices can be higher than OpenAlex
@@ -39,7 +36,7 @@ class EvidenceScorer:
             )
             
             logger.info(f"""
-                Paper weight calculation for {paper.title}:
+                Paper weight calculation for {raw_paper['paper'].get('title')}:
                 - Max h-index: {max_h_index} (normalized: {normalized_h_index:.2f})
                 - Citation impact: {citation_impact} (normalized: {normalized_citation_impact:.2f})
                 - Venue impact: {venue_impact} (normalized: {normalized_venue_impact:.2f})
@@ -49,7 +46,7 @@ class EvidenceScorer:
             return score
 
         except Exception as e:
-            logger.error(f"Error calculating paper weight for {paper.title}: {str(e)}")
+            logger.error(f"Error calculating paper weight for {raw_paper['paper'].get('title')}: {str(e)}")
             return 0.0
 
     def _get_max_author_h_index(self, authors: List[Dict]) -> float:
@@ -84,9 +81,9 @@ class EvidenceScorer:
             logger.error(f"Error calculating citation impact: {str(e)}")
             return 0
 
-    async def _calculate_venue_impact(self, paper: Paper) -> float:
+    async def _calculate_venue_impact(self, paper_journal, ai_service) -> float:
         """Calculate venue impact using GPT to estimate journal/conference quality."""
-        if not paper.journal:
+        if not paper_journal:
             return 0.0
 
         try:
@@ -104,7 +101,7 @@ class EvidenceScorer:
 
             prompt = f"""
             Rate the academic impact and prestige of this venue:
-            Venue: {paper.journal}
+            Venue: {paper_journal}
             
             Return only json object with a single key "score" and a number between 0 and 10, where:
             0-2: Low impact or predatory venues
@@ -113,11 +110,11 @@ class EvidenceScorer:
             9-10: Top venues in the field
             """
 
-            result = await self.openai_service.generate_json_async(prompt, system_prompt)
+            result = await ai_service.generate_json_async(prompt, system_prompt)
             score = result.get('score', 0)
 
             return float(score)
 
         except Exception as e:
-            logger.error(f"Error calculating venue impact for {paper.journal}: {str(e)}")
+            logger.error(f"Error calculating venue impact for {paper_journal}: {str(e)}")
             return 0.0

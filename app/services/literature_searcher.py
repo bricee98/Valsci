@@ -11,7 +11,6 @@ logger = logging.getLogger(__name__)
 
 class LiteratureSearcher:
     def __init__(self):
-        self.email = Config.USER_EMAIL
         self.s2_searcher = S2Searcher()
         self.saved_search_queries = []
 

@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 project_root = str(Path(__file__).parent.parent.parent)
 from app.config.settings import Config
-from app.services.openai_service import OpenAIService
 
 # Import the BinaryIndexer so we can do direct lookups from the .idx files
 from semantic_scholar.utils.binary_indexer import BinaryIndexer
@@ -38,8 +37,6 @@ class S2Searcher:
         logger.info(f"Base directory set to: {self.base_dir}")
         
         self.rate_limiter = RateLimiter(requests_per_second=1.0)
-        self.openai_service = OpenAIService()
-        self.saved_search_queries = []
         
         # Find latest release
         self.current_release = self._get_latest_local_release()
@@ -91,7 +88,7 @@ class S2Searcher:
         logger.info(f"Found releases in base directory: {releases}")
         return max(releases) if releases else None
 
-    async def generate_search_queries(self, claim_text: str, num_queries: int = 5) -> List[str]:
+    async def generate_search_queries(self, claim_text: str, num_queries: int = 5, ai_service = None) -> List[str]:
         """Generate search queries for a claim using GPT."""
         system_prompt = dedent("""
             You are an expert at converting scientific claims into strategic literature search queries. Specifically, your queries will be used to search the Semantic Scholar database. Your goal is to generate queries that will comprehensively evaluate both supporting and contradicting evidence for a given claim.
@@ -150,7 +147,7 @@ class S2Searcher:
         
         print("About to generate queries")
 
-        response = await self.openai_service.generate_json_async(user_prompt, system_prompt)
+        response = await ai_service.generate_json_async(user_prompt, system_prompt)
         queries = response.get('queries', [])
         
         # Log generated queries for debugging
@@ -158,17 +155,13 @@ class S2Searcher:
         for query in queries:
             console.print(f"[green]- {query}[/green]")
             
-        self.saved_search_queries.extend(queries)
         return queries
 
-    async def search_papers_for_claim(self, claim_text: str, 
-                              num_queries: int = 5, 
+    async def search_papers_for_claim(self, queries: List[str],
                               results_per_query: int = 5) -> List[Dict]:
         """Search papers relevant to a claim."""
         papers = []
         seen_paper_ids = set()
-        
-        queries = await self.generate_search_queries(claim_text, num_queries)
         
         for query in queries:
             try:
@@ -183,7 +176,7 @@ class S2Searcher:
                         content = await self.get_paper_content(corpus_id)
                         console.print(f"[green]Content: {content}[/green]")
                         if content:
-                            paper['text'] = content['text']
+                            #paper['text'] = content['text']
                             paper['content_source'] = content['source']
                             paper['pdf_hash'] = content['pdf_hash']
 
@@ -204,45 +197,50 @@ class S2Searcher:
 
     async def search_papers(self, query: str, limit: int = 10) -> List[Dict]:
         """Search papers using S2 API and cross-reference with local data."""
-        try:
-            # Rate limiting
-            await asyncio.sleep(1)  # Add 1 second delay before API call
-
-            console.print(f"[green]Searching for papers with query: {query}[/green]")
-            
-            # Use aiohttp or httpx for async HTTP requests
-            response = self.session.get(
-                "https://api.semanticscholar.org/graph/v1/paper/search",
-                params={
-                    "query": query,
-                    "limit": limit,
-                    "fields": ",".join([
-                        'paperId',
-                        'corpusId',
-                        'title',
-                        'abstract',
-                        'year',
-                        'authors',
-                        'venue',
-                        'url',
-                        'isOpenAccess',
-                        'fieldsOfStudy',
-                        'citationCount'
-                    ])
-                }
-            )
-            response.raise_for_status()
-            data = response.json()
-            
-            if not data.get('data'):
-                console.print(f"[yellow]No results found for query: {query}[/yellow]")
-                return []
-            
-            return data.get('data', [])
-            
-        except Exception as e:
-            console.print(f"[red]Error in search_papers: {str(e)}[/red]")
-            return []
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                console.print(f"[green]Searching for papers with query: {query}[/green] (Attempt {retry_count + 1}/{max_retries})")
+                
+                response = self.session.get(
+                    "https://api.semanticscholar.org/graph/v1/paper/search",
+                    params={
+                        "query": query,
+                        "limit": limit,
+                        "fields": ",".join([
+                            'paperId',
+                            'corpusId',
+                            'title',
+                            'abstract',
+                            'year',
+                            'authors',
+                            'venue',
+                            'url',
+                            'isOpenAccess',
+                            'fieldsOfStudy',
+                            'citationCount'
+                        ])
+                    }
+                )
+                response.raise_for_status()
+                data = response.json()
+                
+                if not data.get('data'):
+                    console.print(f"[yellow]No results found for query: {query}[/yellow]")
+                    return []
+                
+                return data.get('data', [])
+                
+            except Exception as e:
+                retry_count += 1
+                if retry_count < max_retries:
+                    console.print(f"[yellow]Attempt {retry_count} failed. Retrying...[/yellow]")
+                    await asyncio.sleep(1)  # Wait 1 second before retrying
+                else:
+                    console.print(f"[red]Error in search_papers after {max_retries} attempts: {str(e)}[/red]")
+                    return []
 
     def _get_citation_count(self, paper_id: str) -> int:
         """Get citation count for a paper."""
@@ -273,65 +271,8 @@ class S2Searcher:
             enriched_authors.append(author)
         return enriched_authors
 
-    def _get_local_paper_data(self, paper_id: str) -> Optional[Dict]:
-        """Get paper data from local dataset."""
-        paper_data = self._find_in_dataset('papers', paper_id)
-        if not paper_data:
-            return None
 
-        abstract_data = self._find_in_dataset('abstracts', paper_id)
-        if abstract_data:
-            paper_data['abstract'] = abstract_data.get('abstract')
-
-        citations = self._find_in_dataset('citations', paper_id)
-        if citations:
-            paper_data['citations'] = citations.get('citations', [])
-
-        return paper_data
-
-    def _find_in_dataset(self, dataset: str, item_id: str, id_type: str = None) -> Optional[Dict]:
-        """Look up an item in a local dataset using our BinaryIndexer."""
-        logger.info(f"Looking up item in dataset: {dataset}, item_id: {item_id}, id_type: {id_type}")
-        
-        if not self.has_local_data:
-            logger.warning("No local data available, skipping dataset lookup")
-            return None
-        
-        try:
-            # Map all known ID types to their JSON field names
-            id_mappings = {
-                'corpus_id': 'corpusid',  # Used by papers, abstracts, s2orc, tldrs
-                'author_id': 'authorid'
-            }
-            logger.info(f"ID mappings: {id_mappings}")
-
-            # For all paper-related datasets, default to corpus_id
-            if dataset in ['papers', 'abstracts', 'tldrs', 's2orc'] and not id_type:
-                id_type = 'corpus_id'
-                logger.info(f"Using default id_type 'corpus_id' for dataset {dataset}")
-
-            mapped_id_type = id_mappings.get(id_type, id_type)
-            logger.info(f"Mapped id_type '{id_type}' to '{mapped_id_type}'")
-
-            record = self.indexer.lookup(
-                release_id=self.current_release,
-                dataset=dataset,
-                id_type=mapped_id_type,
-                search_id=str(item_id).lower()
-            )
-            
-            if record:
-                logger.info(f"Found record in {dataset}")
-            else:
-                logger.info(f"No record found in {dataset}")
-                
-            return record
-            
-        except Exception as e:
-            logger.error(f"Binary index lookup error: {str(e)}", exc_info=True)
-            return None
-
-    async def get_paper_content(self, corpus_id: str) -> Optional[Dict]:
+    def get_paper_content(self, corpus_id: str) -> Optional[Dict]:
         """Get full paper content from S2ORC or abstract data, using the BinaryIndexer."""
         logger.info(f"Attempting to get content for corpus ID: {corpus_id}")
         logger.info(f"Current release: {self.current_release}")
