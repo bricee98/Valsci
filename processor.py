@@ -47,6 +47,8 @@ class ValsciProcessor:
         self.max_tokens_per_minute = 450000
         self.last_token_update_time = time.time()
 
+        self._active_locks = set()
+
     def calculate_tokens_in_last_minute(self):
         # Remove any estimates that are older than 1 minute
         self.request_token_estimates = [estimate for estimate in self.request_token_estimates if time.time() - estimate['timestamp'] < 60]
@@ -126,6 +128,17 @@ class ValsciProcessor:
 
     def _log_lock(self, action: str, lock_path: str, context: str):
         """Helper to standardize lock logging with context"""
+        current_time = time.time()
+        if action == "creating":
+            self._lock_start_times = getattr(self, '_lock_start_times', {})
+            self._lock_start_times[lock_path] = current_time
+        elif action == "released":
+            start_time = self._lock_start_times.get(lock_path)
+            if start_time:
+                duration = current_time - start_time
+                if duration > 1.0:  # Log warning for locks held more than 1 second
+                    logger.warning(f"Lock held for {duration:.2f}s: {lock_path} ({context})")
+                del self._lock_start_times[lock_path]
         print(f"Lock {action}: {lock_path} ({context})")
 
     def analyze_claim(self, claim_data, batch_id: str, claim_id: str) -> None:
@@ -443,13 +456,18 @@ class ValsciProcessor:
     def save_claim_data(self, claim_data, batch_id, claim_id):
         """Safely save claim data to file using a file lock."""
         file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
-        lock_path = f"{file_path}.lock"
-        
-        self._log_lock("creating", lock_path, f"save claim data for {claim_id}")
-        with FileLock(lock_path):
+        # Don't create a new lock if we're already inside a lock context
+        if not hasattr(self, '_current_lock'):
+            lock_path = f"{file_path}.lock"
+            self._log_lock("creating", lock_path, f"save claim data for {claim_id}")
+            with FileLock(lock_path):
+                with open(file_path, 'w') as f:
+                    json.dump(claim_data, f, indent=2)
+            self._log_lock("released", lock_path, f"save claim data for {claim_id}")
+        else:
+            # Just write the file if we're already inside a lock
             with open(file_path, 'w') as f:
                 json.dump(claim_data, f, indent=2)
-        self._log_lock("released", lock_path, f"save claim data for {claim_id}")
 
 async def main():
     """Main function to run the processor."""
