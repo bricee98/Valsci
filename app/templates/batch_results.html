@@ -49,7 +49,7 @@
                 widthGrow: 1,
                 formatter: function(cell) {
                     const value = cell.getValue();
-                    return value !== null && value !== undefined ? value : 'N/A';
+                    return value === null || value === undefined ? 'N/A' : value;
                 }
             },
             {

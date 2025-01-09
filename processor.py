@@ -49,6 +49,7 @@ class ValsciProcessor:
 
         self.request_token_estimates = []
         self.max_tokens_per_minute = 450000
+        self.max_requests_per_minute = 2000
         self.last_token_update_time = time.time()
 
         self._active_locks = set()
@@ -91,7 +92,8 @@ class ValsciProcessor:
         # Remove any estimates that are older than 1 minute
         self.request_token_estimates = [estimate for estimate in self.request_token_estimates if time.time() - estimate['timestamp'] < 60]
         # Return the sum of the remaining estimates
-        return sum(estimate['tokens'] for estimate in self.request_token_estimates)
+        num_requests = len(self.request_token_estimates)
+        return (num_requests, sum(estimate['tokens'] for estimate in self.request_token_estimates))
 
     async def generate_search_queries(self, claim_data, batch_id: str, claim_id: str) -> List[str]:
         """Generate search queries for a claim."""
@@ -280,7 +282,9 @@ class ValsciProcessor:
 
                     
                     estimated_tokens_for_analysis = 1000 + (len(content_dict['text']) / 3.5)
-                    if (estimated_tokens_for_analysis + self.calculate_tokens_in_last_minute() < self.max_tokens_per_minute and 
+                    current_num_requests, current_num_tokens = self.calculate_tokens_in_last_minute()
+                    if (estimated_tokens_for_analysis + current_num_tokens < self.max_tokens_per_minute and 
+                        current_num_requests < self.max_requests_per_minute and
                         not self.papers_analyzing_in_progress.get(corpus_id)):
                         self.request_token_estimates.append({
                             'tokens': estimated_tokens_for_analysis, 
@@ -307,7 +311,10 @@ class ValsciProcessor:
                 if paper['score'] == -1:
                     # Check the estimated tokens for the scoring (always 500 for this)
                     estimated_tokens_for_scoring = 500
-                    if estimated_tokens_for_scoring + self.calculate_tokens_in_last_minute() < self.max_tokens_per_minute and not self.papers_scoring_in_progress.get(paper['paper']['corpusId']):
+                    current_num_requests, current_num_tokens = self.calculate_tokens_in_last_minute()
+                    if (estimated_tokens_for_scoring + current_num_tokens < self.max_tokens_per_minute and 
+                        current_num_requests < self.max_requests_per_minute and
+                        not self.papers_scoring_in_progress.get(paper['paper']['corpusId'])):
                         self.papers_scoring_in_progress[paper['paper']['corpusId']] = True
                         self.request_token_estimates.append({'tokens': estimated_tokens_for_scoring, 'timestamp': time.time()})
                         asyncio.create_task(self.score_paper(paper, claim_data, batch_id, claim_id))
@@ -352,8 +359,10 @@ class ValsciProcessor:
                             sum(len(explanation) for paper in claim_data.get('processed_papers', [])
                                 for explanation in paper.get('explanations', []) if isinstance(explanation, str))
                         ) / 3.5
-                        
-                        if estimated_tokens_for_final_report + self.calculate_tokens_in_last_minute() < self.max_tokens_per_minute:
+                        current_num_requests, current_num_tokens = self.calculate_tokens_in_last_minute()
+                        if (estimated_tokens_for_final_report + current_num_tokens < self.max_tokens_per_minute and 
+                            current_num_requests < self.max_requests_per_minute and
+                            not self.claims_final_reporting_in_progress.get(claim_id)):
                             self.request_token_estimates.append({'tokens': estimated_tokens_for_final_report, 'timestamp': time.time()})
                             self.claims_final_reporting_in_progress[claim_id] = True
                             # Generate the final report
@@ -570,7 +579,9 @@ class ValsciProcessor:
                                 # otherwise, add it to the queue
                                 claim_text_length = len(claim_data['text'])
                                 estimated_tokens_for_query_generation = 1000 + (claim_text_length / 3.5)
-                                if estimated_tokens_for_query_generation + self.calculate_tokens_in_last_minute() < self.max_tokens_per_minute:
+                                current_num_requests, current_num_tokens = self.calculate_tokens_in_last_minute()
+                                if (estimated_tokens_for_query_generation + current_num_tokens < self.max_tokens_per_minute and 
+                                    current_num_requests < self.max_requests_per_minute):
                                     self.claims_query_generation_in_progress[claim_id] = True
                                     asyncio.create_task(self.generate_search_queries(claim_data, batch_id, claim_id))
                                 else:
@@ -589,7 +600,8 @@ class ValsciProcessor:
 
                         if claim_data.get('status') == 'ready_for_analysis':
                             # Only start if the estimated tokens for the analysis are less than the max
-                            if self.calculate_tokens_in_last_minute() < self.max_tokens_per_minute:
+                            num_requests, num_tokens = self.calculate_tokens_in_last_minute()
+                            if num_tokens < self.max_tokens_per_minute and num_requests < self.max_requests_per_minute:
                                 self.analyze_claim(claim_data, batch_id, claim_id)
                             else:
                                 # skip this claim until the next iteration
