@@ -24,15 +24,15 @@ class ClaimProcessor:
         """Format non-relevant papers for the report."""
         try:
             return [{
-                "title": paper.get('title', 'Unknown Title'),
+                "title": paper['paper'].get('title', 'Unknown Title'),
                 "authors": [
                     {
                         "name": author.get('name', 'Unknown'),
                         "hIndex": author.get('hIndex', 0)
                     }
-                    for author in paper.get('authors', [])
+                    for author in paper['paper'].get('authors', [])
                 ],
-                "link": paper.get('url'),
+                "link": paper['paper'].get('url'),
                 "explanation": paper.get('explanation', 'No explanation available'),
                 "content_type": paper.get('content_type', 'unknown')
             } for paper in (papers or [])]
