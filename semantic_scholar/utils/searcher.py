@@ -168,18 +168,21 @@ class S2Searcher:
                 
                 for paper in search_results:
                     corpus_id = paper.get('corpusId')
-                    console.print(f"[green]Corpus ID: {corpus_id}[/green]")
-                    if corpus_id and corpus_id not in seen_paper_ids:
-                        # Get full content (remove "await" here, because get_paper_content isn't async)
+                    if not corpus_id:  # Skip papers without corpus ID
+                        continue
+                        
+                    if corpus_id not in seen_paper_ids:
+                        console.print(f"[green]Processing new paper with Corpus ID: {corpus_id}[/green]")
+                        # Get full content
                         content = self.get_paper_content(corpus_id)
-                        console.print(f"[green]Content: {content}[/green]")
-                        if content:
+                        if content:  # Only add papers that have content
                             paper['content_source'] = content['source']
                             paper['pdf_hash'] = content['pdf_hash']
-
-                        paper['authors'] = self._enrich_author_data(paper['authors'])
-                        seen_paper_ids.add(corpus_id)
-                        papers.append(paper)
+                            paper['authors'] = self._enrich_author_data(paper['authors'])
+                            seen_paper_ids.add(corpus_id)
+                            papers.append(paper)
+                    else:
+                        console.print(f"[yellow]Skipping duplicate paper with Corpus ID: {corpus_id}[/yellow]")
                         
             except Exception as e:
                 console.print(f"[red]Error in search_papers_for_claim: {str(e)}[/red]")

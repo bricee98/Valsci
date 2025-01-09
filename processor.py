@@ -434,23 +434,32 @@ class ValsciProcessor:
                     print(f"Loading claim data for analysis of paper {raw_paper['corpusId']} in claim {claim_id}")
                     claim_data = json.load(f)
 
+                # Check for duplicates in processed_papers before adding
+                processed_corpus_ids = {p['paper']['corpusId'] for p in claim_data.get('processed_papers', [])}
+                
                 # Update claim data
                 if relevance >= 0.1:
-                    claim_data['processed_papers'].append({
-                        'paper': raw_paper,
-                        'relevance': relevance,
-                        'excerpts': excerpts,
-                        'score': -1,
-                        'explanations': explanations,
-                        'content_type': raw_paper['content_type'],
-                        'excerpt_pages': excerpt_pages
-                    })
+                    if raw_paper['corpusId'] not in processed_corpus_ids:
+                        claim_data['processed_papers'].append({
+                            'paper': raw_paper,
+                            'relevance': relevance,
+                            'excerpts': excerpts,
+                            'score': -1,
+                            'explanations': explanations,
+                            'content_type': raw_paper['content_type'],
+                            'excerpt_pages': excerpt_pages
+                        })
+                    else:
+                        logger.warning(f"Skipping duplicate paper {raw_paper['corpusId']} for claim {claim_id}")
                 else:
-                    claim_data['non_relevant_papers'].append({
-                        'paper': raw_paper,
-                        'explanation': non_relevant_explanation,
-                        'content_type': raw_paper['content_type']
-                    })
+                    # Check for duplicates in non_relevant_papers as well
+                    non_relevant_corpus_ids = {p['paper']['corpusId'] for p in claim_data.get('non_relevant_papers', [])}
+                    if raw_paper['corpusId'] not in non_relevant_corpus_ids:
+                        claim_data['non_relevant_papers'].append({
+                            'paper': raw_paper,
+                            'explanation': non_relevant_explanation,
+                            'content_type': raw_paper['content_type']
+                        })
 
                 # Write updated data
                 print(f"Analyze claim: Writing claim data for claim {claim_id} in batch {batch_id}")
