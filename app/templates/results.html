@@ -185,55 +185,49 @@
         }
 
         if (claimId) {
-            // Get batch_id from URL params
             const batchId = urlParams.get('batch_id');
             
             if (!batchId) {
                 reportContent.textContent = 'Error: Batch ID is required';
-                return;
+            } else {
+                fetch(`/api/v1/claims/${batchId}/${claimId}/report`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.report) {
+                            displayReport(data);
+                        } else {
+                            reportContent.textContent = 'Report not found.';
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error fetching report:', error);
+                        reportContent.textContent = 'Error loading report.';
+                    });
             }
-
-            fetch(`/api/v1/claims/${batchId}/${claimId}/report`)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.report) {
-                        displayReport(data);
-                    } else {
-                        reportContent.textContent = 'Report not found.';
-                    }
-                })
-                .catch(error => {
-                    console.error('Error fetching report:', error);
-                    reportContent.textContent = 'Error loading report.';
-                });
         }
 
         document.getElementById('downloadReport').addEventListener('click', function() {
-            if (claimId) {
-                const batchId = urlParams.get('batch_id');
-                if (batchId) {
-                    window.location.href = `/api/v1/batch/${batchId}/download`;
-                }
+            const batchId = urlParams.get('batch_id');
+            if (claimId && batchId) {
+                window.location.href = `/api/v1/batch/${batchId}/download`;
             }
         });
 
         document.getElementById('downloadCitations').addEventListener('click', function() {
-            if (claimId) {
-                const batchId = urlParams.get('batch_id');
-                if (batchId) {
-                    window.location.href = `/api/v1/claims/${batchId}/${claimId}/download_citations`;
-                }
+            const batchId = urlParams.get('batch_id');
+            if (claimId && batchId) {
+                window.location.href = `/api/v1/claims/${batchId}/${claimId}/download_citations`;
             }
         });
 
         document.getElementById('deleteClaimButton').addEventListener('click', function() {
+            const batchId = urlParams.get('batch_id');
+            if (!batchId) {
+                alert('Error: Batch ID is required');
+                return;
+            }
+            
             if (confirm('Are you sure you want to delete this claim?')) {
-                const batchId = urlParams.get('batch_id');
-                if (!batchId) {
-                    alert('Error: Batch ID is required');
-                    return;
-                }
-
                 fetch(`/api/v1/delete/claim/${batchId}/${claimId}`, { method: 'DELETE' })
                     .then(response => response.json())
                     .then(data => {
