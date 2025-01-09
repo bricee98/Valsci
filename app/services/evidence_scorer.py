@@ -12,8 +12,26 @@ class EvidenceScorer:
     async def calculate_paper_weight(self, processed_paper, ai_service) -> float:
         """Calculate the weight/reliability score for a paper."""
         try:
+            # Add validation for processed_paper
+            if processed_paper is None:
+                logger.error("processed_paper is None")
+                return 0.0
+            
+            # Add validation for paper key
+            if 'paper' not in processed_paper:
+                logger.error(f"No 'paper' key in processed_paper: {processed_paper}")
+                return 0.0
+
             # Get the nested paper data
             paper = processed_paper['paper']
+            
+            # Add validation for paper object
+            if paper is None:
+                logger.error("paper object is None")
+                return 0.0
+            
+            # Log the paper structure for debugging
+            logger.debug(f"Processing paper structure: {paper}")
             
             # Get metrics
             max_h_index = self._get_max_author_h_index(paper.get('authors', []))
