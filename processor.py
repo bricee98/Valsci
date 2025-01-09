@@ -42,12 +42,50 @@ class ValsciProcessor:
         self.papers_scoring_in_progress = {}
         self.claims_final_reporting_in_progress = {}
 
+        # Keep track of token usage per claim
+        self.claim_token_usage = {}
+        # A per-claim cap on total tokens
+        self.max_tokens_per_claim = 30000  # pick your limit
 
         self.request_token_estimates = []
         self.max_tokens_per_minute = 450000
         self.last_token_update_time = time.time()
 
         self._active_locks = set()
+
+    def _add_tokens_for_claim(self, claim_id: str, tokens: float, batch_id: str):
+        """
+        Accumulate token usage for a given claim and check for over-limit.
+        If over limit, immediately mark the claim as processed.
+        """
+        current_usage = self.claim_token_usage.get(claim_id, 0)
+        new_usage = current_usage + tokens
+        self.claim_token_usage[claim_id] = new_usage
+
+        if new_usage > self.max_tokens_per_claim:
+            # Mark claim as processed to avoid infinite loops
+            logger.warning(f"Claim {claim_id} exceeded token cap of {self.max_tokens_per_claim}. Marking as processed.")
+            lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
+            with FileLock(lock_path):
+                # Load current file
+                file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
+                if os.path.exists(file_path):
+                    with open(file_path, 'r') as f:
+                        claim_data = json.load(f)
+
+                    claim_data['status'] = 'processed'
+                    claim_data['report'] = {
+                        "relevantPapers": [],
+                        "explanation": "Stopped: token usage exceeded our cap.",
+                        "claimRating": 0,
+                        "timing_stats": {},
+                        "searchQueries": claim_data.get('semantic_scholar_queries', []),
+                        "claim_text": claim_data.get('text', '')
+                    }
+
+                    # Write updated data to file
+                    with open(file_path, 'w') as f:
+                        json.dump(claim_data, f, indent=2)
 
     def calculate_tokens_in_last_minute(self):
         # Remove any estimates that are older than 1 minute
@@ -57,11 +95,21 @@ class ValsciProcessor:
 
     async def generate_search_queries(self, claim_data, batch_id: str, claim_id: str) -> List[str]:
         """Generate search queries for a claim."""
-        # Estimate the number of tokens for the query generation
         estimated_tokens_for_query_generation = 1000 + (len(claim_data['text']) / 3.5)
-        # Add the estimate to the list
         self.request_token_estimates.append({'tokens': estimated_tokens_for_query_generation, 'timestamp': time.time()})
-        queries = await self.s2_searcher.generate_search_queries(claim_data['text'], claim_data['search_config']['num_queries'], ai_service=self.openai_service)
+        # Also track usage per claim
+        self._add_tokens_for_claim(claim_id, estimated_tokens_for_query_generation, batch_id)
+
+        queries = await self.s2_searcher.generate_search_queries(
+            claim_data['text'],
+            claim_data['search_config']['num_queries'],
+            ai_service=self.openai_service
+        )
+
+        # If the claim was just marked processed due to exceeding usage, do not proceed
+        if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
+            return
+
         # Save the queries to a file
         # First load the current file
         with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'r') as f:
@@ -79,6 +127,15 @@ class ValsciProcessor:
     async def search_papers(self, claim_data, batch_id: str, claim_id: str) -> List[Paper]:
         """Search for papers relevant to the claim."""
         try:
+            # Add a small token estimate for query processing
+            estimated_tokens = 100  # Small overhead for query processing
+            self.request_token_estimates.append({'tokens': estimated_tokens, 'timestamp': time.time()})
+            self._add_tokens_for_claim(claim_id, estimated_tokens, batch_id)
+
+            # Check if we exceeded the token cap
+            if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
+                return
+
             queries = claim_data['semantic_scholar_queries']
 
             raw_papers = await self.s2_searcher.search_papers_for_claim(
@@ -322,8 +379,22 @@ class ValsciProcessor:
         """Analyze a single paper."""
         try:
             self.papers_analyzing_in_progress[raw_paper['corpusId']] = True
+            
+            # Estimate tokens before analysis
+            estimated_tokens_for_analysis = 1000 + (len(raw_paper['content']) / 3.5)
+            self.request_token_estimates.append({'tokens': estimated_tokens_for_analysis, 'timestamp': time.time()})
+            self._add_tokens_for_claim(claim_id, estimated_tokens_for_analysis, batch_id)
+
+            # Check if we exceeded the token cap
+            if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
+                return
+
             relevance, excerpts, explanations, non_relevant_explanation, excerpt_pages = (
-                await self.paper_analyzer.analyze_relevance_and_extract(raw_paper['content'], claim_text, ai_service=self.openai_service)
+                await self.paper_analyzer.analyze_relevance_and_extract(
+                    raw_paper['content'], 
+                    claim_text, 
+                    ai_service=self.openai_service
+                )
             )
 
             print(f"Analyzed paper {raw_paper['corpusId']}")
@@ -368,7 +439,19 @@ class ValsciProcessor:
         try:
             paper_id = processed_paper['paper']['corpusId']
             self.papers_scoring_in_progress[paper_id] = True
-            score = await self.evidence_scorer.calculate_paper_weight(processed_paper, ai_service=self.openai_service)
+            score = await self.evidence_scorer.calculate_paper_weight(
+                processed_paper, 
+                ai_service=self.openai_service
+            )
+
+            # If you want to estimate tokens for scoring:
+            estimated_tokens_for_scoring = 500  # as an example
+            self.request_token_estimates.append({'tokens': estimated_tokens_for_scoring, 'timestamp': time.time()})
+            self._add_tokens_for_claim(claim_id, estimated_tokens_for_scoring, batch_id)
+
+            # Check if we exceeded the token cap
+            if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
+                return
 
             # Single lock context for all file operations
             lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
@@ -396,49 +479,69 @@ class ValsciProcessor:
 
     async def generate_final_report(self, claim_data, batch_id: str, claim_id: str) -> None:
         """Generate the final report."""
-        if len(claim_data['processed_papers']) == 0:
-            logger.error(f"No processed papers found for claim {claim_id}")
-            claim_data['status'] = "processed"
-            report = {
-                "relevantPapers": [],
-                "nonRelevantPapers": self.claim_processor._format_non_relevant_papers(claim_data['non_relevant_papers']),
-                "inaccessiblePapers": self.claim_processor._format_inaccessible_papers(claim_data['inaccessible_papers']),
-                "explanation": "No relevant papers were found that support or refute this claim.",
-                "claimRating": 0,
-                "timing_stats": {},
-                "searchQueries": claim_data['semantic_scholar_queries'],
-                "claim_text": claim_data['text']
-            }
-            claim_data['report'] = report
+        try:
+            # Estimate tokens for final report generation
+            estimated_tokens_for_final_report = 1000 + (
+                sum(len(excerpt) for paper in claim_data.get('processed_papers', [])
+                    for excerpt in paper.get('excerpts', []) if isinstance(excerpt, str)) +
+                sum(len(explanation) for paper in claim_data.get('processed_papers', [])
+                    for explanation in paper.get('explanations', []) if isinstance(explanation, str))
+            ) / 3.5
+            
+            self.request_token_estimates.append({'tokens': estimated_tokens_for_final_report, 'timestamp': time.time()})
+            self._add_tokens_for_claim(claim_id, estimated_tokens_for_final_report, batch_id)
 
-            # Single lock context for file operations
-            lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
-            self._log_lock("creating", lock_path, f"save empty report for claim {claim_id}")
-            with FileLock(lock_path):
-                self._write_claim_data(claim_data, batch_id, claim_id)
-            self._log_lock("released", lock_path, f"save empty report for claim {claim_id}")
+            # Check if we exceeded the token cap
+            if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
+                return
+
+            if len(claim_data['processed_papers']) == 0:
+                logger.error(f"No processed papers found for claim {claim_id}")
+                claim_data['status'] = "processed"
+                report = {
+                    "relevantPapers": [],
+                    "nonRelevantPapers": self.claim_processor._format_non_relevant_papers(claim_data['non_relevant_papers']),
+                    "inaccessiblePapers": self.claim_processor._format_inaccessible_papers(claim_data['inaccessible_papers']),
+                    "explanation": "No relevant papers were found that support or refute this claim.",
+                    "claimRating": 0,
+                    "timing_stats": {},
+                    "searchQueries": claim_data['semantic_scholar_queries'],
+                    "claim_text": claim_data['text']
+                }
+                claim_data['report'] = report
+
+                # Single lock context for file operations
+                lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
+                self._log_lock("creating", lock_path, f"save empty report for claim {claim_id}")
+                with FileLock(lock_path):
+                    self._write_claim_data(claim_data, batch_id, claim_id)
+                self._log_lock("released", lock_path, f"save empty report for claim {claim_id}")
+                return
+
+            else:
+                report = await self.claim_processor.generate_final_report(
+                    claim_data['text'],
+                    claim_data['processed_papers'],
+                    claim_data['non_relevant_papers'],
+                    claim_data['inaccessible_papers'],
+                    claim_data['semantic_scholar_queries'],
+                    ai_service=self.openai_service
+                )
+                claim_data['report'] = report
+                claim_data['status'] = "processed"
+
+                # Single lock context for file operations
+                lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
+                self._log_lock("creating", lock_path, f"save final report for claim {claim_id}")
+                with FileLock(lock_path):
+                    self._write_claim_data(claim_data, batch_id, claim_id)
+                self._log_lock("released", lock_path, f"save final report for claim {claim_id}")
+
+            self.claims_final_reporting_in_progress[claim_id] = False
+
+        except Exception as e:
+            logger.error(f"Error preparing final report: {e}")
             return
-
-        else:
-            report = await self.claim_processor.generate_final_report(
-                claim_data['text'],
-                claim_data['processed_papers'],
-                claim_data['non_relevant_papers'],
-                claim_data['inaccessible_papers'],
-                claim_data['semantic_scholar_queries'],
-                ai_service=self.openai_service
-            )
-            claim_data['report'] = report
-            claim_data['status'] = "processed"
-
-            # Single lock context for file operations
-            lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
-            self._log_lock("creating", lock_path, f"save final report for claim {claim_id}")
-            with FileLock(lock_path):
-                self._write_claim_data(claim_data, batch_id, claim_id)
-            self._log_lock("released", lock_path, f"save final report for claim {claim_id}")
-
-        self.claims_final_reporting_in_progress[claim_id] = False
 
     async def check_for_claims(self):
         """Check for any queued claims and process them."""
