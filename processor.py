@@ -45,7 +45,7 @@ class ValsciProcessor:
         # Keep track of token usage per claim
         self.claim_token_usage = {}
         # A per-claim cap on total tokens
-        self.max_tokens_per_claim = 30000  # pick your limit
+        self.max_tokens_per_claim = 300000  # pick your limit
 
         self.request_token_estimates = []
         self.max_tokens_per_minute = 450000
@@ -382,7 +382,6 @@ class ValsciProcessor:
             
             # Estimate tokens before analysis
             estimated_tokens_for_analysis = 1000 + (len(raw_paper['content']) / 3.5)
-            self.request_token_estimates.append({'tokens': estimated_tokens_for_analysis, 'timestamp': time.time()})
             self._add_tokens_for_claim(claim_id, estimated_tokens_for_analysis, batch_id)
 
             # Check if we exceeded the token cap
@@ -446,7 +445,6 @@ class ValsciProcessor:
 
             # If you want to estimate tokens for scoring:
             estimated_tokens_for_scoring = 500  # as an example
-            self.request_token_estimates.append({'tokens': estimated_tokens_for_scoring, 'timestamp': time.time()})
             self._add_tokens_for_claim(claim_id, estimated_tokens_for_scoring, batch_id)
 
             # Check if we exceeded the token cap
@@ -488,7 +486,6 @@ class ValsciProcessor:
                     for explanation in paper.get('explanations', []) if isinstance(explanation, str))
             ) / 3.5
             
-            self.request_token_estimates.append({'tokens': estimated_tokens_for_final_report, 'timestamp': time.time()})
             self._add_tokens_for_claim(claim_id, estimated_tokens_for_final_report, batch_id)
 
             # Check if we exceeded the token cap
