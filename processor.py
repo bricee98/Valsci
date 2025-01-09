@@ -166,7 +166,7 @@ class ValsciProcessor:
                 # Get the content of the paper
                 content_dict = self.s2_searcher.get_paper_content(raw_paper['corpusId'])
 
-                if content_dict['text'] is None:
+                if content_dict is None or content_dict.get('text') is None:
                     # Add to inaccessible papers using FileLock
                     with FileLock(f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"):
                         # First load the current file
