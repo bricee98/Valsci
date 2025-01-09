@@ -309,6 +309,7 @@ class ValsciProcessor:
             # If we have processed papers but with a score of -1, we need to score them
             for paper in claim_data['processed_papers']:
                 if paper['score'] == -1:
+                    print(f"Score is -1 for paper {paper['paper']['corpusId']} in claim {claim_id}")
                     # Check the estimated tokens for the scoring (always 500 for this)
                     estimated_tokens_for_scoring = 500
                     current_num_requests, current_num_tokens = self.calculate_tokens_in_last_minute()
@@ -446,17 +447,16 @@ class ValsciProcessor:
         """Score a single paper."""
         try:
             paper_id = processed_paper['paper']['corpusId']
+            # If you want to estimate tokens for scoring:
+            estimated_tokens_for_scoring = 500  # as an example
+            self._add_tokens_for_claim(claim_id, estimated_tokens_for_scoring, batch_id)
             self.papers_scoring_in_progress[paper_id] = True
             score = await self.evidence_scorer.calculate_paper_weight(
                 processed_paper, 
                 ai_service=self.openai_service
             )
-
-            # If you want to estimate tokens for scoring:
-            estimated_tokens_for_scoring = 500  # as an example
-            self._add_tokens_for_claim(claim_id, estimated_tokens_for_scoring, batch_id)
-
             # Check if we exceeded the token cap
+            print(f"Claim {claim_id} token usage as of scoring: {self.claim_token_usage[claim_id]}")
             if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
                 return
 
@@ -471,11 +471,13 @@ class ValsciProcessor:
                 # Update score
                 for paper in claim_data['processed_papers']:
                     if paper['paper']['corpusId'] == paper_id:
+                        print(f"Found paper to set score for: {paper_id}")
                         paper['score'] = score
                         break
 
                 # Write updated data
                 self._write_claim_data(claim_data, batch_id, claim_id)
+                print(f"Updated claim data for scoring paper {paper_id} in claim {claim_id}")
             self._log_lock("released", lock_path, f"save score for paper {paper_id}")
 
         except Exception as e:
