@@ -8,7 +8,6 @@ from app.services.claim_processor import ClaimProcessor
 from app.models.claim import Claim
 from app.models.batch_job import BatchJob
 from app.models.paper import Paper
-from app.services.literature_searcher import LiteratureSearcher
 from datetime import datetime
 import asyncio
 from typing import List
