@@ -24,6 +24,9 @@ SAVED_JOBS_DIR = 'saved_jobs'
 
 logger = logging.getLogger(__name__)
 
+# Initialize EmailService at module level
+email_service = EmailService()
+
 def save_claim_to_file(claim, batch_id, claim_id):
     claim_dir = os.path.join(QUEUED_JOBS_DIR, batch_id)
     os.makedirs(claim_dir, exist_ok=True)
@@ -155,13 +158,12 @@ def start_batch_job():
                 }, f)
         
         # Send start notification if email provided
-        if notification_email:
-            EmailService.send_batch_start_notification(
-                notification_email,
-                batch_id,
-                len(claims),
-                'regular'
-            )
+        email_service.send_batch_start_notification(
+            notification_email,
+            batch_id,
+            len(claims),
+            'regular'
+        )
         
         return jsonify({
             "batch_id": batch_id,
