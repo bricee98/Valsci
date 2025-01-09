@@ -158,40 +158,84 @@ class ValsciProcessor:
                 with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'w') as f:
                     json.dump(claim_data, f, indent=2)
 
-        # Iterate over the raw papers and check if any of them aren't in processed_papers or non_relevant_papers
-        for raw_paper in claim_data['raw_papers']:
-            if raw_paper['corpusId'] not in [paper['paper']['corpusId'] for paper in claim_data['processed_papers']] \
-            and raw_paper['corpusId'] not in [paper['paper']['corpusId'] for paper in claim_data['non_relevant_papers']] \
-            and raw_paper['corpusId'] not in [paper['paper']['corpusId'] for paper in claim_data['inaccessible_papers']]:
-                # Get the content of the paper
-                content_dict = self.s2_searcher.get_paper_content(raw_paper['corpusId'])
+        # Safely get corpus IDs from processed papers
+        processed_ids = []
+        for paper in claim_data.get('processed_papers', []):
+            try:
+                if isinstance(paper, dict) and isinstance(paper.get('paper'), dict):
+                    corpus_id = paper['paper'].get('corpusId')
+                    if corpus_id:
+                        processed_ids.append(corpus_id)
+            except Exception as e:
+                logger.warning(f"Error getting corpus ID from processed paper: {e}")
 
-                if content_dict is None or content_dict.get('text') is None:
-                    # Add to inaccessible papers using FileLock
-                    with FileLock(f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"):
-                        # First load the current file
-                        with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'r') as f:
-                            claim_data = json.load(f)
-                        # Add the inaccessible paper to the claim data
-                        claim_data['inaccessible_papers'].append(raw_paper)
-                        # Save the updated claim data back to the file
-                        with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'w') as f:
-                            json.dump(claim_data, f, indent=2)
+        # Safely get corpus IDs from non-relevant papers
+        non_relevant_ids = []
+        for paper in claim_data.get('non_relevant_papers', []):
+            try:
+                if isinstance(paper, dict) and isinstance(paper.get('paper'), dict):
+                    corpus_id = paper['paper'].get('corpusId')
+                    if corpus_id:
+                        non_relevant_ids.append(corpus_id)
+            except Exception as e:
+                logger.warning(f"Error getting corpus ID from non-relevant paper: {e}")
+
+        # Safely get corpus IDs from inaccessible papers
+        inaccessible_ids = []
+        for paper in claim_data.get('inaccessible_papers', []):
+            try:
+                corpus_id = paper.get('corpusId')
+                if corpus_id:
+                    inaccessible_ids.append(corpus_id)
+            except Exception as e:
+                logger.warning(f"Error getting corpus ID from inaccessible paper: {e}")
+
+        # Iterate over the raw papers with safer checks
+        for raw_paper in claim_data.get('raw_papers', []):
+            try:
+                corpus_id = raw_paper.get('corpusId')
+                if not corpus_id:
+                    logger.warning(f"Raw paper missing corpus ID: {raw_paper}")
                     continue
 
-                raw_paper['content'] = content_dict['text']
-                raw_paper['content_type'] = content_dict['source']
+                if (corpus_id not in processed_ids and 
+                    corpus_id not in non_relevant_ids and 
+                    corpus_id not in inaccessible_ids):
+                    
+                    # Get the content of the paper
+                    content_dict = self.s2_searcher.get_paper_content(corpus_id)
 
-                # Check the estimated tokens for the analysis
-                estimated_tokens_for_analysis = 1000 + (len(content_dict['text']) / 3.5)
-                if estimated_tokens_for_analysis + self.calculate_tokens_in_last_minute() < self.max_tokens_per_minute and not self.papers_analyzing_in_progress.get(raw_paper['corpusId']):
-                    # Start the analysis without blocking
-                    self.request_token_estimates.append({'tokens': estimated_tokens_for_analysis, 'timestamp': time.time()})
-                
-                    asyncio.create_task(self.analyze_single_paper(raw_paper, claim_data['text'], batch_id, claim_id))
-                else:
-                    # Skip the rest of this claim until the next iteration
-                    return
+                    if content_dict is None or content_dict.get('text') is None:
+                        # Add to inaccessible papers using FileLock
+                        with FileLock(f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"):
+                            # First load the current file
+                            with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'r') as f:
+                                claim_data = json.load(f)
+                            # Add the inaccessible paper to the claim data
+                            claim_data['inaccessible_papers'].append(raw_paper)
+                            # Save the updated claim data back to the file
+                            with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'w') as f:
+                                json.dump(claim_data, f, indent=2)
+                        continue
+
+                    raw_paper['content'] = content_dict['text']
+                    raw_paper['content_type'] = content_dict['source']
+
+                    
+                    estimated_tokens_for_analysis = 1000 + (len(content_dict['text']) / 3.5)
+                    if (estimated_tokens_for_analysis + self.calculate_tokens_in_last_minute() < self.max_tokens_per_minute and 
+                        not self.papers_analyzing_in_progress.get(corpus_id)):
+                        self.request_token_estimates.append({
+                            'tokens': estimated_tokens_for_analysis, 
+                            'timestamp': time.time()
+                        })
+                        asyncio.create_task(self.analyze_single_paper(raw_paper, claim_data['text'], batch_id, claim_id))
+                    else:
+                        return
+
+            except Exception as e:
+                logger.error(f"Error processing raw paper: {e}")
+                continue
 
         # Use FileLock when checking and updating processed papers
         lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
@@ -215,20 +259,53 @@ class ValsciProcessor:
                         return
 
             # Check completion status under the same lock
-            if all(paper['score'] != -1 for paper in claim_data['processed_papers']) \
-            and all(raw_paper['corpusId'] in [paper['paper']['corpusId'] for paper in claim_data['processed_papers']] \
-            or raw_paper['corpusId'] in [paper['paper']['corpusId'] for paper in claim_data['non_relevant_papers']] \
-            or raw_paper['corpusId'] in [paper['paper']['corpusId'] for paper in claim_data['inaccessible_papers']] \
-            for raw_paper in claim_data['raw_papers']):
+            all_papers_scored = True
+            for paper in claim_data.get('processed_papers', []):
+                try:
+                    if paper.get('score', -1) == -1:
+                        all_papers_scored = False
+                        break
+                except Exception as e:
+                    logger.warning(f"Error checking paper score: {e}")
+                    all_papers_scored = False
+                    break
+
+            all_papers_processed = True
+            try:
+                for raw_paper in claim_data.get('raw_papers', []):
+                    corpus_id = raw_paper.get('corpusId')
+                    if not corpus_id:
+                        continue
+                        
+                    if (corpus_id not in processed_ids and 
+                        corpus_id not in non_relevant_ids and 
+                        corpus_id not in inaccessible_ids):
+                        all_papers_processed = False
+                        break
+            except Exception as e:
+                logger.warning(f"Error checking paper processing status: {e}")
+                all_papers_processed = False
+
+            if all_papers_scored and all_papers_processed:
                 if not self.claims_final_reporting_in_progress.get(claim_id):
-                    estimated_tokens_for_final_report = 1000 + (sum(len(excerpt) for paper in claim_data['processed_papers'] for excerpt in paper['excerpts']) + sum(len(explanation) for paper in claim_data['processed_papers'] for explanation in paper['explanations'])) / 3.5
-                    if estimated_tokens_for_final_report + self.calculate_tokens_in_last_minute() < self.max_tokens_per_minute:
-                        self.request_token_estimates.append({'tokens': estimated_tokens_for_final_report, 'timestamp': time.time()})
-                        self.claims_final_reporting_in_progress[claim_id] = True
-                        # Generate the final report
-                        asyncio.create_task(self.generate_final_report(claim_data, batch_id, claim_id))
-                    else:
-                        # Skip the rest of this claim until the next iteration
+                    try:
+                        estimated_tokens_for_final_report = 1000 + (
+                            sum(len(excerpt) for paper in claim_data.get('processed_papers', [])
+                                for excerpt in paper.get('excerpts', []) if isinstance(excerpt, str)) +
+                            sum(len(explanation) for paper in claim_data.get('processed_papers', [])
+                                for explanation in paper.get('explanations', []) if isinstance(explanation, str))
+                        ) / 3.5
+                        
+                        if estimated_tokens_for_final_report + self.calculate_tokens_in_last_minute() < self.max_tokens_per_minute:
+                            self.request_token_estimates.append({'tokens': estimated_tokens_for_final_report, 'timestamp': time.time()})
+                            self.claims_final_reporting_in_progress[claim_id] = True
+                            # Generate the final report
+                            asyncio.create_task(self.generate_final_report(claim_data, batch_id, claim_id))
+                        else:
+                            # Skip the rest of this claim until the next iteration
+                            return
+                    except Exception as e:
+                        logger.error(f"Error preparing final report: {e}")
                         return
 
         self._log_lock("released", lock_path, "check and update processed papers")
