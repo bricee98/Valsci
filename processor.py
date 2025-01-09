@@ -390,9 +390,17 @@ class ValsciProcessor:
     def _write_claim_data(self, claim_data, batch_id, claim_id):
         """Internal method to write claim data without locking."""
         file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
+        logger.warning(
+            f"[_write_claim_data] Writing claim data to {file_path}.\n"
+            f"processed_papers scores: {[p['score'] for p in claim_data.get('processed_papers', [])]}"
+        )
         with open(file_path, 'w') as f:
             print(f"Writing claim data for claim {claim_id} in batch {batch_id}")
             json.dump(claim_data, f, indent=2)
+        logger.warning(
+            f"[_write_claim_data] Finished writing claim data to {file_path}.\n"
+            f"processed_papers scores: {[p['score'] for p in claim_data.get('processed_papers', [])]}"
+        )
 
     async def analyze_single_paper(self, raw_paper, claim_text, batch_id: str, claim_id: str) -> None:
         """Analyze a single paper."""
