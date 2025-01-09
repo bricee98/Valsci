@@ -2,18 +2,19 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import logging
-from app.config import settings  # Import settings directly instead of using Flask config
+from app.config.settings import Config  # Import Config class directly
 
 logger = logging.getLogger(__name__)
 
 class EmailService:
     def __init__(self):
-        self.enable_notifications = getattr(settings, 'ENABLE_EMAIL_NOTIFICATIONS', False)
-        self.smtp_server = getattr(settings, 'SMTP_SERVER', 'smtp.gmail.com')
-        self.smtp_port = getattr(settings, 'SMTP_PORT', 587)
-        self.sender_email = getattr(settings, 'EMAIL_SENDER', '')
-        self.app_password = getattr(settings, 'EMAIL_APP_PASSWORD', '')
-        self.base_url = getattr(settings, 'BASE_URL', 'http://localhost:5000')
+        # Get settings directly from Config class
+        self.enable_notifications = Config.ENABLE_EMAIL_NOTIFICATIONS
+        self.smtp_server = Config.SMTP_SERVER
+        self.smtp_port = Config.SMTP_PORT
+        self.sender_email = Config.EMAIL_SENDER
+        self.app_password = Config.EMAIL_APP_PASSWORD
+        self.base_url = Config.BASE_URL
 
     def send_batch_start_notification(self, recipient_email, batch_id, num_claims, review_type):
         if not self.enable_notifications:
