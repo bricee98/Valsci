@@ -584,7 +584,7 @@ class ValsciProcessor:
                     file_path = os.path.join(batch_dir, filename)
                     try:
                         with open(file_path, 'r') as f:
-                            print(f"Loading claim data for check_for_claims in claim {claim_id}")
+                            print(f"Loading claim data for check_for_claims in claim {filename}")
                             claim_data = json.load(f)
 
                         claim_id = claim_data['claim_id']
@@ -641,7 +641,7 @@ class ValsciProcessor:
                                 if os.path.exists(notification_file):
                                     with FileLock(f"{notification_file}.lock"):
                                         with open(notification_file, 'r') as f:
-                                            print(f"Loading notification data for claim {claim_id}")
+                                            print(f"Loading notification data for batch")
                                             notification_data = json.load(f)
                                         if notification_data['email']:
                                             self.email_service.send_batch_completion_notification(notification_data['email'], batch_id, 
