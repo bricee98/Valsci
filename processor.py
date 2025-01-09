@@ -72,6 +72,7 @@ class ValsciProcessor:
                 file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
                 if os.path.exists(file_path):
                     with open(file_path, 'r') as f:
+                        print(f"Loading claim data for max tokens cap in claim {claim_id}")
                         claim_data = json.load(f)
 
                     claim_data['status'] = 'processed'
@@ -115,6 +116,7 @@ class ValsciProcessor:
         # Save the queries to a file
         # First load the current file
         with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'r') as f:
+            print(f"Generate search queries: Loading claim data for query generation in claim {claim_id}")
             claim_data = json.load(f)
         # Add the queries to the claim data
         claim_data['semantic_scholar_queries'] = queries
@@ -122,6 +124,7 @@ class ValsciProcessor:
         claim_data['status'] = 'ready_for_search'
         # Save the updated claim data back to the file
         with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'w') as f:
+            print(f"Generate search queries: Writing claim data for claim {claim_id} in batch {batch_id}")
             json.dump(claim_data, f, indent=2)
 
         return
@@ -174,6 +177,7 @@ class ValsciProcessor:
                 claim_data['status'] = 'ready_for_analysis'
 
             with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'w') as f:
+                print(f"Search papers: Writing claim data for claim {claim_id} in batch {batch_id}")
                 json.dump(claim_data, f, indent=2)
 
             return
@@ -215,6 +219,7 @@ class ValsciProcessor:
                     claim_data['non_relevant_papers'] = []
                 # Save the updated claim data back to the file
                 with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'w') as f:
+                    print(f"Analyze claim: Writing claim data for claim {claim_id} in batch {batch_id}")
                     json.dump(claim_data, f, indent=2)
 
         # Safely get corpus IDs from processed papers
@@ -269,11 +274,13 @@ class ValsciProcessor:
                         with FileLock(f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"):
                             # First load the current file
                             with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'r') as f:
+                                print(f"Loading claim data for inaccessible paper {raw_paper['corpusId']} in claim {claim_id}")
                                 claim_data = json.load(f)
                             # Add the inaccessible paper to the claim data
                             claim_data['inaccessible_papers'].append(raw_paper)
                             # Save the updated claim data back to the file
                             with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'w') as f:
+                                print(f"Saving updated claim data for inaccessible paper {raw_paper['corpusId']} in claim {claim_id}")
                                 json.dump(claim_data, f, indent=2)
                         continue
 
@@ -304,6 +311,7 @@ class ValsciProcessor:
         with FileLock(lock_path):
             # Reload claim data to get latest state
             with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'r') as f:
+                print(f"Analyze claim: Loading claim data for processed papers in claim {claim_id}")
                 claim_data = json.load(f)
             
             # If we have processed papers but with a score of -1, we need to score them
@@ -383,6 +391,7 @@ class ValsciProcessor:
         """Internal method to write claim data without locking."""
         file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
         with open(file_path, 'w') as f:
+            print(f"Writing claim data for claim {claim_id} in batch {batch_id}")
             json.dump(claim_data, f, indent=2)
 
     async def analyze_single_paper(self, raw_paper, claim_text, batch_id: str, claim_id: str) -> None:
@@ -414,6 +423,7 @@ class ValsciProcessor:
             with FileLock(lock_path):
                 # Load current state
                 with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'r') as f:
+                    print(f"Loading claim data for analysis of paper {raw_paper['corpusId']} in claim {claim_id}")
                     claim_data = json.load(f)
 
                 # Update claim data
@@ -435,6 +445,7 @@ class ValsciProcessor:
                     })
 
                 # Write updated data
+                print(f"Analyze claim: Writing claim data for claim {claim_id} in batch {batch_id}")
                 self._write_claim_data(claim_data, batch_id, claim_id)
             self._log_lock("released", lock_path, f"save analysis for paper {raw_paper['corpusId']}")
 
@@ -466,6 +477,7 @@ class ValsciProcessor:
             with FileLock(lock_path):
                 # Load current state
                 with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'r') as f:
+                    print(f"Loading claim data for scoring paper {paper_id} in claim {claim_id}")
                     claim_data = json.load(f)
 
                 # Update score
@@ -476,6 +488,7 @@ class ValsciProcessor:
                         break
 
                 # Write updated data
+                print(f"Save score: Writing claim data for claim {claim_id} in batch {batch_id}")
                 self._write_claim_data(claim_data, batch_id, claim_id)
                 print(f"Updated claim data for scoring paper {paper_id} in claim {claim_id}")
             self._log_lock("released", lock_path, f"save score for paper {paper_id}")
@@ -522,6 +535,7 @@ class ValsciProcessor:
                 lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
                 self._log_lock("creating", lock_path, f"save empty report for claim {claim_id}")
                 with FileLock(lock_path):
+                    print(f"Generate final report: Writing claim data for claim {claim_id} in batch {batch_id}")
                     self._write_claim_data(claim_data, batch_id, claim_id)
                 self._log_lock("released", lock_path, f"save empty report for claim {claim_id}")
                 return
@@ -542,6 +556,7 @@ class ValsciProcessor:
                 lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
                 self._log_lock("creating", lock_path, f"save final report for claim {claim_id}")
                 with FileLock(lock_path):
+                    print(f"Generate final report: Writing claim data for claim {claim_id} in batch {batch_id}")
                     self._write_claim_data(claim_data, batch_id, claim_id)
                 self._log_lock("released", lock_path, f"save final report for claim {claim_id}")
 
@@ -569,6 +584,7 @@ class ValsciProcessor:
                     file_path = os.path.join(batch_dir, filename)
                     try:
                         with open(file_path, 'r') as f:
+                            print(f"Loading claim data for check_for_claims in claim {claim_id}")
                             claim_data = json.load(f)
 
                         claim_id = claim_data['claim_id']
@@ -625,6 +641,7 @@ class ValsciProcessor:
                                 if os.path.exists(notification_file):
                                     with FileLock(f"{notification_file}.lock"):
                                         with open(notification_file, 'r') as f:
+                                            print(f"Loading notification data for claim {claim_id}")
                                             notification_data = json.load(f)
                                         if notification_data['email']:
                                             self.email_service.send_batch_completion_notification(notification_data['email'], batch_id, 
