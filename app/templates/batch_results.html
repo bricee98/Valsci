@@ -82,7 +82,7 @@
                 widthGrow: 1,
                 formatter: function(cell) {
                     const claim_id = cell.getRow().getData().claim_id;
-                    return `<a href="/results?claim_id=${claim_id}" class="report-link">View Report</a>`;
+                    return `<a href="/results?claim_id=${claim_id}&batch_id=${batchId}" class="report-link">View Report</a>`;
                 },
                 headerSort: false
             }

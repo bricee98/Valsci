@@ -173,7 +173,9 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             
             if (data.batch_id) {
-                // Redirect to progress page
+                // Store batch_id in localStorage for progress tracking
+                localStorage.setItem('currentBatchId', data.batch_id);
+                // Redirect to progress page with batch_id
                 window.location.href = `/progress?batch_id=${data.batch_id}`;
             } else {
                 throw new Error('No batch_id received');
@@ -224,4 +226,16 @@ document.addEventListener('DOMContentLoaded', function() {
         toggleInstructions.querySelector('.toggle-text').textContent = 
             isHidden ? 'Hide Instructions' : 'Show Instructions';
     });
+
+    // Add this function to check claim status with batch_id
+    async function checkClaimStatus(claimId, batchId) {
+        try {
+            const response = await fetch(`/api/v1/claims/${batchId}/${claimId}`);
+            const data = await response.json();
+            return data;
+        } catch (error) {
+            console.error('Error checking claim status:', error);
+            return null;
+        }
+    }
 });
