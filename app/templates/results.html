@@ -165,14 +165,15 @@
                 </div>
             `;
 
-            // Add usage stats with null check
-            if (data.report.usage_stats) {
+            // Add usage stats with proper null checks
+            if (data.report?.usage_stats) {
+                const stats = data.report.usage_stats;
                 const usageStatsHtml = `
                     <h3>OpenAI API Usage:</h3>
-                    <p>Prompt Tokens: ${data.report.usage_stats.prompt_tokens}</p>
-                    <p>Completion Tokens: ${data.report.usage_stats.completion_tokens}</p>
-                    <p>Total Tokens: ${data.report.usage_stats.total_tokens}</p>
-                    <p>Estimated Cost: $${data.report.usage_stats.total_cost.toFixed(4)}</p>
+                    <p>Prompt Tokens: ${stats.prompt_tokens || 0}</p>
+                    <p>Completion Tokens: ${stats.completion_tokens || 0}</p>
+                    <p>Total Tokens: ${stats.total_tokens || 0}</p>
+                    <p>Estimated Cost: $${(stats.total_cost || 0).toFixed(4)}</p>
                 `;
                 document.getElementById('usageStats').innerHTML = usageStatsHtml;
             } else {
@@ -193,7 +194,7 @@
                 fetch(`/api/v1/claims/${batchId}/${claimId}/report`)
                     .then(response => response.json())
                     .then(data => {
-                        if (data.report) {
+                        if (data.report || data.additional_info) {  // Check for both possible properties
                             displayReport(data);
                         } else {
                             reportContent.textContent = 'Report not found.';
