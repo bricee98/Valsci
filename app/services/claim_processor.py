@@ -24,15 +24,15 @@ class ClaimProcessor:
         """Format non-relevant papers for the report."""
         try:
             return [{
-                "title": paper['paper'].get('title', 'Unknown Title'),
+                "title": paper.get('title', 'Unknown Title'),
                 "authors": [
                     {
                         "name": author.get('name', 'Unknown'),
                         "hIndex": author.get('hIndex', 0)
                     }
-                    for author in paper['paper'].get('authors', [])
+                    for author in paper.get('authors', [])
                 ],
-                "link": paper['paper'].get('url'),
+                "link": paper.get('url'),
                 "explanation": paper.get('explanation', 'No explanation available'),
                 "content_type": paper.get('content_type', 'unknown')
             } for paper in (papers or [])]
@@ -44,19 +44,19 @@ class ClaimProcessor:
         """Format inaccessible papers for the report."""
         try:
             return [{
-                "title": paper['paper'].title,
+                "title": paper.get('title', 'Unknown Title'),
                 "authors": [
-                {
-                    "name": author['name'],
-                    "hIndex": author.get('hIndex', 0)
-                }
-                for author in paper['paper'].authors
-            ],
-                "link": paper['paper'].url,
-                "reason": paper['reason']
-            } for paper in papers]
+                    {
+                        "name": author.get('name', 'Unknown'),
+                        "hIndex": author.get('hIndex', 0)
+                    }
+                    for author in paper.get('authors', [])
+                ],
+                "link": paper.get('url'),
+                "reason": "Paper content not accessible"
+            } for paper in (papers or [])]
         except Exception as e:
-            print("Error formatting inaccessible papers: ", e)
+            logger.error(f"Error formatting inaccessible papers: {str(e)}")
             return []
 
     async def generate_final_report(self, claim_text: str, processed_papers: List[dict], 
