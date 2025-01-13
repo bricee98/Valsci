@@ -48,8 +48,8 @@ class ValsciProcessor:
         self.max_tokens_per_claim = 300000  # pick your limit
 
         self.request_token_estimates = []
-        self.max_tokens_per_minute = 450000
-        self.max_requests_per_minute = 2000
+        self.max_tokens_per_minute = 150000
+        self.max_requests_per_minute = 500
         self.last_token_update_time = time.time()
 
         self._active_locks = set()
@@ -362,7 +362,7 @@ class ValsciProcessor:
             if all_papers_scored and all_papers_processed:
                 if not self.claims_final_reporting_in_progress.get(claim_id):
                     try:
-                        estimated_tokens_for_final_report = 1000 + (
+                        estimated_tokens_for_final_report = 2000 + (
                             sum(len(excerpt) for paper in claim_data.get('processed_papers', [])
                                 for excerpt in paper.get('excerpts', []) if isinstance(excerpt, str)) +
                             sum(len(explanation) for paper in claim_data.get('processed_papers', [])
@@ -378,6 +378,7 @@ class ValsciProcessor:
                             asyncio.create_task(self.generate_final_report(claim_data, batch_id, claim_id))
                         else:
                             # Skip the rest of this claim until the next iteration
+                            print(f"Claim {claim_id} does not have enough tokens for final report generation")
                             return
                     except Exception as e:
                         logger.error(f"Error preparing final report: {e}")
@@ -621,11 +622,17 @@ class ValsciProcessor:
                                     asyncio.create_task(self.generate_search_queries(claim_data, batch_id, claim_id))
                                 else:
                                     # skip this claim until the next iteration
+                                    print(f"Claim {claim_id} does not have enough tokens for query generation")
                                     continue
+                            else:
+                                # skip this claim until the next iteration
+                                print(f"Claim {claim_id} is already in progress")
+                                continue
                         if claim_data.get('status') == 'ready_for_search':
                             # Check whether there is currently a claim with searching in progress
                             if any(self.claims_searching_in_progress.get(claim_id) for claim_id in self.claims_searching_in_progress):
                                 # skip this claim until the next iteration
+                                print(f"A claim is already being searched")
                                 continue
                             else:
                                 # Mark this claim as searching in progress
@@ -647,6 +654,8 @@ class ValsciProcessor:
                             saved_batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
                             os.makedirs(saved_batch_dir, exist_ok=True)
                             shutil.move(file_path, os.path.join(saved_batch_dir, f"{claim_id}.txt"))
+                            # Remove the lock file
+                            os.remove(f"{file_path}.lock")
 
                             # Send an email if notifications are enabled and there are no more queued claims in this batch
                             # There is a notification.json file with fields email and num_claims

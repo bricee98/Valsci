@@ -1,6 +1,6 @@
 # Valsci
 
-**A self-hosted, bring-your-own-API-key automated literature review tool.**
+**A self-hosted, open-source automated literature review tool.**
 
 ## Overview
 
@@ -10,106 +10,181 @@ Valsci is designed to validate scientific claims by leveraging a combination of 
 
 - **Claim Validation**: Automatically validate scientific claims using a robust pipeline that includes literature search, paper analysis, and evidence scoring.
 - **Batch Processing**: Submit multiple claims at once via file upload for batch processing.
-- **Detailed Reports**: Generate comprehensive reports for each claim, including supporting papers, explanations, and claim ratings.
+- **LLM Evaluation**: Integrate with SOTA LLMs - self-hosted or from providers - to create reasoned, thought-out reports on the literature support for submitted claims.
 - **Web Interface**: User-friendly web interface for submitting claims, checking status, and browsing results.
 - **API Access**: RESTful API for programmatic access to claim validation and batch processing.
-
-## Note
-
-Valsci is not a scraper, and is not meant to be used as one - it's designed to be a tool used by a human to more efficiently conduct their literature review process. Please do not leverage Valsci for generalized scraping and storing of papers.
 
 ## Getting Started
 
 ### Prerequisites
 
 - Python 3.8 or higher
+- PM2 (for production deployment)
+- A Semantic Scholar API Key (with S2ORC access)
+- Disk space for Semantic Scholar datasets:
+  - Papers dataset: ~200GB
+  - Abstracts dataset: ~140GB
+  - Authors dataset: ~25GB
+  - S2ORC dataset: ~1.1TB
+  - TLDRs dataset: ~20GB
+  - Indices: ~150GB
 
 ### Required Python Packages
 
-The following packages are required and will be installed via `requirements.txt`:
+The required packages are listed in `requirements.txt`. Install them using:
 
-- Flask
-- python-dotenv
-- requests
-- pandas
-- beautifulsoup4
-- pymupdf4llm
-- PyPDF2
-- urllib3
-- fake-useragent
-- openai
-- brotli
-- chardet
-- pymupdf
-- bs4
-- python-dateutil
-- typing-extensions
+```bash
+pip install -r requirements.txt
+```
 
-### Installation
+### Configuration
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/yourusername/valsci.git
-   cd valsci
-   ```
+1. **Create configuration file:**
 
-2. **Set up a virtual environment:**
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows use `venv\Scripts\activate`
-   ```
+Create a `config/env_vars.json` file with the following structure:
 
-3. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+```json
+{
+    "FLASK_SECRET_KEY": "your_secret_key",
+    "USER_EMAIL": "your_email@example.com",
+    "SEMANTIC_SCHOLAR_API_KEY": "your_semantic_scholar_api_key",
+    "AI_PROVIDER": "openai",  // Can be "openai", "azure", or "local"
+    "AI_API_KEY": "your_api_key",  // Required for OpenAI and Azure OpenAI
+    "AI_BASE_URL": "http://localhost:8000",  // Required for local AI provider
+    "REQUIRE_PASSWORD": "true",  // Optional password protection for internet hosting
+    "ACCESS_PASSWORD": "your_access_password",  // Required if REQUIRE_PASSWORD is true
+    
+    // Optional Azure OpenAI configuration
+    "USE_AZURE_OPENAI": "false",
+    "AZURE_OPENAI_ENDPOINT": "your_azure_endpoint",
+    "AZURE_OPENAI_API_VERSION": "2024-06-01",
+    
+    // Optional email notification configuration
+    "ENABLE_EMAIL_NOTIFICATIONS": "false",
+    "EMAIL_SENDER": "your_gmail@gmail.com",
+    "EMAIL_APP_PASSWORD": "your_gmail_app_password",
+    "SMTP_SERVER": "smtp.gmail.com",
+    "SMTP_PORT": "587",
+    "BASE_URL": "https://your-domain.com"
+}
+```
 
-4. **Set up environment variables:**
+### Downloading and Indexing Semantic Scholar Datasets
 
-   Create a `config/env_vars.json` file in the `config` directory and add the necessary environment variables. Here is an example of what the file should look like:
+Valsci requires local copies of Semantic Scholar datasets for efficient paper lookup and analysis. The datasets are downloaded and indexed using the provided downloader utility.
 
-   ```json
-   {
-       "FLASK_SECRET_KEY": "your_secret_key",
-       "OPENAI_API_KEY": "your_openai_api_key",
-       "ANTHROPIC_API_KEY": "your_anthropic_api_key",
-       "USER_EMAIL": "your_email@example.com",
-       "AZURE_OPENAI_API_KEY": "your_azure_openai_api_key",
-       "AZURE_OPENAI_ENDPOINT": "your_azure_openai_endpoint",
-       "AZURE_OPENAI_API_VERSION": "2024-06-01",
-       "USE_AZURE_OPENAI": "false",
-       "REQUIRE_PASSWORD": "true",
-       "ACCESS_PASSWORD": "your_access_password"
-   }
-   ```
+1. **Basic Usage:**
+```bash
+python -m semantic_scholar.utils.downloader
+```
 
-   **Note:**
-   - `FLASK_SECRET_KEY` and `USER_EMAIL` are required.
-   - If `USE_AZURE_OPENAI` is set to `"true"`, you must provide `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT`.
-   - If `REQUIRE_PASSWORD` is set to `"true"`, you must provide `ACCESS_PASSWORD`.
+2. **Download Options:**
+```bash
+# Download minimal datasets for testing
+python -m semantic_scholar.utils.downloader --mini
 
-5. **Run the application:**
-   ```bash
-   python run.py
-   ```
+# Download specific datasets
+python -m semantic_scholar.utils.downloader --datasets papers abstracts authors
 
-   The application will be available at `http://localhost:3000`.
+# Download without indexing
+python -m semantic_scholar.utils.downloader --download-only
 
-### Usage
+# Only create indices for downloaded datasets
+python -m semantic_scholar.utils.downloader --index-only
+```
 
-- **Submit a Claim**: Use the web interface to enter a claim and submit it for validation.
-- **Upload a File**: Upload a text file containing multiple claims for batch processing.
-- **Check Status**: Enter a claim or batch reference ID to check the processing status.
-- **Browse Results**: View processed claims and batch results through the browser interface.
+3. **Verification and Maintenance:**
+```bash
+# Verify downloads are complete
+python -m semantic_scholar.utils.downloader --verify
 
-## API Documentation
+# Verify index integrity
+python -m semantic_scholar.utils.downloader --verify-index
 
-The API provides endpoints for submitting claims, checking status, and retrieving reports. Below are some key endpoints:
+# Show detailed index statistics
+python -m semantic_scholar.utils.downloader --count
 
-- `POST /api/v1/claims`: Submit a single claim for validation.
-- `GET /api/v1/claims/<claim_id>`: Retrieve the status of a specific claim.
-- `POST /api/v1/batch`: Start a batch job by uploading a file of claims.
-- `GET /api/v1/batch/<batch_id>`: Get the status and results of a batch job.
+# Audit datasets and indices
+python -m semantic_scholar.utils.downloader --audit
+```
+
+The datasets will be downloaded to `semantic_scholar/datasets/` and indexed for fast lookup. The indexing process creates binary indices in `semantic_scholar/datasets/binary_indices/`.
+
+**Note:** S2ORC access requires special API permissions. Visit https://api.semanticscholar.org/s2orc to request access.
+
+### Running the Application
+
+Valsci consists of two main services:
+
+1. **Web Server**: Handles HTTP requests and serves the web interface
+2. **Claim Processor**: Processes claims in the background
+
+
+### AI Integrations
+
+Valsci can be used with any OpenAI-compatible text completion LLM API provider. It's set up for out-of-the-box usage with a locally-hosted llama.cpp server, the OpenAI API, or the Azure-hosted OpenAI API.
+
+To set up a locally-hosted inference server, please see the [llama.cpp repository](https://github.com/ggerganov/llama.cpp) and specifically the [server examples](https://github.com/ggerganov/llama.cpp/tree/master/examples/server). For OpenAI and Azure OpenAI, you must set up appropriate API credentials in your configuration file.
+
+#### Development Mode
+
+Run the web server:
+```bash
+python run.py
+```
+
+Run the processor:
+```bash
+python processor.py
+```
+
+#### Production Mode
+
+Use the provided shell scripts with PM2:
+
+```bash
+# Start the web server
+./run_server.sh
+
+# Start the claim processor
+./run_processor.sh
+
+# Monitor services
+pm2 status
+pm2 logs
+```
+
+The application will be available at `http://localhost:3000`.
+
+## API Routes
+
+### Claims
+
+- `POST /api/v1/claims`: Submit a single claim
+- `GET /api/v1/claims/<batch_id>/<claim_id>`: Get claim status
+- `GET /api/v1/claims/<batch_id>/<claim_id>/report`: Get claim report
+- `GET /api/v1/claims/<claim_id>/download_citations`: Download citations in RIS format
+
+### Batch Processing
+
+- `POST /api/v1/batch`: Submit multiple claims via file upload
+- `GET /api/v1/batch/<batch_id>`: Get batch status
+- `GET /api/v1/batch/<batch_id>/progress`: Get batch progress
+- `GET /api/v1/batch/<batch_id>/download`: Download batch results
+- `DELETE /api/v1/batch/<batch_id>`: Delete a batch
+
+### Management
+
+- `GET /api/v1/browse`: Browse saved batches and claims
+- `DELETE /api/v1/delete/claim/<claim_id>`: Delete a specific claim
+
+### Web Interface Routes
+
+- `/`: Home page
+- `/results`: View claim results
+- `/progress`: View processing progress
+- `/browser`: Browse saved claims and batches
+- `/batch_results`: View batch results
 
 ## Contributing
 
@@ -121,7 +196,7 @@ This project is licensed under the GNU General Public License. See the [LICENSE]
 
 ## Contact
 
-For questions or support, please contact [bricee98@gmail.com](mailto:bricee98@gmail.com).
+For questions or support, please contact [bedelman3@gatech.edu](mailto:bedelman3@gatech.edu).
 
 ## Version
-The current version is 0.1.4. This version will increment when any changes are made to the report generation logic that could affect results.
+The current version is 0.1.5. This version will increment when any changes are made to the report generation logic that could affect results.

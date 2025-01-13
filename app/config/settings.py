@@ -17,13 +17,9 @@ except json.JSONDecodeError:
 class Config:
     SECRET_KEY = env_vars.get('FLASK_SECRET_KEY')
     SEMANTIC_SCHOLAR_API_KEY = env_vars.get('SEMANTIC_SCHOLAR_API_KEY')
-    OPENAI_API_KEY = env_vars.get('OPENAI_API_KEY')
-    ANTHROPIC_API_KEY = env_vars.get('ANTHROPIC_API_KEY')
     USER_EMAIL = env_vars.get('USER_EMAIL')
-    FETCH_ABSTRACTS = True  # Set this to False if you don't want to fetch abstracts
 
     # Azure OpenAI configuration
-    AZURE_OPENAI_API_KEY = env_vars.get('AZURE_OPENAI_API_KEY')
     AZURE_OPENAI_ENDPOINT = env_vars.get('AZURE_OPENAI_ENDPOINT')
     AZURE_OPENAI_API_VERSION = env_vars.get('AZURE_OPENAI_API_VERSION', '2024-06-01')
     USE_AZURE_OPENAI = env_vars.get('USE_AZURE_OPENAI', 'false').lower() == 'true'
@@ -40,21 +36,28 @@ class Config:
     REQUIRE_PASSWORD = env_vars.get('REQUIRE_PASSWORD', 'false').lower() == 'true'
     ACCESS_PASSWORD = env_vars.get('ACCESS_PASSWORD')
 
+    # AI Service Settings
+    AI_PROVIDER = os.getenv("AI_PROVIDER", "openai")  # 'azure', 'openai', or 'local'
+    AI_BASE_URL = os.getenv("AI_BASE_URL", "http://localhost:8000")
+    AI_API_KEY = os.getenv("AI_API_KEY", "")
+    AI_API_VERSION = os.getenv("AI_API_VERSION", "2024-02-01")
+
     @classmethod
     def validate_config(cls):
-        required_keys = ['SECRET_KEY', 'USER_EMAIL', 'SEMANTIC_SCHOLAR_API_KEY']
-        if cls.USE_AZURE_OPENAI:
-            required_keys.extend(['AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_ENDPOINT'])
-        else:
-            required_keys.append('OPENAI_API_KEY')
+        required_keys = ['AI_PROVIDER', 'SECRET_KEY', 'USER_EMAIL', 'SEMANTIC_SCHOLAR_API_KEY']
+        if cls.AI_PROVIDER == "azure":
+            required_keys.extend(['AI_API_KEY', 'AZURE_OPENAI_ENDPOINT'])
+        elif cls.AI_PROVIDER == "openai":
+            required_keys.append('AI_API_KEY')
+        elif cls.AI_PROVIDER == "llamacpp":
+            required_keys.append('AI_BASE_URL')
+        
+        if cls.ENABLE_EMAIL_NOTIFICATIONS:
+            required_keys.extend(['EMAIL_SENDER', 'EMAIL_APP_PASSWORD', 'SMTP_SERVER', 'SMTP_PORT', 'BASE_URL'])
 
         # Add password validation
         if cls.REQUIRE_PASSWORD and not cls.ACCESS_PASSWORD:
             required_keys.append('ACCESS_PASSWORD')
-
-        # Add email notification validation
-        if cls.ENABLE_EMAIL_NOTIFICATIONS:
-            required_keys.extend(['EMAIL_SENDER', 'EMAIL_APP_PASSWORD'])
 
         missing_keys = [key for key in required_keys if getattr(cls, key) is None]
         if missing_keys:
