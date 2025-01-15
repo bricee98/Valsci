@@ -200,6 +200,8 @@ class S2Searcher:
             try:
                 console.print(f"[green]Searching for papers with query: {query}[/green] (Attempt {retry_count + 1}/{max_retries})")
                 
+                await asyncio.sleep(0.5)
+
                 response = self.session.get(
                     "https://api.semanticscholar.org/graph/v1/paper/search",
                     params={
