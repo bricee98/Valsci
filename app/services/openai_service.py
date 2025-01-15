@@ -13,6 +13,7 @@ class OpenAIService:
         self.model = Config.LLM_EVALUATION_MODEL
         self.provider = Config.LLM_PROVIDER.lower()
         if self.provider == "azure":
+            print(f"Using Azure OpenAI with model {self.model}")
             self.client = openai.AzureOpenAI(
                 api_key=Config.LLM_API_KEY,
                 azure_endpoint=Config.AZURE_OPENAI_ENDPOINT,
@@ -26,9 +27,11 @@ class OpenAIService:
         else:
             self.base_url = Config.LLM_BASE_URL
             if self.provider == "openai":
+                print(f"Using OpenAI with model {self.model}")
                 self.client = openai.OpenAI(api_key=Config.LLM_API_KEY)
                 self.async_client = openai.AsyncOpenAI(api_key=Config.LLM_API_KEY)
             elif self.provider == "llamacpp":
+                print(f"Using LlamaCPP with model {self.model}")
                 self.client = openai.AsyncOpenAI(base_url=self.base_url, api_key="sk-no-key-required")
                 self.async_client = openai.AsyncOpenAI(base_url=self.base_url, api_key="sk-no-key-required")
         
