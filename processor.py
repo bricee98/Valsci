@@ -52,6 +52,9 @@ class ValsciProcessor:
         self.max_requests_per_minute = 500
         self.last_token_update_time = time.time()
 
+        # Use the model from settings instead of Config
+        self.model = settings.Config.LLM_EVALUATION_MODEL
+
         self._active_locks = set()
 
     def _add_tokens_for_claim(self, claim_id: str, tokens: float, batch_id: str):

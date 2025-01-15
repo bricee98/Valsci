@@ -22,7 +22,6 @@ class Config:
     # Azure OpenAI configuration
     AZURE_OPENAI_ENDPOINT = env_vars.get('AZURE_OPENAI_ENDPOINT')
     AZURE_OPENAI_API_VERSION = env_vars.get('AZURE_OPENAI_API_VERSION', '2024-06-01')
-    USE_AZURE_OPENAI = env_vars.get('USE_AZURE_OPENAI', 'false').lower() == 'true'
 
     # Email notification configuration
     ENABLE_EMAIL_NOTIFICATIONS = env_vars.get('ENABLE_EMAIL_NOTIFICATIONS', 'false').lower() == 'true'
@@ -37,20 +36,21 @@ class Config:
     ACCESS_PASSWORD = env_vars.get('ACCESS_PASSWORD')
 
     # AI Service Settings
-    AI_PROVIDER = os.getenv("AI_PROVIDER", "openai")  # 'azure', 'openai', or 'local'
-    AI_BASE_URL = os.getenv("AI_BASE_URL", "http://localhost:8000")
-    AI_API_KEY = os.getenv("AI_API_KEY", "")
-    AI_API_VERSION = os.getenv("AI_API_VERSION", "2024-02-01")
+    LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai")  # 'azure', 'openai', or 'local'
+    LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8000")
+    LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+    LLM_EVALUATION_MODEL = os.getenv("LLM_EVALUATION_MODEL", "gpt-4o")
+
 
     @classmethod
     def validate_config(cls):
-        required_keys = ['AI_PROVIDER', 'SECRET_KEY', 'USER_EMAIL', 'SEMANTIC_SCHOLAR_API_KEY']
-        if cls.AI_PROVIDER == "azure":
-            required_keys.extend(['AI_API_KEY', 'AZURE_OPENAI_ENDPOINT'])
-        elif cls.AI_PROVIDER == "openai":
-            required_keys.append('AI_API_KEY')
-        elif cls.AI_PROVIDER == "llamacpp":
-            required_keys.append('AI_BASE_URL')
+        required_keys = ['LLM_PROVIDER', 'SECRET_KEY', 'USER_EMAIL', 'SEMANTIC_SCHOLAR_API_KEY']
+        if cls.LLM_PROVIDER == "azure":
+            required_keys.extend(['LLM_API_KEY', 'AZURE_OPENAI_ENDPOINT', 'AZURE_OPENAI_API_VERSION'])
+        elif cls.LLM_PROVIDER == "openai":
+            required_keys.append('LLM_API_KEY')
+        elif cls.LLM_PROVIDER == "llamacpp":
+            required_keys.append('LLM_BASE_URL')
         
         if cls.ENABLE_EMAIL_NOTIFICATIONS:
             required_keys.extend(['EMAIL_SENDER', 'EMAIL_APP_PASSWORD', 'SMTP_SERVER', 'SMTP_PORT', 'BASE_URL'])
