@@ -610,6 +610,8 @@ class ValsciProcessor:
 
                     file_path = os.path.join(batch_dir, filename)
                     try:
+                        # Add a small delay to avoid overwhelming the server
+                        await asyncio.sleep(0.1)
                         with open(file_path, 'r') as f:
                             print(f"Loading claim data for check_for_claims in claim {filename}")
                             claim_data = json.load(f)
