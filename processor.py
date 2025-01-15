@@ -48,9 +48,8 @@ class ValsciProcessor:
         self.max_tokens_per_claim = 300000  # pick your limit
 
         self.request_token_estimates = []
-        # Adjust limits to 5-second window (roughly 1/12 of original minute limits)
-        self.max_tokens_per_window = 12500  # was 150000/12
-        self.max_requests_per_window = 42  # was 500/12
+        self.max_tokens_per_window = 25000  
+        self.max_requests_per_window = 25
         self.window_size_seconds = 5  # was 60
         self.last_token_update_time = time.time()
 
