@@ -36,10 +36,10 @@ class Config:
     ACCESS_PASSWORD = env_vars.get('ACCESS_PASSWORD')
 
     # AI Service Settings
-    LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai")  # 'azure', 'openai', or 'local'
-    LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8000")
-    LLM_API_KEY = os.getenv("LLM_API_KEY", "")
-    LLM_EVALUATION_MODEL = os.getenv("LLM_EVALUATION_MODEL", "gpt-4o")
+    LLM_PROVIDER = env_vars.get("LLM_PROVIDER", "openai")  # 'azure', 'openai', or 'local'
+    LLM_BASE_URL = env_vars.get("LLM_BASE_URL", "http://localhost:8000")
+    LLM_API_KEY = env_vars.get("LLM_API_KEY", "")
+    LLM_EVALUATION_MODEL = env_vars.get("LLM_EVALUATION_MODEL", "gpt-4o")
 
 
     @classmethod
