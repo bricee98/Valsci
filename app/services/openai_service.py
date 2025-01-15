@@ -45,8 +45,8 @@ class OpenAIService:
             {"role": "user", "content": prompt}
         ]
 
-        # Add jitter between 0 and 0.25 seconds
-        jitter = random.uniform(0, 0.25)
+        # Add jitter between 0 and 1.5 seconds
+        jitter = random.uniform(0, 1.5)
         await asyncio.sleep(jitter)
 
         response = await self.async_client.chat.completions.create(
@@ -68,8 +68,8 @@ class OpenAIService:
             {"role": "user", "content": prompt}
         ]
 
-        # Add jitter between 0 and 0.25 seconds
-        jitter = random.uniform(0, 0.25)
+        # Add jitter between 0 and 1.5 seconds
+        jitter = random.uniform(0, 1.5)
         await asyncio.sleep(jitter)
 
         response = await self.async_client.chat.completions.create(
