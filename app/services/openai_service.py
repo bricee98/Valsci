@@ -12,6 +12,7 @@ class OpenAIService:
     def __init__(self):
         self.model = Config.LLM_EVALUATION_MODEL
         self.provider = Config.LLM_PROVIDER.lower()
+        self.count = 0
         if self.provider == "azure":
             print(f"Using Azure OpenAI with model {self.model}")
             self.client = openai.AzureOpenAI(
@@ -48,6 +49,9 @@ class OpenAIService:
         # Add jitter between 0 and 1.5 seconds
         jitter = random.uniform(0, 1.5)
         await asyncio.sleep(jitter)
+
+        self.count += 1
+        print(f"OAI Service Count: {self.count}")
 
         response = await self.async_client.chat.completions.create(
             model=model or self.model,
