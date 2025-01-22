@@ -215,7 +215,7 @@ class ValsciProcessor:
                 del self._lock_start_times[lock_path]
         print(f"Lock {action}: {lock_path} ({context})")
 
-    def analyze_claim(self, claim_data, batch_id: str, claim_id: str) -> None:
+    async def analyze_claim(self, claim_data, batch_id: str, claim_id: str) -> None:
         """Analyze the claim."""
         lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
         self._log_lock("creating", lock_path, "initialize claim lists")
@@ -232,6 +232,7 @@ class ValsciProcessor:
                 with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'w') as f:
                     print(f"Analyze claim: Writing claim data for claim {claim_id} in batch {batch_id}")
                     json.dump(claim_data, f, indent=2)
+        self._log_lock("released", lock_path, "initialize claim lists")
 
         # Safely get corpus IDs from processed papers
         processed_ids = []
@@ -268,6 +269,7 @@ class ValsciProcessor:
         # Iterate over the raw papers with safer checks
         for raw_paper in claim_data.get('raw_papers', []):
             try:
+                await asyncio.sleep(0.1)
                 corpus_id = raw_paper.get('corpusId')
                 if not corpus_id:
                     logger.warning(f"Raw paper missing corpus ID: {raw_paper}")
@@ -339,6 +341,8 @@ class ValsciProcessor:
                         not self.papers_scoring_in_progress.get(paper['paper']['corpusId'])):
                         self.papers_scoring_in_progress[paper['paper']['corpusId']] = True
                         self.request_token_estimates.append({'tokens': estimated_tokens_for_scoring, 'timestamp': time.time()})
+                        print(f"Scoring paper {paper['paper']['corpusId']} in claim {claim_id}")
+                        await asyncio.sleep(0.1)
                         asyncio.create_task(self.score_paper(paper, claim_data, batch_id, claim_id))
                     else:
                         # Skip the rest of this claim until the next iteration
@@ -373,8 +377,10 @@ class ValsciProcessor:
                 all_papers_processed = False
 
             if all_papers_scored and all_papers_processed:
+                print(f"All papers scored and processed for claim {claim_id}")
                 if not self.claims_final_reporting_in_progress.get(claim_id):
                     try:
+                        print(f"Generating final report for claim {claim_id}")
                         estimated_tokens_for_final_report = 2000 + (
                             sum(len(excerpt) for paper in claim_data.get('processed_papers', [])
                                 for excerpt in paper.get('excerpts', []) if isinstance(excerpt, str)) +
@@ -387,6 +393,7 @@ class ValsciProcessor:
                             not self.claims_final_reporting_in_progress.get(claim_id)):
                             self.request_token_estimates.append({'tokens': estimated_tokens_for_final_report, 'timestamp': time.time()})
                             self.claims_final_reporting_in_progress[claim_id] = True
+                            
                             # Generate the final report
                             asyncio.create_task(self.generate_final_report(claim_data, batch_id, claim_id))
                         else:
@@ -429,6 +436,7 @@ class ValsciProcessor:
             if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
                 return
 
+            await asyncio.sleep(0.1)
             relevance, excerpts, explanations, non_relevant_explanation, excerpt_pages, usage = (
                 await self.paper_analyzer.analyze_relevance_and_extract(
                     raw_paper['content'], 
@@ -497,6 +505,7 @@ class ValsciProcessor:
             estimated_tokens_for_scoring = 500  # as an example
             self._add_tokens_for_claim(claim_id, estimated_tokens_for_scoring, batch_id)
             self.papers_scoring_in_progress[paper_id] = True
+            await asyncio.sleep(0.1)
             score, usage = await self.evidence_scorer.calculate_paper_weight(
                 processed_paper, 
                 ai_service=self.openai_service
@@ -653,6 +662,7 @@ class ValsciProcessor:
                                 if (estimated_tokens_for_query_generation + current_num_tokens < self.max_tokens_per_window and 
                                     current_num_requests < self.max_requests_per_window):
                                     self.claims_query_generation_in_progress[claim_id] = True
+                                    await asyncio.sleep(0.1)
                                     asyncio.create_task(self.generate_search_queries(claim_data, batch_id, claim_id))
                                 else:
                                     print(f"Claim {claim_id} does not have enough tokens for query generation")
@@ -671,12 +681,14 @@ class ValsciProcessor:
                                 # Mark this claim as searching in progress
                                 self.claims_searching_in_progress[claim_id] = True
                                 # create a search task and execute it (not blocking)
+                                await asyncio.sleep(0.1)
                                 asyncio.create_task(self.search_papers(claim_data, batch_id, claim_id))
 
                         if claim_data.get('status') == 'ready_for_analysis':
                             num_requests, num_tokens = self.calculate_tokens_in_window()
                             if num_tokens < self.max_tokens_per_window and num_requests < self.max_requests_per_window:
-                                self.analyze_claim(claim_data, batch_id, claim_id)
+                                await asyncio.sleep(0.1)
+                                await self.analyze_claim(claim_data, batch_id, claim_id)
                             else:
                                 # skip this claim until the next iteration
                                 continue         
