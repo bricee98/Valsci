@@ -84,21 +84,24 @@ class PaperAnalyzer:
         try:
             # Use the async version of generate_json
             result = await ai_service.generate_json_async(user_prompt, system_prompt)
+            response = result['content']
+            usage = result['usage']
             
             # Log the analysis results
             logger.info(f"Paper analysis results:")
-            logger.info(f"- Relevance: {result.get('relevance', 0)}")
-            logger.info(f"- Number of excerpts: {len(result.get('excerpts', []))}")
+            logger.info(f"- Relevance: {response.get('relevance', 0)}")
+            logger.info(f"- Number of excerpts: {len(response.get('excerpts', []))}")
             
-            if result.get('relevance', 0) < 0.1:
-                logger.info(f"- Not relevant: {result.get('non_relevant_explanation')}")
+            if response.get('relevance', 0) < 0.1:
+                logger.info(f"- Not relevant: {response.get('non_relevant_explanation')}")
             
             return (
-                result.get('relevance', 0),
-                result.get('excerpts', []),
-                result.get('explanations', []),
-                result.get('non_relevant_explanation'),
-                result.get('excerpt_pages', [])
+                response.get('relevance', 0),
+                response.get('excerpts', []),
+                response.get('explanations', []),
+                response.get('non_relevant_explanation'),
+                response.get('excerpt_pages', []),
+                usage
             )
 
         except Exception as e:

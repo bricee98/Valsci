@@ -147,7 +147,9 @@ class S2Searcher:
         
         print("About to generate queries")
 
-        response = await ai_service.generate_json_async(user_prompt, system_prompt)
+        result = await ai_service.generate_json_async(user_prompt, system_prompt)
+        response = result['content']
+        usage = result['usage']
         queries = response.get('queries', [])
         
         # Log generated queries for debugging
@@ -155,7 +157,7 @@ class S2Searcher:
         for query in queries:
             console.print(f"[green]- {query}[/green]")
             
-        return queries
+        return queries, usage
 
     async def search_papers_for_claim(self, queries: List[str], results_per_query: int = 5) -> List[Dict]:
         """Search papers relevant to a claim."""
@@ -246,9 +248,19 @@ class S2Searcher:
         return len(citations_data.get('citations', [])) if citations_data else 0
 
     def _enrich_author_data(self, authors: List[Dict]) -> List[Dict]:
-        """Add additional author information from local dataset."""
+        """Add additional author information from local dataset for first and last authors only."""
+        if not authors:
+            return []
+        
+        # Only keep first and last authors
+        key_authors = []
+        if len(authors) >= 1:
+            key_authors.append(authors[0])  # First author
+        if len(authors) >= 2 and authors[-1] != authors[0]:  # Add last author if different from first
+            key_authors.append(authors[-1])
+        
         enriched_authors = []
-        for author in authors:
+        for author in key_authors:
             author_id = author.get('authorId')
             if author_id:
                 # Use the binary indexer to look up the author
@@ -268,7 +280,6 @@ class S2Searcher:
                     logger.warning(f"No local data found for author: {author_id}")
             enriched_authors.append(author)
         return enriched_authors
-
 
     def get_paper_content(self, corpus_id: str) -> Optional[Dict]:
         """Get full paper content from S2ORC or abstract data, using the BinaryIndexer."""

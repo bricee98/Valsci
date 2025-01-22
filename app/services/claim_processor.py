@@ -139,7 +139,9 @@ class ClaimProcessor:
             """).strip()
 
             logger.info("Generating final report with LLM")
-            response = await ai_service.generate_json_async(prompt, system_prompt)
+            result = await ai_service.generate_json_async(prompt, system_prompt)
+            response = result['content']
+            usage = result['usage']
             logger.info("Generated final report")
 
             # Convert the claimRating to a number
@@ -196,7 +198,7 @@ class ClaimProcessor:
                 "claimRating": claimRating,
                 "searchQueries": queries,
                 "usage_stats": {}
-            }
+            }, usage
 
         except Exception as e:
             logger.error(f"Error in generate_final_report: {str(e)}")
@@ -206,7 +208,7 @@ class ClaimProcessor:
                 "nonRelevantPapers": [],
                 "inaccessiblePapers": [],
                 "explanation": f"Error generating final report: {str(e)}",
-                "claimRating": 0,
+                "claimRating": -1,
                 "searchQueries": [],
                 "usage_stats": {}
             }

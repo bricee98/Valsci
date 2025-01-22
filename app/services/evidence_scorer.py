@@ -34,12 +34,12 @@ class EvidenceScorer:
             logger.debug(f"Processing paper structure: {paper}")
             
             # Get metrics
-            max_h_index = self._get_max_author_h_index(paper.get('authors', []))
+            avg_h_index = self._get_author_h_index(paper.get('authors', []))
             citation_impact = self._calculate_citation_impact(paper)
-            venue_impact = await self._calculate_venue_impact(paper.get('venue'), ai_service)
+            venue_impact, usage = await self._calculate_venue_impact(paper.get('venue'), ai_service)
             
             # Normalize scores
-            normalized_h_index = min(max_h_index / 100, 1.0)  # S2 h-indices can be higher than OpenAlex
+            normalized_h_index = min(avg_h_index / 50, 1.0)  # Adjusted threshold since we're using average
             normalized_citation_impact = min(citation_impact / 1000, 1.0)
             normalized_venue_impact = min(venue_impact / 10, 1.0)
             
@@ -58,29 +58,29 @@ class EvidenceScorer:
             
             logger.info(f"""
                 Paper weight calculation for {paper.get('title', 'Unknown Title')}:
-                - Max h-index: {max_h_index} (normalized: {normalized_h_index:.2f})
+                - Average h-index: {avg_h_index} (normalized: {normalized_h_index:.2f})
                 - Citation impact: {citation_impact} (normalized: {normalized_citation_impact:.2f})
                 - Venue impact: {venue_impact} (normalized: {normalized_venue_impact:.2f})
                 - Final score: {score:.2f}
             """)
             
-            return score
+            return score, usage
 
         except Exception as e:
             logger.error(f"Error calculating paper weight: {str(e)}")
             return 0.0
 
-    def _get_max_author_h_index(self, authors: List[Dict]) -> float:
-        """Get the maximum h-index among the paper's authors."""
+    def _get_author_h_index(self, authors: List[Dict]) -> float:
+        """Get the average h-index among the paper's authors (first and last only)."""
         try:
             h_indices = [
                 author.get('hIndex', 0) 
                 for author in authors 
                 if isinstance(author.get('hIndex'), (int, float))
             ]
-            return max(h_indices) if h_indices else 0
+            return sum(h_indices) / len(h_indices) if h_indices else 0
         except Exception as e:
-            logger.error(f"Error getting max h-index: {str(e)}")
+            logger.error(f"Error getting average h-index: {str(e)}")
             return 0
 
     def _calculate_citation_impact(self, paper: Dict) -> float:
@@ -132,9 +132,11 @@ class EvidenceScorer:
             """
 
             result = await ai_service.generate_json_async(prompt, system_prompt)
-            score = result.get('score', 0)
+            response = result['content']
+            usage = result['usage']
+            score = response.get('score', 0)
 
-            return float(score)
+            return float(score), usage
 
         except Exception as e:
             logger.error(f"Error calculating venue impact for {paper_journal}: {str(e)}")

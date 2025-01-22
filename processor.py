@@ -112,7 +112,7 @@ class ValsciProcessor:
         # Also track usage per claim
         self._add_tokens_for_claim(claim_id, estimated_tokens_for_query_generation, batch_id)
 
-        queries = await self.s2_searcher.generate_search_queries(
+        queries, usage = await self.s2_searcher.generate_search_queries(
             claim_data['text'],
             claim_data['search_config']['num_queries'],
             ai_service=self.openai_service
@@ -131,6 +131,8 @@ class ValsciProcessor:
         claim_data['semantic_scholar_queries'] = queries
         # Add the status to the claim data
         claim_data['status'] = 'ready_for_search'
+        # Add the usage to the claim data
+        claim_data['usage'] = usage
         # Save the updated claim data back to the file
         with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'w') as f:
             print(f"Generate search queries: Writing claim data for claim {claim_id} in batch {batch_id}")
@@ -425,7 +427,7 @@ class ValsciProcessor:
             if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
                 return
 
-            relevance, excerpts, explanations, non_relevant_explanation, excerpt_pages = (
+            relevance, excerpts, explanations, non_relevant_explanation, excerpt_pages, usage = (
                 await self.paper_analyzer.analyze_relevance_and_extract(
                     raw_paper['content'], 
                     claim_text, 
@@ -459,6 +461,10 @@ class ValsciProcessor:
                             'content_type': raw_paper['content_type'],
                             'excerpt_pages': excerpt_pages
                         })
+                        # Add usage to claim data
+                        claim_data['usage']['input_tokens'] =  claim_data['usage']['input_tokens'] + usage['input_tokens']
+                        claim_data['usage']['output_tokens'] =  claim_data['usage']['output_tokens'] + usage['output_tokens']
+                        claim_data['usage']['cost'] =  claim_data['usage']['cost'] + usage['cost']
                     else:
                         logger.warning(f"Skipping duplicate paper {raw_paper['corpusId']} for claim {claim_id}")
                 else:
@@ -489,7 +495,7 @@ class ValsciProcessor:
             estimated_tokens_for_scoring = 500  # as an example
             self._add_tokens_for_claim(claim_id, estimated_tokens_for_scoring, batch_id)
             self.papers_scoring_in_progress[paper_id] = True
-            score = await self.evidence_scorer.calculate_paper_weight(
+            score, usage = await self.evidence_scorer.calculate_paper_weight(
                 processed_paper, 
                 ai_service=self.openai_service
             )
@@ -513,6 +519,11 @@ class ValsciProcessor:
                         print(f"Found paper to set score for: {paper_id}")
                         paper['score'] = score
                         break
+
+                # Add usage to claim data
+                claim_data['usage']['input_tokens'] =  claim_data['usage']['input_tokens'] + usage['input_tokens']
+                claim_data['usage']['output_tokens'] =  claim_data['usage']['output_tokens'] + usage['output_tokens']
+                claim_data['usage']['cost'] =  claim_data['usage']['cost'] + usage['cost']
 
                 # Write updated data
                 print(f"Save score: Writing claim data for claim {claim_id} in batch {batch_id}")
@@ -551,7 +562,7 @@ class ValsciProcessor:
                     "nonRelevantPapers": self.claim_processor._format_non_relevant_papers(claim_data['non_relevant_papers']),
                     "inaccessiblePapers": self.claim_processor._format_inaccessible_papers(claim_data['inaccessible_papers']),
                     "explanation": "No relevant papers were found that support or refute this claim.",
-                    "claimRating": 0,
+                    "claimRating": -1,
                     "timing_stats": {},
                     "searchQueries": claim_data['semantic_scholar_queries'],
                     "claim_text": claim_data['text']
@@ -568,7 +579,7 @@ class ValsciProcessor:
                 return
 
             else:
-                report = await self.claim_processor.generate_final_report(
+                report, usage = await self.claim_processor.generate_final_report(
                     claim_data['text'],
                     claim_data['processed_papers'],
                     claim_data['non_relevant_papers'],
@@ -576,8 +587,21 @@ class ValsciProcessor:
                     claim_data['semantic_scholar_queries'],
                     ai_service=self.openai_service
                 )
-                claim_data['report'] = report
+                
                 claim_data['status'] = "processed"
+                # Add usage to claim data
+                claim_data['usage']['input_tokens'] =  claim_data['usage']['input_tokens'] + usage['input_tokens']
+                claim_data['usage']['output_tokens'] =  claim_data['usage']['output_tokens'] + usage['output_tokens']
+                claim_data['usage']['cost'] =  claim_data['usage']['cost'] + usage['cost']
+
+                # Add usage to report
+                report['usage_stats'] = {
+                    'input_tokens': claim_data['usage']['input_tokens'],
+                    'output_tokens': claim_data['usage']['output_tokens'],
+                    'cost': claim_data['usage']['cost']
+                }
+
+                claim_data['report'] = report
 
                 # Single lock context for file operations
                 lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"

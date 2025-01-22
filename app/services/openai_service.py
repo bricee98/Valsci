@@ -61,7 +61,20 @@ class OpenAIService:
         )
         
         logger.info(f"API call completed for model {model or self.model}")
-        return json.loads(response.choices[0].message.content)
+        
+        # Calculate and return token usage and cost along with the response
+        input_tokens = response.usage.prompt_tokens
+        output_tokens = response.usage.completion_tokens
+        cost = self.tokens_to_cost(input_tokens, output_tokens, model or self.model)
+        
+        return {
+            'content': json.loads(response.choices[0].message.content),
+            'usage': {
+                'input_tokens': input_tokens,
+                'output_tokens': output_tokens,
+                'cost': cost
+            }
+        }
 
     async def generate_text_async(self, prompt: str, system_prompt: Optional[str] = None, model: str = None) -> str:
         if len(prompt) + len(system_prompt or "") > 320000:
@@ -83,4 +96,27 @@ class OpenAIService:
         )
         
         logger.info(f"API call completed for model {model or self.model}")
-        return response.choices[0].message.content
+
+        # Calculate and return token usage and cost along with the response
+        input_tokens = response.usage.prompt_tokens
+        output_tokens = response.usage.completion_tokens
+        cost = self.tokens_to_cost(input_tokens, output_tokens, model or self.model)
+        
+        return {
+            'content': response.choices[0].message.content,
+            'usage': {
+                'input_tokens': input_tokens,
+                'output_tokens': output_tokens,
+                'cost': cost
+            }
+        }
+    
+    def tokens_to_cost(self, input_tokens: int, output_tokens: int, model: str = None) -> float:
+        if model is None:
+            return 0.0
+        if model == "gpt-4o" or model == "gpt-4o-2":
+            return (input_tokens * 2.50/1000000) + (output_tokens * 10.00/1000000)
+        elif model == "gpt-4o-mini":
+            return (input_tokens * 0.15/1000000) + (output_tokens * 0.6/1000000)
+        else:
+            return 0.0
