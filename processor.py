@@ -303,7 +303,9 @@ class ValsciProcessor:
                     current_num_requests, current_num_tokens = self.calculate_tokens_in_window()
                     if (estimated_tokens_for_analysis + current_num_tokens < self.max_tokens_per_window and 
                         current_num_requests < self.max_requests_per_window and
-                        not self.papers_analyzing_in_progress.get(corpus_id)):
+                        not self.papers_analyzing_in_progress.get(corpus_id)
+                        and raw_paper['corpusId'] not in claim_data['processed_papers']
+                        and raw_paper['corpusId'] not in claim_data['non_relevant_papers']):
                         self.request_token_estimates.append({
                             'tokens': estimated_tokens_for_analysis, 
                             'timestamp': time.time()
@@ -598,7 +600,7 @@ class ValsciProcessor:
                 report['usage_stats'] = {
                     'input_tokens': claim_data['usage']['input_tokens'],
                     'output_tokens': claim_data['usage']['output_tokens'],
-                    'cost': claim_data['usage']['cost']
+                    'total_cost': claim_data['usage']['cost']
                 }
 
                 claim_data['report'] = report
