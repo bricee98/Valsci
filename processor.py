@@ -44,7 +44,7 @@ class AsyncFileLock:
             while await async_os.path.exists(self.lock_path):
                 # Debug: Possibly break or raise an error if we wait too long
                 waited = time.time() - wait_start
-                if waited > 5:  # Or some suitable timeout
+                if waited > 5 and waited % 1 == 0:  # Or some suitable timeout
                     print(f"Warning: Still waiting on {self.lock_path} after {waited:.2f}s.")
                 await asyncio.sleep(0.1)
 
