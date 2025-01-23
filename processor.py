@@ -578,16 +578,19 @@ class ValsciProcessor:
                                 if (estimated_tokens + current_tokens < self.max_tokens_per_window and 
                                     current_requests < self.max_requests_per_window):
                                     self.claims_query_generation_in_progress.add(claim_id)
+                                    asyncio.sleep(0.1)
                                     asyncio.create_task(self.generate_search_queries(claim_data, batch_id, claim_id))
                                 
                         elif claim_data['status'] == 'ready_for_search':
                             if not self.claims_searching_in_progress:
                                 self.claims_searching_in_progress.add(claim_id)
+                                asyncio.sleep(0.1)
                                 asyncio.create_task(self.search_papers(claim_data, batch_id, claim_id))
                                 
                         elif claim_data['status'] == 'ready_for_analysis':
                             current_requests, current_tokens = self.calculate_tokens_in_window()
                             if current_tokens < self.max_tokens_per_window and current_requests < self.max_requests_per_window:
+                                asyncio.sleep(0.1)
                                 await self.analyze_claim(claim_data, batch_id, claim_id)
                                 
                         elif claim_data['status'] == 'processed':
