@@ -5,6 +5,7 @@ from typing import Any, Optional
 import asyncio
 import random
 import logging
+from asyncio import timeout
 
 logger = logging.getLogger(__name__)
 
@@ -53,12 +54,13 @@ class OpenAIService:
         self.count += 1
         print(f"OAI Service Count: {self.count}")
 
-        response = await self.async_client.chat.completions.create(
-            model=model or self.model,
-            messages=messages,
-            response_format={"type": "json_object"},
-            temperature=0.0
-        )
+        async with asyncio.timeout(180):  # 180 seconds = 3 minutes
+            response = await self.async_client.chat.completions.create(
+                model=model or self.model,
+                messages=messages,
+                response_format={"type": "json_object"},
+                temperature=0.0
+            )
         
         logger.info(f"API call completed for model {model or self.model}")
         
@@ -89,11 +91,12 @@ class OpenAIService:
         jitter = random.uniform(0, 1.5)
         await asyncio.sleep(jitter)
 
-        response = await self.async_client.chat.completions.create(
-            model=model or self.model,
-            messages=messages,
-            temperature=0.0
-        )
+        async with asyncio.timeout(180):  # 180 seconds = 3 minutes
+            response = await self.async_client.chat.completions.create(
+                model=model or self.model,
+                messages=messages,
+                temperature=0.0
+            )
         
         logger.info(f"API call completed for model {model or self.model}")
 
