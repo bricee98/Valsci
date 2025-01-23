@@ -13,7 +13,7 @@ from app.services.openai_service import OpenAIService
 from app.services.paper_analyzer import PaperAnalyzer
 from app.services.evidence_scorer import EvidenceScorer
 import time
-from filelock import FileLock
+from async_filelock import AsyncFileLock
 from app.config import settings
 import os.path
 
@@ -58,7 +58,7 @@ class ValsciProcessor:
 
         self._active_locks = set()
 
-    def _add_tokens_for_claim(self, claim_id: str, tokens: float, batch_id: str):
+    async def _add_tokens_for_claim(self, claim_id: str, tokens: float, batch_id: str):
         """
         Accumulate token usage for a given claim and check for over-limit.
         If over limit, immediately mark the claim as processed.
@@ -71,7 +71,7 @@ class ValsciProcessor:
             # Mark claim as processed to avoid infinite loops
             logger.warning(f"Claim {claim_id} exceeded token cap of {self.max_tokens_per_claim}. Marking as processed.")
             lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
-            with FileLock(lock_path):
+            async with AsyncFileLock(lock_path):
                 # Load current file
                 file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
                 if os.path.exists(file_path):
@@ -110,7 +110,7 @@ class ValsciProcessor:
         estimated_tokens_for_query_generation = 1000 + (len(claim_data['text']) / 3.5)
         self.request_token_estimates.append({'tokens': estimated_tokens_for_query_generation, 'timestamp': time.time()})
         # Also track usage per claim
-        self._add_tokens_for_claim(claim_id, estimated_tokens_for_query_generation, batch_id)
+        await self._add_tokens_for_claim(claim_id, estimated_tokens_for_query_generation, batch_id)
 
         queries, usage = await self.s2_searcher.generate_search_queries(
             claim_data['text'],
@@ -146,7 +146,7 @@ class ValsciProcessor:
             # Add a small token estimate for query processing
             estimated_tokens = 100  # Small overhead for query processing
             self.request_token_estimates.append({'tokens': estimated_tokens, 'timestamp': time.time()})
-            self._add_tokens_for_claim(claim_id, estimated_tokens, batch_id)
+            await self._add_tokens_for_claim(claim_id, estimated_tokens, batch_id)
 
             # Check if we exceeded the token cap
             if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
@@ -219,7 +219,7 @@ class ValsciProcessor:
         """Analyze the claim."""
         lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
         self._log_lock("creating", lock_path, "initialize claim lists")
-        with FileLock(lock_path):
+        async with AsyncFileLock(lock_path):
             if 'inaccessible_papers' not in claim_data or 'processed_papers' not in claim_data or 'non_relevant_papers' not in claim_data:
                 # Make sure the lists exist
                 if 'inaccessible_papers' not in claim_data:
@@ -284,7 +284,7 @@ class ValsciProcessor:
 
                     if content_dict is None or content_dict.get('text') is None:
                         # Add to inaccessible papers using FileLock
-                        with FileLock(f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"):
+                        async with AsyncFileLock(f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"):
                             # First load the current file
                             with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'r') as f:
                                 print(f"Loading claim data for inaccessible paper {raw_paper['corpusId']} in claim {claim_id}")
@@ -323,7 +323,7 @@ class ValsciProcessor:
         # Use FileLock when checking and updating processed papers
         lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
         self._log_lock("creating", lock_path, "process papers and run final report")
-        with FileLock(lock_path):
+        async with AsyncFileLock(lock_path):
             # Reload claim data to get latest state
             with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'r') as f:
                 print(f"Analyze claim: Loading claim data for processed papers in claim {claim_id}")
@@ -346,6 +346,7 @@ class ValsciProcessor:
                         asyncio.create_task(self.score_paper(paper, claim_data, batch_id, claim_id))
                     else:
                         # Skip the rest of this claim until the next iteration
+                        self._log_lock("released", lock_path, "process papers and run final report")
                         return
 
             # Check completion status under the same lock
@@ -354,6 +355,7 @@ class ValsciProcessor:
                 try:
                     if paper.get('score', -1) == -1:
                         all_papers_scored = False
+                        print(f"Paper {paper['paper']['corpusId']} is not scored, breaking the loop")
                         break
                 except Exception as e:
                     logger.warning(f"Error checking paper score: {e}")
@@ -371,6 +373,7 @@ class ValsciProcessor:
                         corpus_id not in non_relevant_ids and 
                         corpus_id not in inaccessible_ids):
                         all_papers_processed = False
+                        print(f"Paper {corpus_id} is not processed, breaking the loop")
                         break
             except Exception as e:
                 logger.warning(f"Error checking paper processing status: {e}")
@@ -399,13 +402,22 @@ class ValsciProcessor:
                         else:
                             # Skip the rest of this claim until the next iteration
                             print(f"Claim {claim_id} does not have enough tokens for final report generation")
+                            self._log_lock("released", lock_path, "process papers and run final report")
                             return
                     except Exception as e:
                         logger.error(f"Error preparing final report: {e}")
+                        self._log_lock("released", lock_path, "process papers and run final report")
                         return
                 else:
                     print(f"Claim {claim_id} final report already in progress")
+                    self._log_lock("released", lock_path, "process papers and run final report")
                     return
+                
+            else:
+                print(f"Claim {claim_id} is not fully processed, breaking the loop")
+                self._log_lock("released", lock_path, "process papers and run final report")
+                return
+
 
         self._log_lock("released", lock_path, "process papers and run final report")
 
@@ -433,7 +445,7 @@ class ValsciProcessor:
             
             # Estimate tokens before analysis
             estimated_tokens_for_analysis = 1000 + (len(raw_paper['content']) / 3.5)
-            self._add_tokens_for_claim(claim_id, estimated_tokens_for_analysis, batch_id)
+            await self._add_tokens_for_claim(claim_id, estimated_tokens_for_analysis, batch_id)
 
             # Check if we exceeded the token cap
             if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
@@ -452,7 +464,7 @@ class ValsciProcessor:
             # Single lock context for all file operations
             lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
             self._log_lock("creating", lock_path, f"save analysis for paper {raw_paper['corpusId']}")
-            with FileLock(lock_path):
+            async with AsyncFileLock(lock_path):
                 # Load current state
                 with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'r') as f:
                     print(f"Loading claim data for analysis of paper {raw_paper['corpusId']} in claim {claim_id}")
@@ -505,7 +517,7 @@ class ValsciProcessor:
             paper_id = processed_paper['paper']['corpusId']
             # If you want to estimate tokens for scoring:
             estimated_tokens_for_scoring = 500  # as an example
-            self._add_tokens_for_claim(claim_id, estimated_tokens_for_scoring, batch_id)
+            await self._add_tokens_for_claim(claim_id, estimated_tokens_for_scoring, batch_id)
             self.papers_scoring_in_progress[paper_id] = True
             score, usage = await self.evidence_scorer.calculate_paper_weight(
                 processed_paper, 
@@ -519,7 +531,7 @@ class ValsciProcessor:
             # Single lock context for all file operations
             lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
             self._log_lock("creating", lock_path, f"save score for paper {paper_id}")
-            with FileLock(lock_path):
+            async with AsyncFileLock(lock_path):
                 # Load current state
                 with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'r') as f:
                     print(f"Loading claim data for scoring paper {paper_id} in claim {claim_id}")
@@ -560,7 +572,7 @@ class ValsciProcessor:
                     for explanation in paper.get('explanations', []) if isinstance(explanation, str))
             ) / 3.5
             
-            self._add_tokens_for_claim(claim_id, estimated_tokens_for_final_report, batch_id)
+            await self._add_tokens_for_claim(claim_id, estimated_tokens_for_final_report, batch_id)
 
             # Check if we exceeded the token cap
             if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
@@ -584,7 +596,7 @@ class ValsciProcessor:
                 # Single lock context for file operations
                 lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
                 self._log_lock("creating", lock_path, f"save empty report for claim {claim_id}")
-                with FileLock(lock_path):
+                async with AsyncFileLock(lock_path):
                     print(f"Generate final report: Writing claim data for claim {claim_id} in batch {batch_id}")
                     self._write_claim_data(claim_data, batch_id, claim_id)
                 self._log_lock("released", lock_path, f"save empty report for claim {claim_id}")
@@ -618,7 +630,7 @@ class ValsciProcessor:
                 # Single lock context for file operations
                 lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
                 self._log_lock("creating", lock_path, f"save final report for claim {claim_id}")
-                with FileLock(lock_path):
+                async with AsyncFileLock(lock_path):
                     print(f"Generate final report: Writing claim data for claim {claim_id} in batch {batch_id}")
                     self._write_claim_data(claim_data, batch_id, claim_id)
                 self._log_lock("released", lock_path, f"save final report for claim {claim_id}")
@@ -707,7 +719,7 @@ class ValsciProcessor:
                                 # Then check that there is a notification.json file
                                 notification_file = os.path.join(batch_dir, 'notification.json')
                                 if os.path.exists(notification_file):
-                                    with FileLock(f"{notification_file}.lock"):
+                                    async with AsyncFileLock(f"{notification_file}.lock"):
                                         with open(notification_file, 'r') as f:
                                             print(f"Loading notification data for batch")
                                             notification_data = json.load(f)
