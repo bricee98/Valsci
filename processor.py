@@ -84,12 +84,19 @@ class ValsciProcessor:
 
     async def _save_processed_claim(self, claim_data: Dict, batch_id: str, claim_id: str):
         """Save a processed claim to disk and handle cleanup."""
+        # Create saved jobs directory
         saved_batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
         os.makedirs(saved_batch_dir, exist_ok=True)
         
-        file_path = os.path.join(saved_batch_dir, f"{claim_id}.txt")
-        async with aiofiles.open(file_path, 'w') as f:
+        # Save to saved_jobs directory
+        saved_file_path = os.path.join(saved_batch_dir, f"{claim_id}.txt")
+        async with aiofiles.open(saved_file_path, 'w') as f:
             await f.write(json.dumps(claim_data, indent=2))
+        
+        # Remove the original file from queued_jobs
+        queued_file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
+        if await async_os.path.exists(queued_file_path):
+            await async_os.remove(queued_file_path)
         
         # Remove from memory
         self.claims_in_memory.pop((batch_id, claim_id), None)
@@ -561,9 +568,11 @@ class ValsciProcessor:
                         await asyncio.sleep(0.1)
                         claim_id = filename[:-4]  # Remove .txt
                         
-                        # Skip if already in memory
+                        # Skip if already in memory or if a file exists in saved_jobs
                         if (batch_id, claim_id) in self.claims_in_memory:
                             claim_data = self.claims_in_memory[(batch_id, claim_id)]
+                        elif os.path.exists(os.path.join(SAVED_JOBS_DIR, batch_id, f"{claim_id}.txt")):
+                            continue
                         else:
                             # Load new claim into memory
                             async with aiofiles.open(file_path, 'r') as f:
