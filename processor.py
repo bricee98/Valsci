@@ -83,6 +83,7 @@ class ValsciProcessor:
         self.papers_analyzing_in_progress = {}
         self.papers_scoring_in_progress = {}
         self.claims_final_reporting_in_progress = {}
+        
 
         # Keep track of token usage per claim
         self.claim_token_usage = {}
@@ -367,109 +368,91 @@ class ValsciProcessor:
                 logger.error(f"Error processing raw paper: {e}")
                 continue
 
-        # Use FileLock when checking and updating processed papers
-        lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
-        self._log_lock("creating", lock_path, "process papers and run final report")
-        async with AsyncFileLock(lock_path):
-            # Reload claim data to get latest state
-            file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
-            async with aiofiles.open(file_path, 'r') as f:
-                print(f"Analyze claim: Loading claim data for processed papers in claim {claim_id}")
-                claim_data = json.loads(await f.read())
-            
-            # If we have processed papers but with a score of -1, we need to score them
-            for paper in claim_data['processed_papers']:
-                if paper['score'] == -1:
-                    print(f"Score is -1 for paper {paper['paper']['corpusId']} in claim {claim_id}")
-                    # Check the estimated tokens for the scoring (always 500 for this)
-                    estimated_tokens_for_scoring = 500
+        # If we have processed papers but with a score of -1, we need to score them
+        for paper in claim_data['processed_papers']:
+            if paper['score'] == -1:
+                print(f"Score is -1 for paper {paper['paper']['corpusId']} in claim {claim_id}")
+                # Check the estimated tokens for the scoring (always 500 for this)
+                estimated_tokens_for_scoring = 500
+                current_num_requests, current_num_tokens = self.calculate_tokens_in_window()
+                if (estimated_tokens_for_scoring + current_num_tokens < self.max_tokens_per_window and 
+                    current_num_requests < self.max_requests_per_window and
+                    not self.papers_scoring_in_progress.get(paper['paper']['corpusId'])):
+                    self.papers_scoring_in_progress[paper['paper']['corpusId']] = True
+                    self.request_token_estimates.append({'tokens': estimated_tokens_for_scoring, 'timestamp': time.time()})
+                    print(f"Scoring paper {paper['paper']['corpusId']} in claim {claim_id}")
+                    await asyncio.sleep(0.1)
+                    asyncio.create_task(self.score_paper(paper, claim_data, batch_id, claim_id))
+                else:
+                    # Skip the rest of this claim until the next iteration
+                    return
+
+        # Check completion status
+        all_papers_scored = True
+        for paper in claim_data.get('processed_papers', []):
+            try:
+                if paper.get('score', -1) == -1:
+                    all_papers_scored = False
+                    print(f"Paper {paper['paper']['corpusId']} is not scored, breaking the loop")
+                    break
+            except Exception as e:
+                logger.warning(f"Error checking paper score: {e}")
+                all_papers_scored = False
+                break
+
+        all_papers_processed = True
+        try:
+            for raw_paper in claim_data.get('raw_papers', []):
+                corpus_id = raw_paper.get('corpusId')
+                if not corpus_id:
+                    continue
+                    
+                if (corpus_id not in processed_ids and 
+                    corpus_id not in non_relevant_ids and 
+                    corpus_id not in inaccessible_ids):
+                    all_papers_processed = False
+                    print(f"Paper {corpus_id} is not processed, breaking the loop")
+                    break
+        except Exception as e:
+            logger.warning(f"Error checking paper processing status: {e}")
+            all_papers_processed = False
+
+        if all_papers_scored and all_papers_processed:
+            print(f"All papers scored and processed for claim {claim_id}")
+            if not self.claims_final_reporting_in_progress.get(claim_id):
+                try:
+                    print(f"Checking status for final report for claim {claim_id}")
+                    estimated_tokens_for_final_report = 2000 + (
+                        sum(len(excerpt) for paper in claim_data.get('processed_papers', [])
+                            for excerpt in paper.get('excerpts', []) if isinstance(excerpt, str)) +
+                        sum(len(explanation) for paper in claim_data.get('processed_papers', [])
+                            for explanation in paper.get('explanations', []) if isinstance(explanation, str))
+                    ) / 3.5
                     current_num_requests, current_num_tokens = self.calculate_tokens_in_window()
-                    if (estimated_tokens_for_scoring + current_num_tokens < self.max_tokens_per_window and 
+                    if (estimated_tokens_for_final_report + current_num_tokens < self.max_tokens_per_window and 
                         current_num_requests < self.max_requests_per_window and
-                        not self.papers_scoring_in_progress.get(paper['paper']['corpusId'])):
-                        self.papers_scoring_in_progress[paper['paper']['corpusId']] = True
-                        self.request_token_estimates.append({'tokens': estimated_tokens_for_scoring, 'timestamp': time.time()})
-                        print(f"Scoring paper {paper['paper']['corpusId']} in claim {claim_id}")
-                        await asyncio.sleep(0.1)
-                        asyncio.create_task(self.score_paper(paper, claim_data, batch_id, claim_id))
+                        not self.claims_final_reporting_in_progress.get(claim_id)):
+                        self.request_token_estimates.append({'tokens': estimated_tokens_for_final_report, 'timestamp': time.time()})
+                        self.claims_final_reporting_in_progress[claim_id] = True
+
+                        print(f"Generating final report for claim {claim_id}")
+                        
+                        # Generate the final report
+                        asyncio.create_task(self.generate_final_report(claim_data, batch_id, claim_id))
                     else:
                         # Skip the rest of this claim until the next iteration
-                        self._log_lock("released", lock_path, "process papers and run final report")
+                        print(f"Claim {claim_id} does not have enough tokens for final report generation")
                         return
-
-            # Check completion status under the same lock
-            all_papers_scored = True
-            for paper in claim_data.get('processed_papers', []):
-                try:
-                    if paper.get('score', -1) == -1:
-                        all_papers_scored = False
-                        print(f"Paper {paper['paper']['corpusId']} is not scored, breaking the loop")
-                        break
                 except Exception as e:
-                    logger.warning(f"Error checking paper score: {e}")
-                    all_papers_scored = False
-                    break
-
-            all_papers_processed = True
-            try:
-                for raw_paper in claim_data.get('raw_papers', []):
-                    corpus_id = raw_paper.get('corpusId')
-                    if not corpus_id:
-                        continue
-                        
-                    if (corpus_id not in processed_ids and 
-                        corpus_id not in non_relevant_ids and 
-                        corpus_id not in inaccessible_ids):
-                        all_papers_processed = False
-                        print(f"Paper {corpus_id} is not processed, breaking the loop")
-                        break
-            except Exception as e:
-                logger.warning(f"Error checking paper processing status: {e}")
-                all_papers_processed = False
-
-            if all_papers_scored and all_papers_processed:
-                print(f"All papers scored and processed for claim {claim_id}")
-                if not self.claims_final_reporting_in_progress.get(claim_id):
-                    try:
-                        print(f"Generating final report for claim {claim_id}")
-                        estimated_tokens_for_final_report = 2000 + (
-                            sum(len(excerpt) for paper in claim_data.get('processed_papers', [])
-                                for excerpt in paper.get('excerpts', []) if isinstance(excerpt, str)) +
-                            sum(len(explanation) for paper in claim_data.get('processed_papers', [])
-                                for explanation in paper.get('explanations', []) if isinstance(explanation, str))
-                        ) / 3.5
-                        current_num_requests, current_num_tokens = self.calculate_tokens_in_window()
-                        if (estimated_tokens_for_final_report + current_num_tokens < self.max_tokens_per_window and 
-                            current_num_requests < self.max_requests_per_window and
-                            not self.claims_final_reporting_in_progress.get(claim_id)):
-                            self.request_token_estimates.append({'tokens': estimated_tokens_for_final_report, 'timestamp': time.time()})
-                            self.claims_final_reporting_in_progress[claim_id] = True
-                            
-                            # Generate the final report
-                            asyncio.create_task(self.generate_final_report(claim_data, batch_id, claim_id))
-                        else:
-                            # Skip the rest of this claim until the next iteration
-                            print(f"Claim {claim_id} does not have enough tokens for final report generation")
-                            self._log_lock("released", lock_path, "process papers and run final report")
-                            return
-                    except Exception as e:
-                        logger.error(f"Error preparing final report: {e}")
-                        self._log_lock("released", lock_path, "process papers and run final report")
-                        return
-                else:
-                    print(f"Claim {claim_id} final report already in progress")
-                    self._log_lock("released", lock_path, "process papers and run final report")
+                    logger.error(f"Error preparing final report: {e}")
                     return
-                
             else:
-                print(f"Claim {claim_id} is not fully processed, breaking the loop")
-                self._log_lock("released", lock_path, "process papers and run final report")
+                print(f"Claim {claim_id} final report already in progress")
                 return
-
-
-        self._log_lock("released", lock_path, "process papers and run final report")
-
-        return
+            
+        else:
+            print(f"Claim {claim_id} is not fully processed, breaking the loop")
+            return
     
     async def _write_claim_data(self, claim_data, batch_id, claim_id):
         """Internal method to write claim data asynchronously."""
@@ -552,6 +535,11 @@ class ValsciProcessor:
                             'explanation': non_relevant_explanation,
                             'content_type': raw_paper['content_type']
                         })
+
+                    # Add usage to claim data
+                    claim_data['usage']['input_tokens'] =  claim_data['usage']['input_tokens'] + usage['input_tokens']
+                    claim_data['usage']['output_tokens'] =  claim_data['usage']['output_tokens'] + usage['output_tokens']
+                    claim_data['usage']['cost'] =  claim_data['usage']['cost'] + usage['cost']
 
                 # Write updated data
                 print(f"Analyze claim: Writing claim data for claim {claim_id} in batch {batch_id}")
@@ -801,6 +789,14 @@ async def main():
     try:
         await asyncio.to_thread(os.makedirs, QUEUED_JOBS_DIR, exist_ok=True)
         await asyncio.to_thread(os.makedirs, SAVED_JOBS_DIR, exist_ok=True)
+
+        # Clear all lock files in every subdirectory of QUEUED_JOBS_DIR
+        for batch_id in os.listdir(QUEUED_JOBS_DIR):
+            batch_dir = os.path.join(QUEUED_JOBS_DIR, batch_id)
+            if os.path.isdir(batch_dir):
+                for filename in os.listdir(batch_dir):
+                    if filename.endswith('.lock'):
+                        os.remove(os.path.join(batch_dir, filename))
 
         processor = ValsciProcessor()
         logger.info("Started monitoring queued_jobs directory")
