@@ -18,6 +18,7 @@ import os.path
 import aiofiles
 import aiofiles.os as async_os
 from contextlib import asynccontextmanager
+from filelock import FileLock
 
 # Configure logging
 logging.basicConfig(
@@ -28,46 +29,6 @@ logger = logging.getLogger(__name__)
 
 QUEUED_JOBS_DIR = 'queued_jobs'
 SAVED_JOBS_DIR = 'saved_jobs'
-
-class AsyncFileLock:
-    def __init__(self, lock_path: str):
-        self.lock_path = lock_path
-        self._lock = asyncio.Lock()
-        
-    async def __aenter__(self):
-        await self._lock.acquire()
-        try:
-            wait_start = time.time()
-            # Debug: Indicate we are waiting for the lock file to be removed
-            print(f"Attempting to enter AsyncFileLock on {self.lock_path}")
-
-            while await async_os.path.exists(self.lock_path):
-                # Debug: Possibly break or raise an error if we wait too long
-                waited = time.time() - wait_start
-                if waited > 5 and waited % 1 == 0:  # Or some suitable timeout
-                    print(f"Warning: Still waiting on {self.lock_path} after {waited:.2f}s.")
-                await asyncio.sleep(0.1)
-
-            async with aiofiles.open(self.lock_path, 'w') as f:
-                await f.write('locked')
-
-            print(f"Acquired AsyncFileLock. Created lock file: {self.lock_path}")
-        except:
-            print("Exception in __aenter__, releasing lock and re-raising.")
-            self._lock.release()
-            raise
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        try:
-            if await async_os.path.exists(self.lock_path):
-                print(f"Removing lock file {self.lock_path}")
-                await async_os.remove(self.lock_path)
-        except Exception as e:
-            print(f"Error removing lock file {self.lock_path}: {e}")
-        finally:
-            self._lock.release()
-            print(f"Released AsyncFileLock for {self.lock_path}")
 
 class ValsciProcessor:
     def __init__(self):
@@ -114,7 +75,7 @@ class ValsciProcessor:
             # Mark claim as processed to avoid infinite loops
             logger.warning(f"Claim {claim_id} exceeded token cap of {self.max_tokens_per_claim}. Marking as processed.")
             lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
-            async with AsyncFileLock(lock_path):
+            with FileLock(lock_path):
                 # Load current file
                 file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
                 if await async_os.path.exists(file_path):
@@ -265,7 +226,7 @@ class ValsciProcessor:
         """Analyze the claim."""
         lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
         self._log_lock("creating", lock_path, "initialize claim lists")
-        async with AsyncFileLock(lock_path):
+        with FileLock(lock_path):
             if 'inaccessible_papers' not in claim_data or 'processed_papers' not in claim_data or 'non_relevant_papers' not in claim_data:
                 # Make sure the lists exist
                 if 'inaccessible_papers' not in claim_data:
@@ -331,7 +292,7 @@ class ValsciProcessor:
 
                     if content_dict is None or content_dict.get('text') is None:
                         # Add to inaccessible papers using FileLock
-                        async with AsyncFileLock(f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"):
+                        with FileLock(f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"):
                             # First load the current file
                             file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
                             async with aiofiles.open(file_path, 'r') as f:
@@ -498,7 +459,7 @@ class ValsciProcessor:
             # Single lock context for all file operations
             lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
             self._log_lock("creating", lock_path, f"save analysis for paper {raw_paper['corpusId']}")
-            async with AsyncFileLock(lock_path):
+            with FileLock(lock_path):
                 # Load current state
                 file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
                 async with aiofiles.open(file_path, 'r') as f:
@@ -571,7 +532,7 @@ class ValsciProcessor:
             # Single lock context for all file operations
             lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
             self._log_lock("creating", lock_path, f"save score for paper {paper_id}")
-            async with AsyncFileLock(lock_path):
+            with FileLock(lock_path):
                 # Load current state
                 file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
                 async with aiofiles.open(file_path, 'r') as f:
@@ -637,7 +598,7 @@ class ValsciProcessor:
                 # Single lock context for file operations
                 lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
                 self._log_lock("creating", lock_path, f"save empty report for claim {claim_id}")
-                async with AsyncFileLock(lock_path):
+                with FileLock(lock_path):
                     print(f"Generate final report: Writing claim data for claim {claim_id} in batch {batch_id}")
                     await self._write_claim_data(claim_data, batch_id, claim_id)
                 self._log_lock("released", lock_path, f"save empty report for claim {claim_id}")
@@ -671,7 +632,7 @@ class ValsciProcessor:
                 # Single lock context for file operations
                 lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
                 self._log_lock("creating", lock_path, f"save final report for claim {claim_id}")
-                async with AsyncFileLock(lock_path):
+                with FileLock(lock_path):
                     print(f"Generate final report: Writing claim data for claim {claim_id} in batch {batch_id}")
                     await self._write_claim_data(claim_data, batch_id, claim_id)
                 self._log_lock("released", lock_path, f"save final report for claim {claim_id}")
@@ -758,7 +719,7 @@ class ValsciProcessor:
                                 # Then check that there is a notification.json file
                                 notification_file = os.path.join(batch_dir, 'notification.json')
                                 if await async_os.path.exists(notification_file):
-                                    async with AsyncFileLock(f"{notification_file}.lock"):
+                                    with FileLock(f"{notification_file}.lock"):
                                         async with aiofiles.open(notification_file, 'r') as f:
                                             print(f"Loading notification data for batch")
                                             notification_data = json.loads(await f.read())
