@@ -2,7 +2,7 @@ import asyncio
 import os
 import json
 import logging
-from typing import Dict, List
+from typing import Dict, List, Tuple
 import shutil
 from app.services.claim_processor import ClaimProcessor
 from semantic_scholar.utils.searcher import S2Searcher
@@ -39,132 +39,148 @@ class ValsciProcessor:
         self.openai_service = OpenAIService()
         self.email_service = EmailService()
 
-        self.claims_query_generation_in_progress = {}
-        self.claims_searching_in_progress = {}
-        self.papers_analyzing_in_progress = {}
-        self.papers_scoring_in_progress = {}
-        self.claims_final_reporting_in_progress = {}
-        
+        # In-memory storage for claims
+        self.claims_in_memory: Dict[Tuple[str, str], Dict] = {}
 
-        # Keep track of token usage per claim
+        # Processing status flags
+        self.claims_query_generation_in_progress = set()
+        self.claims_searching_in_progress = set()
+        self.papers_analyzing_in_progress = set()
+        self.papers_scoring_in_progress = set()
+        self.claims_final_reporting_in_progress = set()
+
+        # Token tracking
         self.claim_token_usage = {}
-        # A per-claim cap on total tokens
-        self.max_tokens_per_claim = 300000  # pick your limit
-
+        self.max_tokens_per_claim = 300000
         self.request_token_estimates = []
-        self.max_tokens_per_window = 25000  
+        self.max_tokens_per_window = 25000
         self.max_requests_per_window = 10
-        self.window_size_seconds = 5  # was 60
+        self.window_size_seconds = 5
         self.last_token_update_time = time.time()
-
-        # Use the model from settings instead of Config
         self.model = settings.Config.LLM_EVALUATION_MODEL
 
         self._active_locks = set()
 
     async def _add_tokens_for_claim(self, claim_id: str, tokens: float, batch_id: str):
-        """
-        Accumulate token usage for a given claim and check for over-limit.
-        If over limit, immediately mark the claim as processed.
-        """
+        """Track token usage for a claim and handle over-limit cases."""
         current_usage = self.claim_token_usage.get(claim_id, 0)
         new_usage = current_usage + tokens
         self.claim_token_usage[claim_id] = new_usage
 
         if new_usage > self.max_tokens_per_claim:
-            # Mark claim as processed to avoid infinite loops
             logger.warning(f"Claim {claim_id} exceeded token cap of {self.max_tokens_per_claim}. Marking as processed.")
-            lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
-            with FileLock(lock_path):
-                # Load current file
-                file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
-                if await async_os.path.exists(file_path):
-                    async with aiofiles.open(file_path, 'r') as f:
-                        print(f"Loading claim data for max tokens cap in claim {claim_id}")
-                        claim_data = json.loads(await f.read())
+            claim_data = self.claims_in_memory.get((batch_id, claim_id))
+            if claim_data:
+                claim_data['status'] = 'processed'
+                claim_data['report'] = {
+                    "relevantPapers": [],
+                    "explanation": "Stopped: token usage exceeded our cap.",
+                    "claimRating": 0,
+                    "timing_stats": {},
+                    "searchQueries": claim_data.get('semantic_scholar_queries', []),
+                    "claim_text": claim_data.get('text', '')
+                }
+                await self._save_processed_claim(claim_data, batch_id, claim_id)
 
-                    claim_data['status'] = 'processed'
-                    claim_data['report'] = {
-                        "relevantPapers": [],
-                        "explanation": "Stopped: token usage exceeded our cap.",
-                        "claimRating": 0,
-                        "timing_stats": {},
-                        "searchQueries": claim_data.get('semantic_scholar_queries', []),
-                        "claim_text": claim_data.get('text', '')
-                    }
+    async def _save_processed_claim(self, claim_data: Dict, batch_id: str, claim_id: str):
+        """Save a processed claim to disk and handle cleanup."""
+        saved_batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
+        os.makedirs(saved_batch_dir, exist_ok=True)
+        
+        file_path = os.path.join(saved_batch_dir, f"{claim_id}.txt")
+        async with aiofiles.open(file_path, 'w') as f:
+            await f.write(json.dumps(claim_data, indent=2))
+        
+        # Remove from memory
+        self.claims_in_memory.pop((batch_id, claim_id), None)
+        
+        # Check if batch is complete
+        await self._check_batch_completion(batch_id)
 
-                    # Write updated data to file
-                    async with aiofiles.open(file_path, 'w') as f:
-                        print(f"Generate search queries: Writing claim data for claim {claim_id} in batch {batch_id}")
-                        await f.write(json.dumps(claim_data, indent=2))
-
+    async def _check_batch_completion(self, batch_id: str):
+        """Check if all claims in a batch are processed and handle notifications."""
+        batch_claims = [(b, c) for (b, c) in self.claims_in_memory.keys() if b == batch_id]
+        if not batch_claims:
+            # All claims processed, check for notification
+            notification_file = os.path.join(QUEUED_JOBS_DIR, batch_id, 'notification.json')
+            if await async_os.path.exists(notification_file):
+                async with aiofiles.open(notification_file, 'r') as f:
+                    notification_data = json.loads(await f.read())
+                if notification_data.get('email'):
+                    self.email_service.send_batch_completion_notification(
+                        notification_data['email'],
+                        batch_id,
+                        notification_data.get('num_claims', 0),
+                        notification_data.get('review_type', 'standard')
+                    )
+                # Remove the batch directory
+                batch_dir = os.path.join(QUEUED_JOBS_DIR, batch_id)
+                if await async_os.path.exists(batch_dir):
+                    await self.async_rmtree(batch_dir)
 
     def calculate_tokens_in_window(self):
-        # Remove any estimates that are older than our window
+        """Calculate token usage within the current window."""
         current_time = time.time()
         self.request_token_estimates = [
             estimate for estimate in self.request_token_estimates 
             if current_time - estimate['timestamp'] < self.window_size_seconds
         ]
-        # Return the sum of the remaining estimates
         num_requests = len(self.request_token_estimates)
         return (num_requests, sum(estimate['tokens'] for estimate in self.request_token_estimates))
 
-    async def generate_search_queries(self, claim_data, batch_id: str, claim_id: str) -> List[str]:
+    async def generate_search_queries(self, claim_data, batch_id: str, claim_id: str) -> None:
         """Generate search queries for a claim."""
-        estimated_tokens_for_query_generation = 1000 + (len(claim_data['text']) / 3.5)
-        self.request_token_estimates.append({'tokens': estimated_tokens_for_query_generation, 'timestamp': time.time()})
-        # Also track usage per claim
-        await self._add_tokens_for_claim(claim_id, estimated_tokens_for_query_generation, batch_id)
+        try:
+            # Token tracking
+            estimated_tokens = 1000 + (len(claim_data['text']) / 3.5)
+            self.request_token_estimates.append({'tokens': estimated_tokens, 'timestamp': time.time()})
+            await self._add_tokens_for_claim(claim_id, estimated_tokens, batch_id)
 
-        queries, usage = await self.s2_searcher.generate_search_queries(
-            claim_data['text'],
-            claim_data['search_config']['num_queries'],
-            ai_service=self.openai_service
-        )
+            # Check token cap
+            if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
+                return
 
-        # If the claim was just marked processed due to exceeding usage, do not proceed
-        if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
-            return
+            # Generate queries
+            queries, usage = await self.s2_searcher.generate_search_queries(
+                claim_data['text'],
+                claim_data['search_config']['num_queries'],
+                ai_service=self.openai_service
+            )
 
-        # Save the queries to a file
-        # First load the current file
-        file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
-        async with aiofiles.open(file_path, 'r') as f:
-            print(f"Generate search queries: Loading claim data for query generation in claim {claim_id}")
-            claim_data = json.loads(await f.read())
-        # Add the queries to the claim data
-        claim_data['semantic_scholar_queries'] = queries
-        # Add the status to the claim data
-        claim_data['status'] = 'ready_for_search'
-        # Add the usage to the claim data
-        claim_data['usage'] = usage
-        # Save the updated claim data back to the file
-        async with aiofiles.open(file_path, 'w') as f:
-            print(f"Generate search queries: Writing claim data for claim {claim_id} in batch {batch_id}")
-            await f.write(json.dumps(claim_data, indent=2))
+            # Update in-memory claim data
+            claim_data = self.claims_in_memory[(batch_id, claim_id)]
+            claim_data['semantic_scholar_queries'] = queries
+            claim_data['status'] = 'ready_for_search'
+            claim_data['usage'] = usage
 
-        return
-    
-    async def search_papers(self, claim_data, batch_id: str, claim_id: str) -> List[Paper]:
+        except Exception as e:
+            logger.error(f"Error generating search queries for claim {claim_id}: {str(e)}")
+        finally:
+            self.claims_query_generation_in_progress.discard(claim_id)
+
+    async def search_papers(self, claim_data, batch_id: str, claim_id: str) -> None:
         """Search for papers relevant to the claim."""
         try:
-            # Add a small token estimate for query processing
+            # Token tracking
             estimated_tokens = 100  # Small overhead for query processing
             self.request_token_estimates.append({'tokens': estimated_tokens, 'timestamp': time.time()})
             await self._add_tokens_for_claim(claim_id, estimated_tokens, batch_id)
 
-            # Check if we exceeded the token cap
+            # Check token cap
             if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
                 return
 
+            # Get in-memory claim data
+            claim_data = self.claims_in_memory[(batch_id, claim_id)]
             queries = claim_data['semantic_scholar_queries']
 
+            # Search papers
             raw_papers = await self.s2_searcher.search_papers_for_claim(
                 queries,
                 results_per_query=claim_data['search_config']['results_per_query']
             )
             
+            # Process papers
             papers = []
             for raw_paper in raw_papers:
                 try:
@@ -175,37 +191,30 @@ class ValsciProcessor:
                     logger.error(f"Error converting paper {raw_paper.get('corpusId')}: {str(e)}")
                     continue
             
-            # Sort by citation count (most cited first)
+            # Sort by citation count
             papers.sort(key=lambda p: p.get('citationCount', 0), reverse=True)
 
+            # Update claim data in memory
             if not papers:
                 claim_data['status'] = 'processed'
-                report = {
+                claim_data['report'] = {
                     "relevantPapers": [],
                     "explanation": "No relevant papers were found for this claim.",
-                    "claimRating": 0,
+                    "claimRating": -1,
                     "timing_stats": {},
                     "searchQueries": queries,
                     "claim_text": claim_data['text']
                 }
-                claim_data['report'] = report
+                # Save final state since we're done
+                await self._save_processed_claim(claim_data, batch_id, claim_id)
             else:
                 claim_data['raw_papers'] = papers
                 claim_data['status'] = 'ready_for_analysis'
 
-            file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
-            async with aiofiles.open(file_path, 'w') as f:
-                print(f"Search papers: Writing claim data for claim {claim_id} in batch {batch_id}")
-                await f.write(json.dumps(claim_data, indent=2))
-
-            return
-        
         except Exception as e:
             logger.error(f"Error searching for papers for claim {claim_id}: {str(e)}")
-
         finally:
-            # Reset the searching flag so new searches can proceed
-            self.claims_searching_in_progress[claim_id] = False
+            self.claims_searching_in_progress.discard(claim_id)
 
     def _log_lock(self, action: str, lock_path: str, context: str):
         """Helper to standardize lock logging with context"""
@@ -224,57 +233,20 @@ class ValsciProcessor:
 
     async def analyze_claim(self, claim_data, batch_id: str, claim_id: str) -> None:
         """Analyze the claim."""
-        lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
-        self._log_lock("creating", lock_path, "initialize claim lists")
-        with FileLock(lock_path):
-            if 'inaccessible_papers' not in claim_data or 'processed_papers' not in claim_data or 'non_relevant_papers' not in claim_data:
-                # Make sure the lists exist
-                if 'inaccessible_papers' not in claim_data:
-                    claim_data['inaccessible_papers'] = []
-                if 'processed_papers' not in claim_data:
-                    claim_data['processed_papers'] = []
-                if 'non_relevant_papers' not in claim_data:
-                    claim_data['non_relevant_papers'] = []
-                # Save the updated claim data back to the file
-                file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
-                async with aiofiles.open(file_path, 'w') as f:
-                    print(f"Analyze claim: Writing claim data for claim {claim_id} in batch {batch_id}")
-                    await f.write(json.dumps(claim_data, indent=2))
-        self._log_lock("released", lock_path, "initialize claim lists")
+        # Initialize lists if they don't exist
+        if 'inaccessible_papers' not in claim_data:
+            claim_data['inaccessible_papers'] = []
+        if 'processed_papers' not in claim_data:
+            claim_data['processed_papers'] = []
+        if 'non_relevant_papers' not in claim_data:
+            claim_data['non_relevant_papers'] = []
 
-        # Safely get corpus IDs from processed papers
-        processed_ids = []
-        for paper in claim_data.get('processed_papers', []):
-            try:
-                if isinstance(paper, dict) and isinstance(paper.get('paper'), dict):
-                    corpus_id = paper['paper'].get('corpusId')
-                    if corpus_id:
-                        processed_ids.append(corpus_id)
-            except Exception as e:
-                logger.warning(f"Error getting corpus ID from processed paper: {e}")
+        # Get sets of processed paper IDs
+        processed_ids = {p['paper']['corpusId'] for p in claim_data.get('processed_papers', [])}
+        non_relevant_ids = {p['paper']['corpusId'] for p in claim_data.get('non_relevant_papers', [])}
+        inaccessible_ids = {p['corpusId'] for p in claim_data.get('inaccessible_papers', [])}
 
-        # Safely get corpus IDs from non-relevant papers
-        non_relevant_ids = []
-        for paper in claim_data.get('non_relevant_papers', []):
-            try:
-                if isinstance(paper, dict) and isinstance(paper.get('paper'), dict):
-                    corpus_id = paper['paper'].get('corpusId')
-                    if corpus_id:
-                        non_relevant_ids.append(corpus_id)
-            except Exception as e:
-                logger.warning(f"Error getting corpus ID from non-relevant paper: {e}")
-
-        # Safely get corpus IDs from inaccessible papers
-        inaccessible_ids = []
-        for paper in claim_data.get('inaccessible_papers', []):
-            try:
-                corpus_id = paper.get('corpusId')
-                if corpus_id:
-                    inaccessible_ids.append(corpus_id)
-            except Exception as e:
-                logger.warning(f"Error getting corpus ID from inaccessible paper: {e}")
-
-        # Iterate over the raw papers with safer checks
+        # Analyze raw papers
         for raw_paper in claim_data.get('raw_papers', []):
             try:
                 await asyncio.sleep(0.1)
@@ -287,36 +259,25 @@ class ValsciProcessor:
                     corpus_id not in non_relevant_ids and 
                     corpus_id not in inaccessible_ids):
                     
-                    # Get the content of the paper
+                    # Get paper content
                     content_dict = self.s2_searcher.get_paper_content(corpus_id)
 
                     if content_dict is None or content_dict.get('text') is None:
-                        # Add to inaccessible papers using FileLock
-                        with FileLock(f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"):
-                            # First load the current file
-                            file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
-                            async with aiofiles.open(file_path, 'r') as f:
-                                print(f"Loading claim data for inaccessible paper {raw_paper['corpusId']} in claim {claim_id}")
-                                claim_data = json.loads(await f.read())
-                            # Add the inaccessible paper to the claim data
-                            claim_data['inaccessible_papers'].append(raw_paper)
-                            # Save the updated claim data back to the file
-                            async with aiofiles.open(file_path, 'w') as f:
-                                print(f"Saving updated claim data for inaccessible paper {raw_paper['corpusId']} in claim {claim_id}")
-                                await f.write(json.dumps(claim_data, indent=2))
+                        # Add to inaccessible papers
+                        claim_data['inaccessible_papers'].append(raw_paper)
                         continue
 
                     raw_paper['content'] = content_dict['text']
                     raw_paper['content_type'] = content_dict['source']
 
-                    
                     estimated_tokens_for_analysis = 1000 + (len(content_dict['text']) / 3.5)
                     current_num_requests, current_num_tokens = self.calculate_tokens_in_window()
+                    
                     if (estimated_tokens_for_analysis + current_num_tokens < self.max_tokens_per_window and 
                         current_num_requests < self.max_requests_per_window and
-                        not self.papers_analyzing_in_progress.get(corpus_id)
-                        and raw_paper['corpusId'] not in claim_data['processed_papers']
-                        and raw_paper['corpusId'] not in claim_data['non_relevant_papers']):
+                        corpus_id not in self.papers_analyzing_in_progress and
+                        corpus_id not in processed_ids and
+                        corpus_id not in non_relevant_ids):
                         self.request_token_estimates.append({
                             'tokens': estimated_tokens_for_analysis, 
                             'timestamp': time.time()
@@ -329,58 +290,37 @@ class ValsciProcessor:
                 logger.error(f"Error processing raw paper: {e}")
                 continue
 
-        # If we have processed papers but with a score of -1, we need to score them
+        # Score papers that need scoring
         for paper in claim_data['processed_papers']:
             if paper['score'] == -1:
                 print(f"Score is -1 for paper {paper['paper']['corpusId']} in claim {claim_id}")
-                # Check the estimated tokens for the scoring (always 500 for this)
                 estimated_tokens_for_scoring = 500
                 current_num_requests, current_num_tokens = self.calculate_tokens_in_window()
+                
                 if (estimated_tokens_for_scoring + current_num_tokens < self.max_tokens_per_window and 
                     current_num_requests < self.max_requests_per_window and
-                    not self.papers_scoring_in_progress.get(paper['paper']['corpusId'])):
-                    self.papers_scoring_in_progress[paper['paper']['corpusId']] = True
+                    paper['paper']['corpusId'] not in self.papers_scoring_in_progress):
+                    self.papers_scoring_in_progress.add(paper['paper']['corpusId'])
                     self.request_token_estimates.append({'tokens': estimated_tokens_for_scoring, 'timestamp': time.time()})
                     print(f"Scoring paper {paper['paper']['corpusId']} in claim {claim_id}")
                     await asyncio.sleep(0.1)
-                    asyncio.create_task(self.score_paper(paper, claim_data, batch_id, claim_id))
+                    asyncio.create_task(self.score_paper(paper, batch_id, claim_id))
                 else:
-                    # Skip the rest of this claim until the next iteration
                     return
 
         # Check completion status
-        all_papers_scored = True
-        for paper in claim_data.get('processed_papers', []):
-            try:
-                if paper.get('score', -1) == -1:
-                    all_papers_scored = False
-                    print(f"Paper {paper['paper']['corpusId']} is not scored, breaking the loop")
-                    break
-            except Exception as e:
-                logger.warning(f"Error checking paper score: {e}")
-                all_papers_scored = False
-                break
-
-        all_papers_processed = True
-        try:
-            for raw_paper in claim_data.get('raw_papers', []):
-                corpus_id = raw_paper.get('corpusId')
-                if not corpus_id:
-                    continue
-                    
-                if (corpus_id not in processed_ids and 
-                    corpus_id not in non_relevant_ids and 
-                    corpus_id not in inaccessible_ids):
-                    all_papers_processed = False
-                    print(f"Paper {corpus_id} is not processed, breaking the loop")
-                    break
-        except Exception as e:
-            logger.warning(f"Error checking paper processing status: {e}")
-            all_papers_processed = False
+        all_papers_scored = all(paper.get('score', -1) != -1 for paper in claim_data.get('processed_papers', []))
+        all_papers_processed = all(
+            paper['corpusId'] in processed_ids or 
+            paper['corpusId'] in non_relevant_ids or 
+            paper['corpusId'] in inaccessible_ids 
+            for paper in claim_data.get('raw_papers', []) 
+            if paper.get('corpusId')
+        )
 
         if all_papers_scored and all_papers_processed:
             print(f"All papers scored and processed for claim {claim_id}")
-            if not self.claims_final_reporting_in_progress.get(claim_id):
+            if claim_id not in self.claims_final_reporting_in_progress:
                 try:
                     print(f"Checking status for final report for claim {claim_id}")
                     estimated_tokens_for_final_report = 2000 + (
@@ -389,19 +329,15 @@ class ValsciProcessor:
                         sum(len(explanation) for paper in claim_data.get('processed_papers', [])
                             for explanation in paper.get('explanations', []) if isinstance(explanation, str))
                     ) / 3.5
+                    
                     current_num_requests, current_num_tokens = self.calculate_tokens_in_window()
                     if (estimated_tokens_for_final_report + current_num_tokens < self.max_tokens_per_window and 
-                        current_num_requests < self.max_requests_per_window and
-                        not self.claims_final_reporting_in_progress.get(claim_id)):
+                        current_num_requests < self.max_requests_per_window):
                         self.request_token_estimates.append({'tokens': estimated_tokens_for_final_report, 'timestamp': time.time()})
-                        self.claims_final_reporting_in_progress[claim_id] = True
-
+                        self.claims_final_reporting_in_progress.add(claim_id)
                         print(f"Generating final report for claim {claim_id}")
-                        
-                        # Generate the final report
-                        asyncio.create_task(self.generate_final_report(claim_data, batch_id, claim_id))
+                        asyncio.create_task(self.generate_final_report(batch_id, claim_id))
                     else:
-                        # Skip the rest of this claim until the next iteration
                         print(f"Claim {claim_id} does not have enough tokens for final report generation")
                         return
                 except Exception as e:
@@ -410,7 +346,6 @@ class ValsciProcessor:
             else:
                 print(f"Claim {claim_id} final report already in progress")
                 return
-            
         else:
             print(f"Claim {claim_id} is not fully processed, breaking the loop")
             return
@@ -436,7 +371,7 @@ class ValsciProcessor:
     async def analyze_single_paper(self, raw_paper, claim_text, batch_id: str, claim_id: str) -> None:
         """Analyze a single paper."""
         try:
-            self.papers_analyzing_in_progress[raw_paper['corpusId']] = True
+            self.papers_analyzing_in_progress.add(raw_paper['corpusId'])
             
             # Estimate tokens before analysis
             estimated_tokens_for_analysis = 1000 + (len(raw_paper['content']) / 3.5)
@@ -456,118 +391,97 @@ class ValsciProcessor:
 
             print(f"Analyzed paper {raw_paper['corpusId']}")
 
-            # Single lock context for all file operations
-            lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
-            self._log_lock("creating", lock_path, f"save analysis for paper {raw_paper['corpusId']}")
-            with FileLock(lock_path):
-                # Load current state
-                file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
-                async with aiofiles.open(file_path, 'r') as f:
-                    print(f"Loading claim data for analysis of paper {raw_paper['corpusId']} in claim {claim_id}")
-                    claim_data = json.loads(await f.read())
-
-                # Check for duplicates in processed_papers before adding
-                processed_corpus_ids = {p['paper']['corpusId'] for p in claim_data.get('processed_papers', [])}
-                
-                # Update claim data
-                if relevance >= 0.1:
-                    if raw_paper['corpusId'] not in processed_corpus_ids:
-                        claim_data['processed_papers'].append({
-                            'paper': raw_paper,
-                            'relevance': relevance,
-                            'excerpts': excerpts,
-                            'score': -1,
-                            'explanations': explanations,
-                            'content_type': raw_paper['content_type'],
-                            'excerpt_pages': excerpt_pages
-                        })
-                        # Add usage to claim data
-                        claim_data['usage']['input_tokens'] =  claim_data['usage']['input_tokens'] + usage['input_tokens']
-                        claim_data['usage']['output_tokens'] =  claim_data['usage']['output_tokens'] + usage['output_tokens']
-                        claim_data['usage']['cost'] =  claim_data['usage']['cost'] + usage['cost']
-                    else:
-                        logger.warning(f"Skipping duplicate paper {raw_paper['corpusId']} for claim {claim_id}")
-                else:
-                    # Check for duplicates in non_relevant_papers as well
-                    non_relevant_corpus_ids = {p['paper']['corpusId'] for p in claim_data.get('non_relevant_papers', [])}
-                    if raw_paper['corpusId'] not in non_relevant_corpus_ids:
-                        claim_data['non_relevant_papers'].append({
-                            'paper': raw_paper,
-                            'explanation': non_relevant_explanation,
-                            'content_type': raw_paper['content_type']
-                        })
-
+            # Get claim data from memory
+            claim_data = self.claims_in_memory[(batch_id, claim_id)]
+            
+            # Check for duplicates in processed_papers before adding
+            processed_corpus_ids = {p['paper']['corpusId'] for p in claim_data.get('processed_papers', [])}
+            
+            # Update claim data
+            if relevance >= 0.1:
+                if raw_paper['corpusId'] not in processed_corpus_ids:
+                    claim_data['processed_papers'].append({
+                        'paper': raw_paper,
+                        'relevance': relevance,
+                        'excerpts': excerpts,
+                        'score': -1,
+                        'explanations': explanations,
+                        'content_type': raw_paper['content_type'],
+                        'excerpt_pages': excerpt_pages
+                    })
                     # Add usage to claim data
-                    claim_data['usage']['input_tokens'] =  claim_data['usage']['input_tokens'] + usage['input_tokens']
-                    claim_data['usage']['output_tokens'] =  claim_data['usage']['output_tokens'] + usage['output_tokens']
-                    claim_data['usage']['cost'] =  claim_data['usage']['cost'] + usage['cost']
+                    claim_data['usage']['input_tokens'] += usage['input_tokens']
+                    claim_data['usage']['output_tokens'] += usage['output_tokens']
+                    claim_data['usage']['cost'] += usage['cost']
+                else:
+                    logger.warning(f"Skipping duplicate paper {raw_paper['corpusId']} for claim {claim_id}")
+            else:
+                # Check for duplicates in non_relevant_papers
+                non_relevant_corpus_ids = {p['paper']['corpusId'] for p in claim_data.get('non_relevant_papers', [])}
+                if raw_paper['corpusId'] not in non_relevant_corpus_ids:
+                    claim_data['non_relevant_papers'].append({
+                        'paper': raw_paper,
+                        'explanation': non_relevant_explanation,
+                        'content_type': raw_paper['content_type']
+                    })
 
-                # Write updated data
-                print(f"Analyze claim: Writing claim data for claim {claim_id} in batch {batch_id}")
-                await self._write_claim_data(claim_data, batch_id, claim_id)
-            self._log_lock("released", lock_path, f"save analysis for paper {raw_paper['corpusId']}")
+                # Add usage to claim data
+                claim_data['usage']['input_tokens'] += usage['input_tokens']
+                claim_data['usage']['output_tokens'] += usage['output_tokens']
+                claim_data['usage']['cost'] += usage['cost']
 
         except Exception as e:
             logger.error(f"Error analyzing paper {raw_paper['corpusId']}: {str(e)}")
         finally:
-            self.papers_analyzing_in_progress[raw_paper['corpusId']] = False
+            self.papers_analyzing_in_progress.discard(raw_paper['corpusId'])
 
-    async def score_paper(self, processed_paper, claim_data, batch_id: str, claim_id: str) -> None:
+    async def score_paper(self, processed_paper, batch_id: str, claim_id: str) -> None:
         """Score a single paper."""
         try:
             paper_id = processed_paper['paper']['corpusId']
-            # If you want to estimate tokens for scoring:
-            estimated_tokens_for_scoring = 500  # as an example
+            estimated_tokens_for_scoring = 500
             await self._add_tokens_for_claim(claim_id, estimated_tokens_for_scoring, batch_id)
-            self.papers_scoring_in_progress[paper_id] = True
+
+            # Check token cap
+            if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
+                return
+
             score, usage = await self.evidence_scorer.calculate_paper_weight(
                 processed_paper, 
                 ai_service=self.openai_service
             )
-            # Check if we exceeded the token cap
+
             print(f"Claim {claim_id} token usage as of scoring: {self.claim_token_usage[claim_id]}")
-            if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
-                return
 
-            # Single lock context for all file operations
-            lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
-            self._log_lock("creating", lock_path, f"save score for paper {paper_id}")
-            with FileLock(lock_path):
-                # Load current state
-                file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
-                async with aiofiles.open(file_path, 'r') as f:
-                    print(f"Loading claim data for scoring paper {paper_id} in claim {claim_id}")
-                    claim_data = json.loads(await f.read())
+            # Get claim data from memory
+            claim_data = self.claims_in_memory[(batch_id, claim_id)]
 
-                # Update score
-                for paper in claim_data['processed_papers']:
-                    if paper['paper']['corpusId'] == paper_id:
-                        print(f"Found paper to set score for: {paper_id}")
-                        paper['score'] = score
-                        break
+            # Update score
+            for paper in claim_data['processed_papers']:
+                if paper['paper']['corpusId'] == paper_id:
+                    print(f"Found paper to set score for: {paper_id}")
+                    paper['score'] = score
+                    break
 
-                # Add usage to claim data
-                claim_data['usage']['input_tokens'] =  claim_data['usage']['input_tokens'] + usage['input_tokens']
-                claim_data['usage']['output_tokens'] =  claim_data['usage']['output_tokens'] + usage['output_tokens']
-                claim_data['usage']['cost'] =  claim_data['usage']['cost'] + usage['cost']
-
-                # Write updated data
-                print(f"Save score: Writing claim data for claim {claim_id} in batch {batch_id}")
-                await self._write_claim_data(claim_data, batch_id, claim_id)
-                print(f"Updated claim data for scoring paper {paper_id} in claim {claim_id}")
-            self._log_lock("released", lock_path, f"save score for paper {paper_id}")
+            # Add usage to claim data
+            claim_data['usage']['input_tokens'] += usage['input_tokens']
+            claim_data['usage']['output_tokens'] += usage['output_tokens']
+            claim_data['usage']['cost'] += usage['cost']
 
         except Exception as e:
             logger.error(f"Error scoring paper: {str(e)}")
         finally:
             if 'paper_id' in locals():
-                self.papers_scoring_in_progress[paper_id] = False
+                self.papers_scoring_in_progress.discard(paper_id)
 
-    async def generate_final_report(self, claim_data, batch_id: str, claim_id: str) -> None:
+    async def generate_final_report(self, batch_id: str, claim_id: str) -> None:
         """Generate the final report."""
         try:
+            # Get claim data from memory
+            claim_data = self.claims_in_memory[(batch_id, claim_id)]
+            
             # Estimate tokens for final report generation
-            estimated_tokens_for_final_report = 1000 + (
+            estimated_tokens_for_final_report = 2000 + (
                 sum(len(excerpt) for paper in claim_data.get('processed_papers', [])
                     for excerpt in paper.get('excerpts', []) if isinstance(excerpt, str)) +
                 sum(len(explanation) for paper in claim_data.get('processed_papers', [])
@@ -576,7 +490,7 @@ class ValsciProcessor:
             
             await self._add_tokens_for_claim(claim_id, estimated_tokens_for_final_report, batch_id)
 
-            # Check if we exceeded the token cap
+            # Check token cap
             if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
                 return
 
@@ -594,16 +508,6 @@ class ValsciProcessor:
                     "claim_text": claim_data['text']
                 }
                 claim_data['report'] = report
-
-                # Single lock context for file operations
-                lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
-                self._log_lock("creating", lock_path, f"save empty report for claim {claim_id}")
-                with FileLock(lock_path):
-                    print(f"Generate final report: Writing claim data for claim {claim_id} in batch {batch_id}")
-                    await self._write_claim_data(claim_data, batch_id, claim_id)
-                self._log_lock("released", lock_path, f"save empty report for claim {claim_id}")
-                return
-
             else:
                 report, usage = await self.claim_processor.generate_final_report(
                     claim_data['text'],
@@ -616,9 +520,9 @@ class ValsciProcessor:
                 
                 claim_data['status'] = "processed"
                 # Add usage to claim data
-                claim_data['usage']['input_tokens'] =  claim_data['usage']['input_tokens'] + usage['input_tokens']
-                claim_data['usage']['output_tokens'] =  claim_data['usage']['output_tokens'] + usage['output_tokens']
-                claim_data['usage']['cost'] =  claim_data['usage']['cost'] + usage['cost']
+                claim_data['usage']['input_tokens'] += usage['input_tokens']
+                claim_data['usage']['output_tokens'] += usage['output_tokens']
+                claim_data['usage']['cost'] += usage['cost']
 
                 # Add usage to report
                 report['usage_stats'] = {
@@ -629,19 +533,13 @@ class ValsciProcessor:
 
                 claim_data['report'] = report
 
-                # Single lock context for file operations
-                lock_path = f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"
-                self._log_lock("creating", lock_path, f"save final report for claim {claim_id}")
-                with FileLock(lock_path):
-                    print(f"Generate final report: Writing claim data for claim {claim_id} in batch {batch_id}")
-                    await self._write_claim_data(claim_data, batch_id, claim_id)
-                self._log_lock("released", lock_path, f"save final report for claim {claim_id}")
-
-            self.claims_final_reporting_in_progress[claim_id] = False
+            # Save the final processed claim
+            await self._save_processed_claim(claim_data, batch_id, claim_id)
 
         except Exception as e:
             logger.error(f"Error preparing final report: {e}")
-            return
+        finally:
+            self.claims_final_reporting_in_progress.discard(claim_id)
 
     async def check_for_claims(self):
         """Check for any queued claims and process them."""
@@ -660,83 +558,52 @@ class ValsciProcessor:
 
                     file_path = os.path.join(batch_dir, filename)
                     try:
-                        # Add a small delay to avoid overwhelming the server
-                        await asyncio.sleep(0.1)
-                        async with aiofiles.open(file_path, 'r') as f:
-                            print(f"Loading claim data for check_for_claims in claim {filename}")
-                            claim_data = json.loads(await f.read())
-
-                        claim_id = claim_data['claim_id']
-                        batch_id = claim_data['batch_id']
-                            
-                        if claim_data.get('status') == 'queued':
-                            if not self.claims_query_generation_in_progress.get(claim_id):
-                                claim_text_length = len(claim_data['text'])
-                                estimated_tokens_for_query_generation = 1000 + (claim_text_length / 3.5)
-                                current_num_requests, current_num_tokens = self.calculate_tokens_in_window()
-                                if (estimated_tokens_for_query_generation + current_num_tokens < self.max_tokens_per_window and 
-                                    current_num_requests < self.max_requests_per_window):
-                                    self.claims_query_generation_in_progress[claim_id] = True
+                        claim_id = filename[:-4]  # Remove .txt
+                        
+                        # Skip if already in memory
+                        if (batch_id, claim_id) in self.claims_in_memory:
+                            claim_data = self.claims_in_memory[(batch_id, claim_id)]
+                        else:
+                            # Load new claim into memory
+                            async with aiofiles.open(file_path, 'r') as f:
+                                claim_data = json.loads(await f.read())
+                                self.claims_in_memory[(batch_id, claim_id)] = claim_data
+                        
+                        # Process based on status
+                        if claim_data['status'] == 'queued':
+                            if claim_id not in self.claims_query_generation_in_progress:
+                                estimated_tokens = 1000 + (len(claim_data['text']) / 3.5)
+                                current_requests, current_tokens = self.calculate_tokens_in_window()
+                                if (estimated_tokens + current_tokens < self.max_tokens_per_window and 
+                                    current_requests < self.max_requests_per_window):
+                                    self.claims_query_generation_in_progress.add(claim_id)
                                     asyncio.create_task(self.generate_search_queries(claim_data, batch_id, claim_id))
-                                else:
-                                    print(f"Claim {claim_id} does not have enough tokens for query generation")
-                                    continue
-                            else:
-                                # skip this claim until the next iteration
-                                print(f"Claim {claim_id} is already in progress")
-                                continue
-                        if claim_data.get('status') == 'ready_for_search':
-                            # Check whether there is currently a claim with searching in progress
-                            if any(self.claims_searching_in_progress.get(claim_id) for claim_id in self.claims_searching_in_progress):
-                                # skip this claim until the next iteration
-                                print(f"A claim is already being searched")
-                                continue
-                            else:
-                                # Mark this claim as searching in progress
-                                self.claims_searching_in_progress[claim_id] = True
-                                # create a search task and execute it (not blocking)
+                                
+                        elif claim_data['status'] == 'ready_for_search':
+                            if not self.claims_searching_in_progress:
+                                self.claims_searching_in_progress.add(claim_id)
                                 asyncio.create_task(self.search_papers(claim_data, batch_id, claim_id))
-
-                        if claim_data.get('status') == 'ready_for_analysis':
-                            num_requests, num_tokens = self.calculate_tokens_in_window()
-                            if num_tokens < self.max_tokens_per_window and num_requests < self.max_requests_per_window:
+                                
+                        elif claim_data['status'] == 'ready_for_analysis':
+                            current_requests, current_tokens = self.calculate_tokens_in_window()
+                            if current_tokens < self.max_tokens_per_window and current_requests < self.max_requests_per_window:
                                 await self.analyze_claim(claim_data, batch_id, claim_id)
-                            else:
-                                # skip this claim until the next iteration
-                                continue         
-
-                        if claim_data.get('status') == 'processed':
-                            # Move to saved jobs directory
+                                
+                        elif claim_data['status'] == 'processed':
+                            # Clean up memory and move file
+                            self.claims_in_memory.pop((batch_id, claim_id), None)
                             saved_batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
                             os.makedirs(saved_batch_dir, exist_ok=True)
                             await self.async_move_file(file_path, os.path.join(saved_batch_dir, f"{claim_id}.txt"))
-
-                            # Send an email if notifications are enabled and there are no more queued claims in this batch
-                            # There is a notification.json file with fields email and num_claims
-                            # First check that there are no more queued claims in this batch
-                            queued_claims = [filename for filename in os.listdir(batch_dir) if filename.endswith('.txt') and filename != 'claims.txt']
-                            if len(queued_claims) == 0:
-                                # Then check that there is a notification.json file
-                                notification_file = os.path.join(batch_dir, 'notification.json')
-                                if await async_os.path.exists(notification_file):
-                                    with FileLock(f"{notification_file}.lock"):
-                                        async with aiofiles.open(notification_file, 'r') as f:
-                                            print(f"Loading notification data for batch")
-                                            notification_data = json.loads(await f.read())
-                                        if notification_data['email']:
-                                            self.email_service.send_batch_completion_notification(notification_data['email'], batch_id, 
-                                                                                                notification_data.get('num_claims', 0),
-                                                                                                notification_data.get('review_type', 'standard'))
-                                        # Also remove the batch directory from the queued_jobs directory
-                                        await self.async_rmtree(batch_dir)
-
-                            logger.info(f"Completed processing claim {claim_id}")
+                            
+                            # Check if batch is complete
+                            await self._check_batch_completion(batch_id)
 
                     except Exception as e:
-                        logger.error(f"Error checking claim file {file_path}: {str(e)}")
+                        logger.error(f"Error processing claim file {file_path}: {str(e)}")
 
         except Exception as e:
-            logger.error(f"Error checking for queued claims: {str(e)}")
+            logger.error(f"Error checking for claims: {str(e)}")
 
     # Create an async wrapper for shutil operations
     async def async_move_file(self, src, dst):
