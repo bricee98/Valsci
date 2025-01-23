@@ -37,11 +37,23 @@ class AsyncFileLock:
     async def __aenter__(self):
         await self._lock.acquire()
         try:
+            wait_start = time.time()
+            # Debug: Indicate we are waiting for the lock file to be removed
+            print(f"Attempting to enter AsyncFileLock on {self.lock_path}")
+
             while await async_os.path.exists(self.lock_path):
+                # Debug: Possibly break or raise an error if we wait too long
+                waited = time.time() - wait_start
+                if waited > 5:  # Or some suitable timeout
+                    print(f"Warning: Still waiting on {self.lock_path} after {waited:.2f}s.")
                 await asyncio.sleep(0.1)
+
             async with aiofiles.open(self.lock_path, 'w') as f:
                 await f.write('locked')
+
+            print(f"Acquired AsyncFileLock. Created lock file: {self.lock_path}")
         except:
+            print("Exception in __aenter__, releasing lock and re-raising.")
             self._lock.release()
             raise
         return self
@@ -49,9 +61,13 @@ class AsyncFileLock:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         try:
             if await async_os.path.exists(self.lock_path):
+                print(f"Removing lock file {self.lock_path}")
                 await async_os.remove(self.lock_path)
+        except Exception as e:
+            print(f"Error removing lock file {self.lock_path}: {e}")
         finally:
             self._lock.release()
+            print(f"Released AsyncFileLock for {self.lock_path}")
 
 class ValsciProcessor:
     def __init__(self):
