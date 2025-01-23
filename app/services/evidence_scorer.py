@@ -15,12 +15,12 @@ class EvidenceScorer:
             # Add validation for processed_paper
             if processed_paper is None:
                 logger.error("processed_paper is None")
-                return 0.0
+                return 0.0, {'input_tokens': 0, 'output_tokens': 0, 'cost': 0}
             
             # Add validation for paper key
             if 'paper' not in processed_paper:
                 logger.error(f"No 'paper' key in processed_paper: {processed_paper}")
-                return 0.0
+                return 0.0, {'input_tokens': 0, 'output_tokens': 0, 'cost': 0}
 
             # Get the nested paper data
             paper = processed_paper['paper']
@@ -28,7 +28,7 @@ class EvidenceScorer:
             # Add validation for paper object
             if paper is None:
                 logger.error("paper object is None")
-                return 0.0
+                return 0.0, {'input_tokens': 0, 'output_tokens': 0, 'cost': 0}
             
             # Log the paper structure for debugging
             logger.debug(f"Processing paper structure: {paper}")
@@ -68,7 +68,7 @@ class EvidenceScorer:
 
         except Exception as e:
             logger.error(f"Error calculating paper weight: {str(e)}")
-            return 0.0
+            return 0.0, {'input_tokens': 0, 'output_tokens': 0, 'cost': 0}
 
     def _get_author_h_index(self, authors: List[Dict]) -> float:
         """Get the average h-index among the paper's authors (first and last only)."""
