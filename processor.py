@@ -13,9 +13,11 @@ from app.services.openai_service import OpenAIService
 from app.services.paper_analyzer import PaperAnalyzer
 from app.services.evidence_scorer import EvidenceScorer
 import time
-from async_filelock import AsyncFileLock
 from app.config import settings
 import os.path
+import aiofiles
+import aiofiles.os as async_os
+from contextlib import asynccontextmanager
 
 # Configure logging
 logging.basicConfig(
@@ -26,6 +28,30 @@ logger = logging.getLogger(__name__)
 
 QUEUED_JOBS_DIR = 'queued_jobs'
 SAVED_JOBS_DIR = 'saved_jobs'
+
+class AsyncFileLock:
+    def __init__(self, lock_path: str):
+        self.lock_path = lock_path
+        self._lock = asyncio.Lock()
+        
+    async def __aenter__(self):
+        await self._lock.acquire()
+        try:
+            while await async_os.path.exists(self.lock_path):
+                await asyncio.sleep(0.1)
+            async with aiofiles.open(self.lock_path, 'w') as f:
+                await f.write('locked')
+        except:
+            self._lock.release()
+            raise
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        try:
+            if await async_os.path.exists(self.lock_path):
+                await async_os.remove(self.lock_path)
+        finally:
+            self._lock.release()
 
 class ValsciProcessor:
     def __init__(self):
@@ -74,10 +100,10 @@ class ValsciProcessor:
             async with AsyncFileLock(lock_path):
                 # Load current file
                 file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
-                if os.path.exists(file_path):
-                    with open(file_path, 'r') as f:
+                if await async_os.path.exists(file_path):
+                    async with aiofiles.open(file_path, 'r') as f:
                         print(f"Loading claim data for max tokens cap in claim {claim_id}")
-                        claim_data = json.load(f)
+                        claim_data = json.loads(await f.read())
 
                     claim_data['status'] = 'processed'
                     claim_data['report'] = {
@@ -90,8 +116,9 @@ class ValsciProcessor:
                     }
 
                     # Write updated data to file
-                    with open(file_path, 'w') as f:
-                        json.dump(claim_data, f, indent=2)
+                    async with aiofiles.open(file_path, 'w') as f:
+                        print(f"Generate search queries: Writing claim data for claim {claim_id} in batch {batch_id}")
+                        await f.write(json.dumps(claim_data, indent=2))
 
 
     def calculate_tokens_in_window(self):
@@ -124,9 +151,10 @@ class ValsciProcessor:
 
         # Save the queries to a file
         # First load the current file
-        with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'r') as f:
+        file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
+        async with aiofiles.open(file_path, 'r') as f:
             print(f"Generate search queries: Loading claim data for query generation in claim {claim_id}")
-            claim_data = json.load(f)
+            claim_data = json.loads(await f.read())
         # Add the queries to the claim data
         claim_data['semantic_scholar_queries'] = queries
         # Add the status to the claim data
@@ -134,9 +162,9 @@ class ValsciProcessor:
         # Add the usage to the claim data
         claim_data['usage'] = usage
         # Save the updated claim data back to the file
-        with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'w') as f:
+        async with aiofiles.open(file_path, 'w') as f:
             print(f"Generate search queries: Writing claim data for claim {claim_id} in batch {batch_id}")
-            json.dump(claim_data, f, indent=2)
+            await f.write(json.dumps(claim_data, indent=2))
 
         return
     
@@ -187,9 +215,10 @@ class ValsciProcessor:
                 claim_data['raw_papers'] = papers
                 claim_data['status'] = 'ready_for_analysis'
 
-            with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'w') as f:
+            file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
+            async with aiofiles.open(file_path, 'w') as f:
                 print(f"Search papers: Writing claim data for claim {claim_id} in batch {batch_id}")
-                json.dump(claim_data, f, indent=2)
+                await f.write(json.dumps(claim_data, indent=2))
 
             return
         
@@ -229,9 +258,10 @@ class ValsciProcessor:
                 if 'non_relevant_papers' not in claim_data:
                     claim_data['non_relevant_papers'] = []
                 # Save the updated claim data back to the file
-                with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'w') as f:
+                file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
+                async with aiofiles.open(file_path, 'w') as f:
                     print(f"Analyze claim: Writing claim data for claim {claim_id} in batch {batch_id}")
-                    json.dump(claim_data, f, indent=2)
+                    await f.write(json.dumps(claim_data, indent=2))
         self._log_lock("released", lock_path, "initialize claim lists")
 
         # Safely get corpus IDs from processed papers
@@ -286,15 +316,16 @@ class ValsciProcessor:
                         # Add to inaccessible papers using FileLock
                         async with AsyncFileLock(f"{os.path.join(QUEUED_JOBS_DIR, batch_id, f'{claim_id}.txt')}.lock"):
                             # First load the current file
-                            with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'r') as f:
+                            file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
+                            async with aiofiles.open(file_path, 'r') as f:
                                 print(f"Loading claim data for inaccessible paper {raw_paper['corpusId']} in claim {claim_id}")
-                                claim_data = json.load(f)
+                                claim_data = json.loads(await f.read())
                             # Add the inaccessible paper to the claim data
                             claim_data['inaccessible_papers'].append(raw_paper)
                             # Save the updated claim data back to the file
-                            with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'w') as f:
+                            async with aiofiles.open(file_path, 'w') as f:
                                 print(f"Saving updated claim data for inaccessible paper {raw_paper['corpusId']} in claim {claim_id}")
-                                json.dump(claim_data, f, indent=2)
+                                await f.write(json.dumps(claim_data, indent=2))
                         continue
 
                     raw_paper['content'] = content_dict['text']
@@ -325,9 +356,10 @@ class ValsciProcessor:
         self._log_lock("creating", lock_path, "process papers and run final report")
         async with AsyncFileLock(lock_path):
             # Reload claim data to get latest state
-            with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'r') as f:
+            file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
+            async with aiofiles.open(file_path, 'r') as f:
                 print(f"Analyze claim: Loading claim data for processed papers in claim {claim_id}")
-                claim_data = json.load(f)
+                claim_data = json.loads(await f.read())
             
             # If we have processed papers but with a score of -1, we need to score them
             for paper in claim_data['processed_papers']:
@@ -423,20 +455,23 @@ class ValsciProcessor:
 
         return
     
-    def _write_claim_data(self, claim_data, batch_id, claim_id):
-        """Internal method to write claim data without locking."""
+    async def _write_claim_data(self, claim_data, batch_id, claim_id):
+        """Internal method to write claim data asynchronously."""
         file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
-        logger.warning(
-            f"[_write_claim_data] Writing claim data to {file_path}.\n"
-            f"processed_papers scores: {[p['score'] for p in claim_data.get('processed_papers', [])]}"
-        )
-        with open(file_path, 'w') as f:
-            print(f"Writing claim data for claim {claim_id} in batch {batch_id}")
-            json.dump(claim_data, f, indent=2)
-        logger.warning(
-            f"[_write_claim_data] Finished writing claim data to {file_path}.\n"
-            f"processed_papers scores: {[p['score'] for p in claim_data.get('processed_papers', [])]}"
-        )
+        try:
+            logger.warning(
+                f"[_write_claim_data] Writing claim data to {file_path}.\n"
+                f"processed_papers scores: {[p['score'] for p in claim_data.get('processed_papers', [])]}"
+            )
+            async with aiofiles.open(file_path, 'w') as f:
+                await f.write(json.dumps(claim_data, indent=2))
+            logger.warning(
+                f"[_write_claim_data] Finished writing claim data to {file_path}.\n"
+                f"processed_papers scores: {[p['score'] for p in claim_data.get('processed_papers', [])]}"
+            )
+        except Exception as e:
+            logger.error(f"Error writing claim data to {file_path}: {str(e)}")
+            raise
 
     async def analyze_single_paper(self, raw_paper, claim_text, batch_id: str, claim_id: str) -> None:
         """Analyze a single paper."""
@@ -466,9 +501,10 @@ class ValsciProcessor:
             self._log_lock("creating", lock_path, f"save analysis for paper {raw_paper['corpusId']}")
             async with AsyncFileLock(lock_path):
                 # Load current state
-                with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'r') as f:
+                file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
+                async with aiofiles.open(file_path, 'r') as f:
                     print(f"Loading claim data for analysis of paper {raw_paper['corpusId']} in claim {claim_id}")
-                    claim_data = json.load(f)
+                    claim_data = json.loads(await f.read())
 
                 # Check for duplicates in processed_papers before adding
                 processed_corpus_ids = {p['paper']['corpusId'] for p in claim_data.get('processed_papers', [])}
@@ -503,7 +539,7 @@ class ValsciProcessor:
 
                 # Write updated data
                 print(f"Analyze claim: Writing claim data for claim {claim_id} in batch {batch_id}")
-                self._write_claim_data(claim_data, batch_id, claim_id)
+                await self._write_claim_data(claim_data, batch_id, claim_id)
             self._log_lock("released", lock_path, f"save analysis for paper {raw_paper['corpusId']}")
 
         except Exception as e:
@@ -533,9 +569,10 @@ class ValsciProcessor:
             self._log_lock("creating", lock_path, f"save score for paper {paper_id}")
             async with AsyncFileLock(lock_path):
                 # Load current state
-                with open(os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt"), 'r') as f:
+                file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
+                async with aiofiles.open(file_path, 'r') as f:
                     print(f"Loading claim data for scoring paper {paper_id} in claim {claim_id}")
-                    claim_data = json.load(f)
+                    claim_data = json.loads(await f.read())
 
                 # Update score
                 for paper in claim_data['processed_papers']:
@@ -551,7 +588,7 @@ class ValsciProcessor:
 
                 # Write updated data
                 print(f"Save score: Writing claim data for claim {claim_id} in batch {batch_id}")
-                self._write_claim_data(claim_data, batch_id, claim_id)
+                await self._write_claim_data(claim_data, batch_id, claim_id)
                 print(f"Updated claim data for scoring paper {paper_id} in claim {claim_id}")
             self._log_lock("released", lock_path, f"save score for paper {paper_id}")
 
@@ -598,7 +635,7 @@ class ValsciProcessor:
                 self._log_lock("creating", lock_path, f"save empty report for claim {claim_id}")
                 async with AsyncFileLock(lock_path):
                     print(f"Generate final report: Writing claim data for claim {claim_id} in batch {batch_id}")
-                    self._write_claim_data(claim_data, batch_id, claim_id)
+                    await self._write_claim_data(claim_data, batch_id, claim_id)
                 self._log_lock("released", lock_path, f"save empty report for claim {claim_id}")
                 return
 
@@ -632,7 +669,7 @@ class ValsciProcessor:
                 self._log_lock("creating", lock_path, f"save final report for claim {claim_id}")
                 async with AsyncFileLock(lock_path):
                     print(f"Generate final report: Writing claim data for claim {claim_id} in batch {batch_id}")
-                    self._write_claim_data(claim_data, batch_id, claim_id)
+                    await self._write_claim_data(claim_data, batch_id, claim_id)
                 self._log_lock("released", lock_path, f"save final report for claim {claim_id}")
 
             self.claims_final_reporting_in_progress[claim_id] = False
@@ -660,9 +697,9 @@ class ValsciProcessor:
                     try:
                         # Add a small delay to avoid overwhelming the server
                         await asyncio.sleep(0.1)
-                        with open(file_path, 'r') as f:
+                        async with aiofiles.open(file_path, 'r') as f:
                             print(f"Loading claim data for check_for_claims in claim {filename}")
-                            claim_data = json.load(f)
+                            claim_data = json.loads(await f.read())
 
                         claim_id = claim_data['claim_id']
                         batch_id = claim_data['batch_id']
@@ -707,9 +744,7 @@ class ValsciProcessor:
                             # Move to saved jobs directory
                             saved_batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
                             os.makedirs(saved_batch_dir, exist_ok=True)
-                            shutil.move(file_path, os.path.join(saved_batch_dir, f"{claim_id}.txt"))
-                            # Remove the lock file
-                            os.remove(f"{file_path}.lock")
+                            await self.async_move_file(file_path, os.path.join(saved_batch_dir, f"{claim_id}.txt"))
 
                             # Send an email if notifications are enabled and there are no more queued claims in this batch
                             # There is a notification.json file with fields email and num_claims
@@ -718,17 +753,17 @@ class ValsciProcessor:
                             if len(queued_claims) == 0:
                                 # Then check that there is a notification.json file
                                 notification_file = os.path.join(batch_dir, 'notification.json')
-                                if os.path.exists(notification_file):
+                                if await async_os.path.exists(notification_file):
                                     async with AsyncFileLock(f"{notification_file}.lock"):
-                                        with open(notification_file, 'r') as f:
+                                        async with aiofiles.open(notification_file, 'r') as f:
                                             print(f"Loading notification data for batch")
-                                            notification_data = json.load(f)
+                                            notification_data = json.loads(await f.read())
                                         if notification_data['email']:
                                             self.email_service.send_batch_completion_notification(notification_data['email'], batch_id, 
                                                                                                 notification_data.get('num_claims', 0),
                                                                                                 notification_data.get('review_type', 'standard'))
                                         # Also remove the batch directory from the queued_jobs directory
-                                        shutil.rmtree(batch_dir)
+                                        await self.async_rmtree(batch_dir)
 
                             logger.info(f"Completed processing claim {claim_id}")
 
@@ -738,11 +773,18 @@ class ValsciProcessor:
         except Exception as e:
             logger.error(f"Error checking for queued claims: {str(e)}")
 
+    # Create an async wrapper for shutil operations
+    async def async_move_file(self, src, dst):
+        await asyncio.to_thread(shutil.move, src, dst)
+
+    async def async_rmtree(self, path):
+        await asyncio.to_thread(shutil.rmtree, path)
+
 async def main():
     """Main function to run the processor."""
     try:
-        os.makedirs(QUEUED_JOBS_DIR, exist_ok=True)
-        os.makedirs(SAVED_JOBS_DIR, exist_ok=True)
+        await asyncio.to_thread(os.makedirs, QUEUED_JOBS_DIR, exist_ok=True)
+        await asyncio.to_thread(os.makedirs, SAVED_JOBS_DIR, exist_ok=True)
 
         processor = ValsciProcessor()
         logger.info("Started monitoring queued_jobs directory")
