@@ -558,6 +558,7 @@ class ValsciProcessor:
 
                     file_path = os.path.join(batch_dir, filename)
                     try:
+                        asyncio.sleep(0.1)
                         claim_id = filename[:-4]  # Remove .txt
                         
                         # Skip if already in memory
