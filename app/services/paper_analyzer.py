@@ -24,6 +24,7 @@ class PaperAnalyzer:
         - list of explanations for each excerpt
         - explanation if paper is not relevant
         - list of page numbers for excerpts
+        - usage stats
         """
         
         # Clean and format the content
@@ -106,7 +107,8 @@ class PaperAnalyzer:
 
         except Exception as e:
             logger.error(f"Error analyzing paper content: {str(e)}")
-            return 0, [], [], "Error analyzing paper content", []
+            # Return empty usage stats in error case
+            return 0, [], [], "Error analyzing paper content", [], {'input_tokens': 0, 'output_tokens': 0, 'cost': 0}
 
     def _clean_content(self, content: str) -> str:
         """Clean and format paper content for analysis."""

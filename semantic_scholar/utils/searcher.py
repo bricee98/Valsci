@@ -145,19 +145,25 @@ class S2Searcher:
             Return results as a JSON object with 'explanations' and 'queries' arrays.
             """)
         
-        print("About to generate queries")
+        try:
+            print("About to generate queries")
 
-        result = await ai_service.generate_json_async(user_prompt, system_prompt)
-        response = result['content']
-        usage = result['usage']
-        queries = response.get('queries', [])
-        
-        # Log generated queries for debugging
-        console.print("\n[cyan]Generated queries:[/cyan]")
-        for query in queries:
-            console.print(f"[green]- {query}[/green]")
+            result = await ai_service.generate_json_async(user_prompt, system_prompt)
+            response = result['content']
+            usage = result['usage']
+            queries = response.get('queries', [])
             
-        return queries, usage
+            # Log generated queries for debugging
+            console.print("\n[cyan]Generated queries:[/cyan]")
+            for query in queries:
+                console.print(f"[green]- {query}[/green]")
+                
+            return queries, usage
+
+        except Exception as e:
+            logger.error(f"Error generating search queries: {str(e)}")
+            # Return empty queries and usage stats in error case
+            return [], {'input_tokens': 0, 'output_tokens': 0, 'cost': 0}
 
     async def search_papers_for_claim(self, queries: List[str], results_per_query: int = 5) -> List[Dict]:
         """Search papers relevant to a claim."""

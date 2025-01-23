@@ -105,7 +105,8 @@ class EvidenceScorer:
     async def _calculate_venue_impact(self, paper_journal, ai_service) -> float:
         """Calculate venue impact using GPT to estimate journal/conference quality."""
         if not paper_journal:
-            return 0.0
+            # Return tuple of (score, usage) instead of just score
+            return 0.0, {'input_tokens': 0, 'output_tokens': 0, 'cost': 0}
 
         try:
             system_prompt = """
@@ -140,4 +141,5 @@ class EvidenceScorer:
 
         except Exception as e:
             logger.error(f"Error calculating venue impact for {paper_journal}: {str(e)}")
-            return 0.0
+            # Return tuple of (score, usage) instead of just score
+            return 0.0, {'input_tokens': 0, 'output_tokens': 0, 'cost': 0}

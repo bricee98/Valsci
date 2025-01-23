@@ -202,7 +202,7 @@ class ClaimProcessor:
 
         except Exception as e:
             logger.error(f"Error in generate_final_report: {str(e)}")
-            # Return a safe fallback response
+            # Return a safe fallback response with usage stats
             return {
                 "relevantPapers": [],
                 "nonRelevantPapers": [],
@@ -211,7 +211,7 @@ class ClaimProcessor:
                 "claimRating": -1,
                 "searchQueries": [],
                 "usage_stats": {}
-            }
+            }, {'input_tokens': 0, 'output_tokens': 0, 'cost': 0}  # Add empty usage stats
 
     def _format_citation(self, paper, page_number):
         """Format citation in RIS format."""
