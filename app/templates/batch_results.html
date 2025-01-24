@@ -14,6 +14,7 @@
         <div class="actions-bar">
             <button id="deleteBatchButton" class="danger-button">Delete Batch</button>
             <button id="downloadCSV" class="primary-button">Download CSV</button>
+            <button id="downloadMarkdown" class="primary-button">Bulk Download Markdown</button>
             <input type="text" id="filter-input" placeholder="Filter results..." class="filter-input">
         </div>
         
@@ -171,6 +172,11 @@
         // Filter input handler
         document.getElementById('filter-input').addEventListener('keyup', function(e) {
             table.setFilter("text", "like", e.target.value);
+        });
+
+        // Add a click handler for Bulk Download Markdown
+        document.getElementById('downloadMarkdown').addEventListener('click', function() {
+            window.location.href = `/api/v1/batch/${batchId}/download_markdown`;
         });
     </script>
 </body>

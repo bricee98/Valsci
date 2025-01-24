@@ -422,6 +422,120 @@ def download_citations(claim_id):
         if 'citation_file_path' in locals() and os.path.exists(citation_file_path):
             os.remove(citation_file_path)
 
+def generate_markdown_report(claim_data):
+    """Helper function to generate consistent markdown reports"""
+    report = claim_data.get('report', {})
+    md_content = []
+    
+    # Basic info
+    md_content.append(f"# Claim: {claim_data.get('text', '')}\n")
+    md_content.append(f"**Status**: {claim_data.get('status', '')}\n")
+    md_content.append(f"**Overall Rating**: {report.get('claimRating', 'N/A')}\n")
+    md_content.append(f"**Explanation**:\n\n{report.get('explanation', 'No explanation available')}\n")
+    
+    # Add relevant papers section
+    md_content.append("\n## Relevant Papers\n")
+    for paper in report.get('relevantPapers', []):
+        md_content.append(f"\n### {paper.get('title', 'Untitled Paper')}\n")
+        if paper.get('authors'):
+            authors = ', '.join([f"{a.get('name')} (H-index: {a.get('hIndex', 'N/A')})" 
+                               for a in paper['authors']])
+            md_content.append(f"**Authors**: {authors}\n")
+        md_content.append(f"**Relevance**: {paper.get('relevance', 'N/A')}\n")
+        md_content.append(f"**Weight Score**: {paper.get('weight_score', 'N/A')}\n")
+        
+        if paper.get('excerpts'):
+            md_content.append("\n**Excerpts**:\n")
+            for excerpt in paper['excerpts']:
+                md_content.append(f"- {excerpt}\n")
+        
+        if paper.get('explanations'):
+            md_content.append("\n**Explanations**:\n")
+            for explanation in paper['explanations']:
+                md_content.append(f"- {explanation}\n")
+        
+        if paper.get('link'):
+            md_content.append(f"\n[Read Paper]({paper['link']})\n")
+    
+    # Add non-relevant papers section
+    if report.get('nonRelevantPapers'):
+        md_content.append("\n## Other Reviewed Papers\n")
+        for paper in report['nonRelevantPapers']:
+            md_content.append(f"\n### {paper.get('title', 'Untitled Paper')}\n")
+            if paper.get('explanation'):
+                md_content.append(f"**Why Not Relevant**: {paper['explanation']}\n")
+            if paper.get('link'):
+                md_content.append(f"\n[Read Paper]({paper['link']})\n")
+    
+    # Add search queries section
+    if report.get('searchQueries'):
+        md_content.append("\n## Search Queries Used\n")
+        for query in report['searchQueries']:
+            md_content.append(f"- {query}\n")
+    
+    # Add usage stats if available
+    if report.get('usage_stats'):
+        stats = report['usage_stats']
+        md_content.append("\n## Usage Statistics\n")
+        md_content.append(f"- Prompt Tokens: {stats.get('prompt_tokens', 0)}\n")
+        md_content.append(f"- Completion Tokens: {stats.get('completion_tokens', 0)}\n")
+        md_content.append(f"- Total Tokens: {stats.get('total_tokens', 0)}\n")
+        md_content.append(f"- Estimated Cost: ${stats.get('total_cost', 0):.4f}\n")
+    
+    return "\n".join(md_content)
+
+@api.route('/api/v1/claims/<batch_id>/<claim_id>/download_md', methods=['GET'])
+def download_claim_md(batch_id, claim_id):
+    """Download a single claim's final report as a markdown (.md) file."""
+    saved_file = os.path.join(SAVED_JOBS_DIR, batch_id, f"{claim_id}.txt")
+    if not os.path.exists(saved_file):
+        return jsonify({"error": "Claim not found"}), 404
+
+    with open(saved_file, 'r') as f:
+        claim_data = json.load(f)
+    
+    md_text = generate_markdown_report(claim_data)
+    
+    return Response(
+        md_text,
+        mimetype="text/markdown",
+        headers={
+            "Content-Disposition": f"attachment; filename=claim_{claim_id}.md"
+        }
+    )
+
+@api.route('/api/v1/batch/<batch_id>/download_markdown', methods=['GET'])
+def download_batch_markdown(batch_id):
+    """Download a zip of markdown files for all claims in a batch."""
+    batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
+    if not os.path.exists(batch_dir):
+        return jsonify({"error": "Batch not found"}), 404
+
+    claim_files = [f for f in os.listdir(batch_dir) if f.endswith('.txt') and f != 'claims.txt']
+    if not claim_files:
+        return jsonify({"error": "No processed claims found"}), 404
+
+    import io
+    import zipfile
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w') as zf:
+        for file_name in claim_files:
+            claim_id = file_name[:-4]  # remove .txt
+            saved_file = os.path.join(batch_dir, file_name)
+            with open(saved_file, 'r') as f:
+                claim_data = json.load(f)
+            
+            md_text = generate_markdown_report(claim_data)
+            zf.writestr(f"claim_{claim_id}.md", md_text)
+
+    zip_buffer.seek(0)
+    return send_file(
+        zip_buffer,
+        as_attachment=True,
+        download_name=f"batch_{batch_id}_reports.zip"
+    )
+
 async def process_claim_post_search(claim_id: str, papers: List[Paper], batch_id: str, sem: asyncio.Semaphore, claim_text: str):
     """Process a claim after papers have been retrieved."""
     async with sem:  # Limit concurrent processing

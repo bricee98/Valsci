@@ -210,7 +210,7 @@
         document.getElementById('downloadReport').addEventListener('click', function() {
             const batchId = urlParams.get('batch_id');
             if (claimId && batchId) {
-                window.location.href = `/api/v1/batch/${batchId}/download`;
+                window.location.href = `/api/v1/claims/${batchId}/${claimId}/download_md`;
             }
         });
 
