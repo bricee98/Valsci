@@ -166,7 +166,12 @@ env_vars.json
 ex_*
 
 saved_jobs/
+queued_jobs/
 papers/
 cookies/
 
 *.pdf
+
+semantic_scholar/datasets
+
+venv/

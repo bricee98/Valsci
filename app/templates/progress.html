@@ -60,18 +60,7 @@
                         `;
 
                         if (data.status === 'processed' && !batchId) {
-                            setTimeout(() => {
-                                try {
-                                    const additionalInfo = data.additional_info;
-                                    if (data.review_type === 'llm') {
-                                        window.location.href = `/llm-screen-results?claim_id=${claimId}`;
-                                    } else {
-                                        window.location.href = `/results?claim_id=${claimId}`;
-                                    }
-                                } catch (e) {
-                                    window.location.href = `/results?claim_id=${claimId}`;
-                                }
-                            }, 2000);
+                            window.location.href = `/results?claim_id=${claimId}`;
                         } else {
                             let progressMessage = '';
                             switch (data.status) {
@@ -139,28 +128,7 @@
                     }
 
                     if (data.status === 'completed') {
-                        const claimIdToCheck = data.current_claim_id || data.last_processed_claim_id;
-                        if (claimIdToCheck) {
-                            fetch(`/api/v1/claims/${claimIdToCheck}`)
-                                .then(response => response.json())
-                                .then(claimData => {
-                                    try {
-                                        const additionalInfo = JSON.parse(claimData.additional_info || '{}');
-                                        if ('overall_rating' in additionalInfo && 'plausibility_level' in additionalInfo) {
-                                            window.location.href = `/llm-screen-batch-results?batch_id=${batchId}`;
-                                        } else {
-                                            window.location.href = `/batch_results?batch_id=${batchId}`;
-                                        }
-                                    } catch (e) {
-                                        window.location.href = `/batch_results?batch_id=${batchId}`;
-                                    }
-                                })
-                                .catch(() => {
-                                    window.location.href = `/batch_results?batch_id=${batchId}`;
-                                });
-                        } else {
-                            window.location.href = `/batch_results?batch_id=${batchId}`;
-                        }
+                        window.location.href = `/batch_results?batch_id=${batchId}`;
                     } else {
                         setTimeout(updateStatus, 5000);
                     }

@@ -1,24 +1,29 @@
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from flask import current_app
 import logging
+from app.config.settings import Config  # Import Config class directly
 
 logger = logging.getLogger(__name__)
 
 class EmailService:
-    @staticmethod
-    def send_batch_start_notification(recipient_email, batch_id, num_claims, review_type):
-        if not current_app.config['ENABLE_EMAIL_NOTIFICATIONS']:
+    def __init__(self):
+        # Get settings directly from Config class
+        self.enable_notifications = Config.ENABLE_EMAIL_NOTIFICATIONS
+        self.smtp_server = Config.SMTP_SERVER
+        self.smtp_port = Config.SMTP_PORT
+        self.sender_email = Config.EMAIL_SENDER
+        self.app_password = Config.EMAIL_APP_PASSWORD
+        self.base_url = Config.BASE_URL
+
+    def send_batch_start_notification(self, recipient_email, batch_id, num_claims, review_type):
+        if not self.enable_notifications:
             logger.info("Email notifications are disabled")
             return False
 
         try:
-            sender_email = current_app.config['EMAIL_SENDER']
-            app_password = current_app.config['EMAIL_APP_PASSWORD']
-            
             message = MIMEMultipart()
-            message["From"] = sender_email
+            message["From"] = self.sender_email
             message["To"] = recipient_email
             message["Subject"] = f"Valsci Batch Processing Started - Batch {batch_id}"
 
@@ -30,7 +35,7 @@ class EmailService:
             Review Type: {review_type}
 
             You can monitor the progress at:
-            {current_app.config.get('BASE_URL', 'NO URL SET')}/progress?batch_id={batch_id}
+            {self.base_url}/progress?batch_id={batch_id}
 
             You will receive another email when processing is complete.
 
@@ -39,9 +44,9 @@ class EmailService:
 
             message.attach(MIMEText(body, "plain"))
 
-            with smtplib.SMTP(current_app.config['SMTP_SERVER'], current_app.config['SMTP_PORT']) as server:
+            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
                 server.starttls()
-                server.login(sender_email, app_password)
+                server.login(self.sender_email, self.app_password)
                 server.send_message(message)
 
             logger.info(f"Successfully sent start notification email to {recipient_email}")
@@ -51,22 +56,18 @@ class EmailService:
             logger.error(f"Failed to send start notification email: {str(e)}")
             return False
 
-    @staticmethod
-    def send_batch_completion_notification(recipient_email, batch_id, num_claims, review_type):
-        if not current_app.config['ENABLE_EMAIL_NOTIFICATIONS']:
+    def send_batch_completion_notification(self, recipient_email, batch_id, num_claims, review_type):
+        if not self.enable_notifications:
             logger.info("Email notifications are disabled")
             return False
 
         try:
-            sender_email = current_app.config['EMAIL_SENDER']
-            app_password = current_app.config['EMAIL_APP_PASSWORD']
-            
             message = MIMEMultipart()
-            message["From"] = sender_email
+            message["From"] = self.sender_email
             message["To"] = recipient_email
             message["Subject"] = f"Valsci Batch Processing Complete - Batch {batch_id}"
 
-            results_url = f"{current_app.config.get('BASE_URL', 'NO URL SET')}/batch_results?batch_id={batch_id}"
+            results_url = f"{self.base_url}/batch_results?batch_id={batch_id}"
 
             body = f"""
             Your batch processing is complete!
@@ -83,9 +84,9 @@ class EmailService:
 
             message.attach(MIMEText(body, "plain"))
 
-            with smtplib.SMTP(current_app.config['SMTP_SERVER'], current_app.config['SMTP_PORT']) as server:
+            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
                 server.starttls()
-                server.login(sender_email, app_password)
+                server.login(self.sender_email, self.app_password)
                 server.send_message(message)
 
             logger.info(f"Successfully sent completion notification email to {recipient_email}")
@@ -95,18 +96,14 @@ class EmailService:
             logger.error(f"Failed to send completion notification email: {str(e)}")
             return False
 
-    @staticmethod
-    def send_batch_error_notification(email: str, batch_id: str, error_message: str):
-        if not current_app.config['ENABLE_EMAIL_NOTIFICATIONS']:
+    def send_batch_error_notification(self, email: str, batch_id: str, error_message: str):
+        if not self.enable_notifications:
             logger.info("Email notifications are disabled")
             return False
 
         try:
-            sender_email = current_app.config['EMAIL_SENDER']
-            app_password = current_app.config['EMAIL_APP_PASSWORD']
-            
             message = MIMEMultipart()
-            message["From"] = sender_email
+            message["From"] = self.sender_email
             message["To"] = email
             message["Subject"] = f"Valsci Batch Processing Error - Batch {batch_id}"
 
@@ -117,7 +114,7 @@ class EmailService:
             Error Message: {error_message}
 
             You can check the batch status at:
-            {current_app.config.get('BASE_URL', 'NO URL SET')}/progress?batch_id={batch_id}
+            {self.base_url}/progress?batch_id={batch_id}
 
             If this issue persists, please contact support.
 
@@ -126,9 +123,9 @@ class EmailService:
 
             message.attach(MIMEText(body, "plain"))
 
-            with smtplib.SMTP(current_app.config['SMTP_SERVER'], current_app.config['SMTP_PORT']) as server:
+            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
                 server.starttls()
-                server.login(sender_email, app_password)
+                server.login(self.sender_email, self.app_password)
                 server.send_message(message)
 
             logger.info(f"Successfully sent error notification email to {email}")

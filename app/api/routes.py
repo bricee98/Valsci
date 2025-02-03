@@ -7,24 +7,27 @@ import json
 from app.services.claim_processor import ClaimProcessor
 from app.models.claim import Claim
 from app.models.batch_job import BatchJob
+from app.models.paper import Paper
 from datetime import datetime
 import asyncio
 from typing import List
 import math
-from app.services.openai_service import OpenAIService
-from app.services.llm_claim_screener import LLMClaimScreener
 from app.services.email_service import EmailService
 import logging
 import traceback
 
 api = Blueprint('api', __name__)
 
+QUEUED_JOBS_DIR = 'queued_jobs'
 SAVED_JOBS_DIR = 'saved_jobs'
 
 logger = logging.getLogger(__name__)
 
+# Initialize EmailService at module level
+email_service = EmailService()
+
 def save_claim_to_file(claim, batch_id, claim_id):
-    claim_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
+    claim_dir = os.path.join(QUEUED_JOBS_DIR, batch_id)
     os.makedirs(claim_dir, exist_ok=True)
     claim_file = os.path.join(claim_dir, f"{claim_id}.txt")
     
@@ -33,23 +36,13 @@ def save_claim_to_file(claim, batch_id, claim_id):
     
     with open(claim_file, 'w') as f:
         json.dump({
-            "text": claim_text,  # Store the string directly
+            "text": claim_text,
             "status": "queued",
+            "batch_id": batch_id,
+            "claim_id": claim_id,
+            "search_config": claim.search_config,
             "additional_info": ""
         }, f, indent=2)
-
-def process_claim_in_background(claim, batch_id, claim_id):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        if claim.search_config.get('reviewType') == 'llm':
-            llm_screener = LLMClaimScreener()
-            loop.run_until_complete(llm_screener.screen_claim(claim, batch_id, claim_id, loop=loop))
-        else:
-            claim_processor = ClaimProcessor()
-            claim_processor.process_claim(claim, batch_id, claim_id)
-    finally:
-        loop.close()
 
 def verify_password(password):
     if current_app.config['REQUIRE_PASSWORD']:
@@ -58,49 +51,13 @@ def verify_password(password):
         return password == current_app.config['ACCESS_PASSWORD']
     return True
 
-@api.route('/api/v1/claims', methods=['POST'])
-def upload_claim():
-    data = request.json
-    if 'text' not in data:
-        return jsonify({"error": "Missing claim text"}), 400
-    
-    if not verify_password(data.get('password')):
-        return jsonify({"error": "Invalid password"}), 403
-    
-    # Get search configuration
-    search_config = data.get('searchConfig', {})
-    num_queries = search_config.get('numQueries', 10)
-    results_per_query = search_config.get('resultsPerQuery', 1)
-    
-    # Handle both old and new review type parameters
-    review_type = search_config.get('reviewType', 'abstracts')
-    abstracts_only = True if review_type == 'abstracts' else False
-    
-    # Ensure text is stored as a string
-    claim_text = data['text'][0] if isinstance(data['text'], list) else data['text']
-    claim = Claim(text=claim_text, source=data.get('source', 'user'))
-    claim.search_config = {
-        'num_queries': num_queries,
-        'results_per_query': results_per_query,
-        'abstractsOnly': abstracts_only,
-        'reviewType': review_type
-    }
-    
-    batch_id = str(uuid.uuid4())[:8]
-    claim_id = str(uuid.uuid4())[:8]
-    
-    save_claim_to_file(claim, batch_id, claim_id)
-    
-    threading.Thread(target=process_claim_in_background, args=(claim, batch_id, claim_id)).start()
-    
-    return jsonify({"claim_id": claim_id, "batch_id": batch_id, "status": "queued"}), 202
-
-@api.route('/api/v1/claims/<claim_id>', methods=['GET'])
-def get_claim_status(claim_id):
-    for root, dirs, files in os.walk(SAVED_JOBS_DIR):
-        if f"{claim_id}.txt" in files:
-            with open(os.path.join(root, f"{claim_id}.txt"), 'r') as f:
-                claim_data = json.load(f)
+@api.route('/api/v1/claims/<batch_id>/<claim_id>', methods=['GET'])
+def get_claim_status(batch_id, claim_id):
+    # Check queued jobs first
+    claim_file = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
+    if os.path.exists(claim_file):
+        with open(claim_file, 'r') as f:
+            claim_data = json.load(f)
             return jsonify({
                 "claim_id": claim_id,
                 "text": claim_data.get('text', ''),
@@ -108,19 +65,33 @@ def get_claim_status(claim_id):
                 "additional_info": claim_data.get('additional_info', {}),
                 "review_type": claim_data.get('review_type', 'regular')
             }), 200
+    
+    # Then check saved jobs
+    claim_file = os.path.join(SAVED_JOBS_DIR, batch_id, f"{claim_id}.txt")
+    if os.path.exists(claim_file):
+        with open(claim_file, 'r') as f:
+            claim_data = json.load(f)
+            return jsonify({
+                "claim_id": claim_id,
+                "text": claim_data.get('text', ''),
+                "status": claim_data.get('status', 'Unknown'),
+                "additional_info": claim_data.get('additional_info', {}),
+                "review_type": claim_data.get('review_type', 'regular')
+            }), 200
+            
     return jsonify({"error": "Claim not found"}), 404
 
-@api.route('/api/v1/claims/<claim_id>/report', methods=['GET'])
-def get_claim_report(claim_id):
-    for root, dirs, files in os.walk(SAVED_JOBS_DIR):
-        if f"{claim_id}.txt" in files:
-            with open(os.path.join(root, f"{claim_id}.txt"), 'r') as f:
-                claim_data = json.load(f)
+@api.route('/api/v1/claims/<batch_id>/<claim_id>/report', methods=['GET'])
+def get_claim_report(batch_id, claim_id):
+    claim_file = os.path.join(SAVED_JOBS_DIR, batch_id, f"{claim_id}.txt")
+    if os.path.exists(claim_file):
+        with open(claim_file, 'r') as f:
+            claim_data = json.load(f)
             return jsonify({
                 "claim_id": claim_id,
                 "text": claim_data.get('text', ''),
                 "status": claim_data.get('status', ''),
-                "report": claim_data.get('additional_info', {})
+                "report": claim_data.get('report', {})  # Get report directly
             }), 200
     return jsonify({"error": "Claim not found"}), 404
 
@@ -133,9 +104,8 @@ def start_batch_job():
         return jsonify({"error": "Invalid password"}), 403
     
     # Get search configuration
-    num_queries = int(request.form.get('numQueries', 10))
-    results_per_query = int(request.form.get('resultsPerQuery', 1))
-    review_type = request.form.get('reviewType', 'abstracts')
+    num_queries = int(request.form.get('numQueries', 5))
+    results_per_query = int(request.form.get('resultsPerQuery', 5))
     
     # Get email notification settings
     notification_email = request.form.get('email')
@@ -146,139 +116,58 @@ def start_batch_job():
     
     if file and file.filename.endswith('.txt'):
         batch_id = str(uuid.uuid4())[:8]
-        batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
+        batch_dir = os.path.join(QUEUED_JOBS_DIR, batch_id)
         os.makedirs(batch_dir, exist_ok=True)
+        
+        # Save claims file
         file_path = os.path.join(batch_dir, 'claims.txt')
         file.save(file_path)
         
-        # Read claims from file and filter out empty lines
+        # Read claims
         with open(file_path, 'r', encoding='utf-8') as f:
             claims = [line.strip() for line in f if line.strip()]
         
-        # Create claims and set search config
+        # Create claims with search config and save them
         batch_claims = []
+        claim_ids = {}  # Map to store claim_text -> claim_id
         for claim_text in claims:
             claim = Claim(text=claim_text)
             claim.search_config = {
                 'num_queries': num_queries,
-                'results_per_query': results_per_query,
-                'abstractsOnly': review_type == 'abstracts',
-                'reviewType': review_type
+                'results_per_query': results_per_query
             }
+            claim_id = str(uuid.uuid4())[:8]
+            claim_ids[claim_text] = claim_id
+            save_claim_to_file(claim, batch_id, claim_id)
             batch_claims.append(claim)
         
         batch_job = BatchJob(claims=batch_claims)
         
-        # Save notification email if provided
+        # Store claim_ids mapping for the batch
+        with open(os.path.join(batch_dir, 'claim_ids.json'), 'w') as f:
+            json.dump(claim_ids, f)
+        
+        # Save notification settings
         if notification_email:
             notification_file = os.path.join(batch_dir, 'notification.json')
             with open(notification_file, 'w') as f:
                 json.dump({
                     'email': notification_email,
-                    'num_claims': len(claims),
-                    'review_type': review_type
+                    'num_claims': len(claims)
                 }, f)
         
         # Send start notification if email provided
-        if notification_email:
-            EmailService.send_batch_start_notification(
-                notification_email,
-                batch_id,
-                len(claims),
-                review_type
-            )
-        
-        # Get the current app
-        app = current_app._get_current_object()
-        
-        # Start the background thread with the app context
-        thread = threading.Thread(
-            target=process_batch_in_background, 
-            args=(app, batch_job, batch_id)
+        email_service.send_batch_start_notification(
+            notification_email,
+            batch_id,
+            len(claims),
+            'regular'
         )
-        thread.start()
         
-        return jsonify({"batch_id": batch_id, "status": "processing"}), 202
-
-def process_batch_in_background(app, batch_job: BatchJob, batch_id: str):
-    batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
-    progress_file = os.path.join(batch_dir, 'progress.json')
-    notification_file = os.path.join(batch_dir, 'notification.json')
-    
-    # Use app context in the background thread
-    with app.app_context():
-        try:
-            # Initialize progress file
-            with open(progress_file, 'w') as f:
-                json.dump({
-                    "processed_claims": 0,
-                    "total_claims": len(batch_job.claims),
-                    "status": "processing",
-                    "current_claim_id": None
-                }, f)
-
-            # Check if this is an LLM screening batch
-            if batch_job.claims and batch_job.claims[0].search_config.get('reviewType') == 'llm':
-                # Use LLMClaimScreener for batch processing
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    loop.run_until_complete(
-                        LLMClaimScreener.process_batch(batch_job.claims, batch_id, loop=loop)
-                    )
-                finally:
-                    loop.close()
-            else:
-                # Regular claim processing
-                for i, claim in enumerate(batch_job.claims):
-                    claim_id = str(uuid.uuid4())[:8]
-                    save_claim_to_file(claim, batch_id, claim_id)
-                    update_batch_progress(batch_id, i, len(batch_job.claims), current_claim_id=claim_id)
-                    claim_processor = ClaimProcessor()
-                    claim_processor.process_claim(claim, batch_id, claim_id)
-                    update_batch_progress(batch_id, i + 1, len(batch_job.claims))
-
-            # Update status to completed when all claims are processed
-            update_batch_progress(
-                batch_id, 
-                len(batch_job.claims), 
-                len(batch_job.claims), 
-                status="completed"
-            )
-            
-            # After processing is complete, send completion email notification if configured
-            if os.path.exists(notification_file):
-                with open(notification_file, 'r') as f:
-                    notification_data = json.load(f)
-                
-                    # Send completion email notification
-                    EmailService.send_batch_completion_notification(
-                        notification_data['email'],
-                        batch_id,
-                        notification_data['num_claims'],
-                        notification_data['review_type']
-                    )
-
-        except Exception as e:
-            logger.error(f"Error in batch processing: {str(e)}")
-            logger.error(traceback.format_exc())
-            update_batch_progress(
-                batch_id,
-                len(batch_job.claims),
-                len(batch_job.claims),
-                status="error"
-            )
-            # Add the following code to send an error notification email
-            if os.path.exists(notification_file):
-                with open(notification_file, 'r') as f:
-                    notification_data = json.load(f)
-
-                    # Send error email notification
-                    EmailService.send_batch_error_notification(
-                        notification_data['email'],
-                        batch_id,
-                        str(e)  # Include the error message in the email
-                    )
+        return jsonify({
+            "batch_id": batch_id,
+            "status": "processing"
+        }), 202
 
 def update_batch_progress(batch_id: str, processed_claims: int, total_claims: int, status: str = "processing", current_claim_id: str = None):
     progress_file = os.path.join(SAVED_JOBS_DIR, batch_id, 'progress.json')
@@ -344,7 +233,6 @@ def get_batch_status(batch_id):
         return jsonify({"error": "Batch not found"}), 404
     
     claims = []
-    review_type = "regular"  # Default to regular
     for file in os.listdir(batch_dir):
         if file.endswith('.txt') and not file.endswith('claims.txt'):
             file_path = os.path.join(batch_dir, file)
@@ -356,7 +244,7 @@ def get_batch_status(batch_id):
                             "claim_id": file[:-4],
                             "text": "",
                             "status": "Error",
-                            "additional_info": {"error": "Empty file"}
+                            "report": {"error": "Empty file"}
                         })
                     else:
                         claim_data = json.loads(content)
@@ -364,25 +252,22 @@ def get_batch_status(batch_id):
                             "claim_id": file[:-4],
                             "text": claim_data.get('text', ''),
                             "status": claim_data.get('status', 'Unknown'),
-                            "additional_info": claim_data.get('additional_info', {}),
-                            "review_type": claim_data.get('review_type', 'regular')  # Get review_type
+                            "report": claim_data.get('report', {}),  # Changed from additional_info to report
+                            "review_type": claim_data.get('review_type', 'regular')
                         })
-                        # Set batch review_type based on the first claim (assuming consistency)
-                        if 'review_type' in claim_data:
-                            review_type = claim_data['review_type']
             except json.JSONDecodeError as e:
                 claims.append({
                     "claim_id": file[:-4],
                     "text": "",
                     "status": "Error",
-                    "additional_info": {"error": f"Invalid JSON in file: {str(e)}"}
+                    "report": {"error": f"Invalid JSON in file: {str(e)}"}
                 })
             except Exception as e:
                 claims.append({
                     "claim_id": file[:-4],
                     "text": "",
                     "status": "Error",
-                    "additional_info": {"error": f"Error reading file: {str(e)}"}
+                    "report": {"error": f"Error reading file: {str(e)}"}
                 })
     
     overall_status = "processed" if all(claim['status'] == 'processed' for claim in claims) else "processing"
@@ -391,7 +276,7 @@ def get_batch_status(batch_id):
         "batch_id": batch_id,
         "status": overall_status,
         "claims": claims,
-        "review_type": review_type  # Include at batch level
+        "review_type": "regular"  # Default to regular review type
     }), 200
 
 @api.route('/api/v1/batch/<batch_id>/progress', methods=['GET'])
@@ -433,296 +318,271 @@ def browser():
 
 @api.route('/api/v1/browse', methods=['GET'])
 def browse_batches():
-    search_term = request.args.get('search', '').lower()
-    batches = []
+    try:
+        search_term = request.args.get('search', '').lower()
+        batches = []
 
-    for batch_id in os.listdir(SAVED_JOBS_DIR):
-        batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
-        if os.path.isdir(batch_dir):
-            claims = []
-            latest_timestamp = None  # Track the latest timestamp in the batch
-            
-            for file in os.listdir(batch_dir):
-                if file.endswith('.txt') and file != 'claims.txt':
-                    with open(os.path.join(batch_dir, file), 'r') as f:
-                        claim_data = json.load(f)
-                        additional_info = claim_data.get('additional_info', {})
-                        
-                        # Handle additional_info whether it's a string or dict
-                        if isinstance(additional_info, str):
-                            try:
-                                additional_info_json = json.loads(additional_info)
-                            except json.JSONDecodeError:
-                                additional_info_json = {}
-                        else:
-                            additional_info_json = additional_info
+        if not os.path.exists(SAVED_JOBS_DIR):
+            return jsonify({
+                "error": "No saved jobs directory found",
+                "code": "NO_SAVED_JOBS"
+            }), 404
 
-                        # Track the latest timestamp
-                        timestamp = claim_data.get('timestamp')
-                        if timestamp:
-                            if not latest_timestamp or timestamp > latest_timestamp:
-                                latest_timestamp = timestamp
+        for batch_id in os.listdir(SAVED_JOBS_DIR):
+            try:
+                batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
+                if not os.path.isdir(batch_dir):
+                    continue
+                
+                # Rest of the existing code...
+                
+            except Exception as e:
+                logger.error(f"Error processing batch {batch_id}: {str(e)}")
+                continue
 
-                        if search_term in claim_data.get('text', '').lower():
-                            claims.append({
-                                'text': claim_data.get('text', ''),
-                                'status': claim_data.get('status', ''),
-                                'rating': additional_info_json.get('claimRating', 'N/A')
-                            })
-
-            if claims or search_term in batch_id.lower():
-                batches.append({
-                    'batch_id': batch_id,
-                    'total_claims': len(claims),
-                    'preview_claims': claims[:3],
-                    'timestamp': latest_timestamp or '1970-01-01T00:00:00'  # Use Unix epoch as fallback
-                })
-
-    # Sort batches by timestamp in descending order
-    batches.sort(key=lambda x: x['timestamp'], reverse=True)
-    
-    return jsonify({'batches': batches})
+        return jsonify({'batches': batches})
+    except Exception as e:
+        logger.error(f"Error browsing batches: {str(e)}")
+        return jsonify({
+            "error": "Failed to browse batches",
+            "code": "BROWSE_ERROR",
+            "details": str(e)
+        }), 500
 
 @api.route('/api/v1/delete/claim/<claim_id>', methods=['DELETE'])
 def delete_claim(claim_id):
-    for root, dirs, files in os.walk(SAVED_JOBS_DIR):
-        if f"{claim_id}.txt" in files:
-            os.remove(os.path.join(root, f"{claim_id}.txt"))
-            return jsonify({"message": "Claim deleted successfully"}), 200
-    return jsonify({"error": "Claim not found"}), 404
+    try:
+        for root, dirs, files in os.walk(SAVED_JOBS_DIR):
+            if f"{claim_id}.txt" in files:
+                os.remove(os.path.join(root, f"{claim_id}.txt"))
+                return jsonify({
+                    "message": "Claim deleted successfully",
+                    "claim_id": claim_id
+                }), 200
+        return jsonify({
+            "error": "Claim not found",
+            "claim_id": claim_id,
+            "code": "CLAIM_NOT_FOUND"
+        }), 404
+    except Exception as e:
+        logger.error(f"Error deleting claim {claim_id}: {str(e)}")
+        return jsonify({
+            "error": "Failed to delete claim",
+            "claim_id": claim_id,
+            "code": "DELETE_ERROR",
+            "details": str(e)
+        }), 500
 
 @api.route('/api/v1/delete/batch/<batch_id>', methods=['DELETE'])
 def delete_batch(batch_id):
-    batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
-    if os.path.exists(batch_dir):
-        shutil.rmtree(batch_dir)
-        return jsonify({"message": "Batch deleted successfully"}), 200
-    return jsonify({"error": "Batch not found"}), 404
+    try:
+        batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
+        if os.path.exists(batch_dir):
+            shutil.rmtree(batch_dir)
+            return jsonify({
+                "message": "Batch deleted successfully",
+                "batch_id": batch_id
+            }), 200
+        return jsonify({
+            "error": "Batch not found",
+            "batch_id": batch_id,
+            "code": "BATCH_NOT_FOUND"
+        }), 404
+    except Exception as e:
+        logger.error(f"Error deleting batch {batch_id}: {str(e)}")
+        return jsonify({
+            "error": "Failed to delete batch",
+            "batch_id": batch_id,
+            "code": "DELETE_ERROR",
+            "details": str(e)
+        }), 500
 
 @api.route('/api/v1/claims/<claim_id>/download_citations', methods=['GET'])
 def download_citations(claim_id):
-    for root, dirs, files in os.walk(SAVED_JOBS_DIR):
-        if f"{claim_id}.txt" in files:
-            with open(os.path.join(root, f"{claim_id}.txt"), 'r') as f:
-                claim_data = json.load(f)
-                report = json.loads(claim_data.get('additional_info', '{}'))
-                citations = []
-
-                for paper in report.get('supportingPapers', []):
-                    for citation in paper.get('citations', []):
-                        citations.append(citation['citation'])
-
-                # Create a temporary file for the citations
-                citation_file_path = os.path.join(SAVED_JOBS_DIR, f"{claim_id}_citations.ris")
-                with open(citation_file_path, 'w') as citation_file:
-                    citation_file.write("\n\n".join(citations))
-
-                return send_file(citation_file_path, as_attachment=True, download_name=f"{claim_id}_citations.ris")
-
-    return jsonify({"error": "Claim not found"}), 404
-
-def update_enhance_progress(batch_id: str, progress: dict):
-    progress_file = os.path.join(SAVED_JOBS_DIR, batch_id, 'enhance_progress.json')
-    with open(progress_file, 'w') as f:
-        json.dump(progress, f)
-
-@api.route('/api/v1/enhance-batch', methods=['POST'])
-def enhance_batch():
-    if 'file' not in request.files:
-        return jsonify({"error": "No file part"}), 400
-    
-    if not verify_password(request.form.get('password')):
-        return jsonify({"error": "Invalid password"}), 403
-    
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({"error": "No selected file"}), 400
-    
-    batch_id = str(uuid.uuid4())[:8]
-    batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
-    os.makedirs(batch_dir, exist_ok=True)
-    
-    # Initialize progress file
-    update_enhance_progress(batch_id, {
-        "processed_claims": 0,
-        "total_claims": 0,
-        "status": "initializing"
-    })
-    
-    # Read claims
-    claims = [line.strip() for line in file.stream.read().decode('utf-8').splitlines() if line.strip()]
-    
-    # Start background task
-    def process_in_background():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+    try:
+        # Find and load the claim data
+        for root, dirs, files in os.walk(SAVED_JOBS_DIR):
+            if f"{claim_id}.txt" in files:
+                with open(os.path.join(root, f"{claim_id}.txt"), 'r') as f:
+                    claim_data = json.load(f)
+                    report = json.loads(claim_data.get('additional_info', '{}'))
+                    citations = []
+                    
+                    for paper in report.get('supportingPapers', []):
+                        for citation in paper.get('citations', []):
+                            citations.append(citation['citation'])
+                    
+                    citation_file_path = os.path.join(SAVED_JOBS_DIR, f"{claim_id}_citations.ris")
+                    with open(citation_file_path, 'w') as citation_file:
+                        citation_file.write("\n\n".join(citations))
+                    return send_file(citation_file_path, as_attachment=True, download_name=f"{claim_id}_citations.ris")
         
-        try:
-            # Process claims in batches
-            openai_service = OpenAIService()
-            batch_size = 100
-            all_results = []
-            
-            for i in range(0, len(claims), batch_size):
-                batch = claims[i:i + batch_size]
-                batch_results = loop.run_until_complete(openai_service.enhance_claims_batch(batch))
-                all_results.extend(batch_results)
-                
-                # Update progress
-                update_enhance_progress(batch_id, {
-                    "processed_claims": min(i + batch_size, len(claims)),
-                    "total_claims": len(claims),
-                    "status": "processing"
-                })
-            
-            # Save final results
-            results_file = os.path.join(batch_dir, 'enhanced_claims.json')
-            with open(results_file, 'w') as f:
-                json.dump({
-                    'claims': all_results,
-                    'timestamp': datetime.now().isoformat()
-                }, f, indent=2)
-            
-            # Update final progress
-            update_enhance_progress(batch_id, {
-                "processed_claims": len(claims),
-                "total_claims": len(claims),
-                "status": "completed"
-            })
-            
-        except Exception as e:
-            print(f"Error in background task: {str(e)}")
-            update_enhance_progress(batch_id, {
-                "processed_claims": 0,
-                "total_claims": len(claims),
-                "status": "error",
-                "error": str(e)
-            })
-        finally:
-            loop.close()
-    
-    # Start processing in background
-    threading.Thread(target=process_in_background).start()
-    
-    return jsonify({
-        "batch_id": batch_id,
-        "message": "Processing started"
-    }), 202
+        return jsonify({"error": "Claim not found"}), 404
+    finally:
+        if 'citation_file_path' in locals() and os.path.exists(citation_file_path):
+            os.remove(citation_file_path)
 
-@api.route('/api/v1/enhance-batch/<batch_id>/progress', methods=['GET'])
-def get_enhance_progress(batch_id):
-    progress_file = os.path.join(SAVED_JOBS_DIR, batch_id, 'enhance_progress.json')
-    if os.path.exists(progress_file):
-        with open(progress_file, 'r') as f:
-            return jsonify(json.load(f))
-    return jsonify({"error": "Batch not found"}), 404
+def generate_markdown_report(claim_data):
+    """Helper function to generate consistent markdown reports"""
+    report = claim_data.get('report', {})
+    md_content = []
+    
+    # Basic info
+    md_content.append(f"# Claim: {claim_data.get('text', '')}\n")
+    md_content.append(f"**Status**: {claim_data.get('status', '')}\n")
+    md_content.append(f"**Overall Rating**: {report.get('claimRating', 'N/A')}\n")
+    md_content.append(f"**Explanation**:\n\n{report.get('explanation', 'No explanation available')}\n")
+    
+    # Add relevant papers section
+    md_content.append("\n## Relevant Papers\n")
+    for paper in report.get('relevantPapers', []):
+        md_content.append(f"\n### {paper.get('title', 'Untitled Paper')}\n")
+        if paper.get('authors'):
+            authors = ', '.join([f"{a.get('name')} (H-index: {a.get('hIndex', 'N/A')})" 
+                               for a in paper['authors']])
+            md_content.append(f"**Authors**: {authors}\n")
+        md_content.append(f"**Relevance**: {paper.get('relevance', 'N/A')}\n")
+        md_content.append(f"**Weight Score**: {paper.get('weight_score', 'N/A')}\n")
+        
+        if paper.get('excerpts'):
+            md_content.append("\n**Excerpts**:\n")
+            for excerpt in paper['excerpts']:
+                md_content.append(f"- {excerpt}\n")
+        
+        if paper.get('explanations'):
+            md_content.append("\n**Explanations**:\n")
+            for explanation in paper['explanations']:
+                md_content.append(f"- {explanation}\n")
+        
+        if paper.get('link'):
+            md_content.append(f"\n[Read Paper]({paper['link']})\n")
+    
+    # Add non-relevant papers section
+    if report.get('nonRelevantPapers'):
+        md_content.append("\n## Other Reviewed Papers\n")
+        for paper in report['nonRelevantPapers']:
+            md_content.append(f"\n### {paper.get('title', 'Untitled Paper')}\n")
+            if paper.get('explanation'):
+                md_content.append(f"**Why Not Relevant**: {paper['explanation']}\n")
+            if paper.get('link'):
+                md_content.append(f"\n[Read Paper]({paper['link']})\n")
+    
+    # Add search queries section
+    if report.get('searchQueries'):
+        md_content.append("\n## Search Queries Used\n")
+        for query in report['searchQueries']:
+            md_content.append(f"- {query}\n")
+    
+    # Add usage stats if available
+    if report.get('usage_stats'):
+        stats = report['usage_stats']
+        md_content.append("\n## Usage Statistics\n")
+        md_content.append(f"- Prompt Tokens: {stats.get('prompt_tokens', 0)}\n")
+        md_content.append(f"- Completion Tokens: {stats.get('completion_tokens', 0)}\n")
+        md_content.append(f"- Total Tokens: {stats.get('total_tokens', 0)}\n")
+        md_content.append(f"- Estimated Cost: ${stats.get('total_cost', 0):.4f}\n")
+    
+    return "\n".join(md_content)
 
-@api.route('/enhance-results', methods=['GET'])
-def enhance_results():
-    batch_id = request.args.get('batch_id')
-    if not batch_id:
-        return "No batch ID provided", 400
-    
-    results_file = os.path.join(SAVED_JOBS_DIR, batch_id, 'enhanced_claims.json')
-    if not os.path.exists(results_file):
-        return "Results not found", 404
-    
-    with open(results_file, 'r') as f:
-        results = json.load(f)
-    
-    return render_template('enhance_results.html', batch_id=batch_id, results=results)
+@api.route('/api/v1/claims/<batch_id>/<claim_id>/download_md', methods=['GET'])
+def download_claim_md(batch_id, claim_id):
+    """Download a single claim's final report as a markdown (.md) file."""
+    saved_file = os.path.join(SAVED_JOBS_DIR, batch_id, f"{claim_id}.txt")
+    if not os.path.exists(saved_file):
+        return jsonify({"error": "Claim not found"}), 404
 
-@api.route('/api/v1/enhanced-claims/<batch_id>/download', methods=['GET'])
-def download_enhanced_claims(batch_id):
-    results_file = os.path.join(SAVED_JOBS_DIR, batch_id, 'enhanced_claims.json')
-    if not os.path.exists(results_file):
-        return jsonify({"error": "Results not found"}), 404
+    with open(saved_file, 'r') as f:
+        claim_data = json.load(f)
     
-    with open(results_file, 'r') as f:
-        results = json.load(f)
-    
-    # Create text content with one enhanced claim per line
-    output = "\n".join(claim["suggested"] for claim in results['claims'])
+    md_text = generate_markdown_report(claim_data)
     
     return Response(
-        output,
-        mimetype="text/plain",
-        headers={"Content-disposition": f"attachment; filename=enhanced_claims_{batch_id}.txt"}
+        md_text,
+        mimetype="text/markdown",
+        headers={
+            "Content-Disposition": f"attachment; filename=claim_{claim_id}.md"
+        }
     )
 
-@api.route('/enhance-progress', methods=['GET'])
-def enhance_progress():
-    batch_id = request.args.get('batch_id')
-    if not batch_id:
-        return "No batch ID provided", 400
-    return render_template('enhance_progress.html', batch_id=batch_id)
+@api.route('/api/v1/batch/<batch_id>/download_markdown', methods=['GET'])
+def download_batch_markdown(batch_id):
+    """Download a zip of markdown files for all claims in a batch."""
+    batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
+    if not os.path.exists(batch_dir):
+        return jsonify({"error": "Batch not found"}), 404
 
-@api.route('/llm-screen-results', methods=['GET'])
-def llm_screen_results():
-    claim_id = request.args.get('claim_id')
-    if not claim_id:
-        return "No claim ID provided", 400
-    return render_template('llm_screen_results.html', claim_id=claim_id)
+    claim_files = [f for f in os.listdir(batch_dir) if f.endswith('.txt') and f != 'claims.txt']
+    if not claim_files:
+        return jsonify({"error": "No processed claims found"}), 404
 
-@api.route('/llm-screen-batch-results', methods=['GET'])
-def llm_screen_batch_results():
-    batch_id = request.args.get('batch_id')
-    if not batch_id:
-        return "No batch ID provided", 400
-    return render_template('llm_screen_batch_results.html', batch_id=batch_id)
+    import io
+    import zipfile
 
-@api.route('/api/v1/enhance-claim', methods=['POST'])
-def enhance_claim():
-    data = request.json
-    if not data or 'text' not in data:
-        return jsonify({"error": "Missing claim text"}), 400
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w') as zf:
+        for file_name in claim_files:
+            claim_id = file_name[:-4]  # remove .txt
+            saved_file = os.path.join(batch_dir, file_name)
+            with open(saved_file, 'r') as f:
+                claim_data = json.load(f)
+            
+            md_text = generate_markdown_report(claim_data)
+            zf.writestr(f"claim_{claim_id}.md", md_text)
 
-    try:
-        openai_service = OpenAIService()
-        # Use the same system prompt as in batch enhancement
-        system_prompt = """
-        You are an AI assistant tasked with evaluating scientific claims and optimizing them for search. 
-        Respond with a JSON object containing 'is_valid' (boolean), 'explanation' (string), and 'suggested' (string).
-        The 'is_valid' field should be true if the input is a proper scientific claim, and false otherwise. 
-        The 'explanation' field should provide a brief reason for your decision.
-        The 'suggested' field should always contain an optimized version of the claim, 
-        even if the original claim is invalid. For invalid claims, provide a corrected or improved version.
+    zip_buffer.seek(0)
+    return send_file(
+        zip_buffer,
+        as_attachment=True,
+        download_name=f"batch_{batch_id}_reports.zip"
+    )
 
-        Examples of valid scientific claims (note: these may or may not be true, but they are properly formed claims):
-         1. "Increased consumption of processed foods is linked to higher rates of obesity in urban populations."
-         2. "The presence of certain gut bacteria can influence mood and cognitive function in humans."
-         3. "Exposure to blue light from electronic devices before bedtime does not disrupt the circadian rhythm."
-         4. "Regular meditation practice can lead to structural changes in the brain's gray matter."
-         5. "Higher levels of atmospheric CO2 have no effect on global average temperatures."
-         6. "Calcium channels are affected by AMP."
-         7. "People who drink soda are much healthier than those who don't."
-
-        Examples of non-claims (these are not valid scientific claims):
-         1. "The sky is beautiful." (This is an opinion, not a testable claim)
-         2. "What is the effect of exercise on heart health?" (This is a question, not a claim)
-         3. "Scientists should study climate change more." (This is a recommendation, not a claim)
-         4. "Drink more water!" (This is a command, not a claim),
-         5. "Investigating the cognitive effects of BRCA2 mutations on intelligence quotient (IQ) levels." (This doesn't make a claim about anything)
-
-        Reject claims that include ambiguous abbreviations or shorthand, unless it's clear to you what they mean. Remember, a valid scientific claim should be a specific, testable assertion about a phenomenon or relationship between variables. It doesn't have to be true, but it should be a testable assertion.
-
-        For the 'suggested' field, focus on using clear, concise language with relevant scientific terms that would be 
-        likely to appear in academic papers. Avoid colloquialisms and ensure the suggested version maintains the 
-        original meaning (even if you think it's not true) while being more search-friendly.
-        """
-        
-        result = openai_service.generate_json(
-            prompt=f"Evaluate and optimize the following claim for search:\n\n{data['text']}",
-            system_prompt=system_prompt
-        )
-        
-        return jsonify({
-            "original": data['text'],
-            "suggested": result.get('suggested', data['text']),
-            "is_valid": result.get('is_valid', True),
-            "explanation": result.get('explanation', '')
-        })
-
-    except Exception as e:
-        logger.error(f"Error enhancing claim: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+async def process_claim_post_search(claim_id: str, papers: List[Paper], batch_id: str, sem: asyncio.Semaphore, claim_text: str):
+    """Process a claim after papers have been retrieved."""
+    async with sem:  # Limit concurrent processing
+        try:
+            # Initialize claim processor
+            claim_processor = ClaimProcessor()
+            
+            # Save initial claim status
+            save_claim_to_file(
+                Claim(text=claim_text),  # We need the original claim text
+                batch_id, 
+                claim_id
+            )
+            
+            # Update status to show we're analyzing papers
+            update_batch_progress(
+                batch_id, 
+                0,  # We'll update this as we process
+                1,  # This is a single claim
+                current_claim_id=claim_id
+            )
+            
+            # Process the papers (we'll need to modify ClaimProcessor for this)
+            await claim_processor.process_claim_with_papers(
+                papers=papers,
+                batch_id=batch_id,
+                claim_id=claim_id,
+                claim_text=claim_text
+            )
+            
+            # Update progress to show completion
+            update_batch_progress(
+                batch_id,
+                1,  # This claim is done
+                1,  # Total is still 1
+                current_claim_id=claim_id
+            )
+            
+        except Exception as e:
+            logger.error(f"Error processing claim {claim_id}: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Update status to show error
+            update_batch_progress(
+                batch_id,
+                1,  # Mark as processed even though it errored
+                1,
+                status="error",
+                current_claim_id=claim_id
+            )

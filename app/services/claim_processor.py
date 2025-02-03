@@ -2,365 +2,252 @@ from typing import List, Union
 import pandas as pd
 from app.models.claim import Claim
 from app.models.batch_job import BatchJob
-from app.services.literature_searcher import LiteratureSearcher
+from app.models.paper import Paper
+from semantic_scholar.utils.searcher import S2Searcher
 from app.services.paper_analyzer import PaperAnalyzer
 from app.services.evidence_scorer import EvidenceScorer
 from app.services.openai_service import OpenAIService
 import os
 import json
-import time as time_module
 from time import time
 from textwrap import dedent
 from typing import Dict
 from datetime import datetime
+import logging
+import asyncio
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class ClaimProcessor:
-    def __init__(self):
-        self.literature_searcher = LiteratureSearcher()
-        self.paper_analyzer = PaperAnalyzer()
-        self.evidence_scorer = EvidenceScorer()
-        self.openai_service = OpenAIService()
-        self.timing_stats = {}  # Add timing stats dictionary
-
-    def process_claim(self, claim: Claim, batch_id: str, claim_id: str) -> Claim:
-        start_time = time()
-        timing_stats = {}
-
-        self.update_claim_status(batch_id, claim_id, "searching_papers")
-        # Search for relevant papers
-        search_start = time()
-        relevant_papers = self.literature_searcher.search_papers(claim)
-        timing_stats['search_papers'] = time() - search_start
-
-        if not relevant_papers:
-            claim.status = 'processed'
-            claim.report = {
-                "supportingPapers": [],
-                "explanation": "No relevant papers were found for this claim.",
-                "claimRating": 0,
-                "timing_stats": timing_stats
-            }
-            self.update_claim_status(batch_id, claim_id, "processed", claim.report, review_type="regular")
-            timing_stats['total_time'] = time() - start_time
-            return claim
-
-        self.update_claim_status(batch_id, claim_id, "analyzing_papers")
-        
-        # Process all relevant papers
-        processed_papers = []
-        non_relevant_papers = []
-        inaccessible_papers = []
-        total_papers = len(relevant_papers)
-        
-        paper_processing_start = time()
-        paper_timing_stats = []
-
-        for i, paper in enumerate(relevant_papers):
-            paper_start = time()
-            paper_stats = {}
-
-            self.update_claim_status(batch_id, claim_id, f"analyzing_paper_{i+1}_of_{total_papers}")
-            time_module.sleep(1)
-            
-            fetch_start = time()
-            paper_content, access_info = self.literature_searcher.fetch_paper_content(paper, claim)
-            paper_stats['fetch_time'] = time() - fetch_start
-            
-            if not paper_content:
-                inaccessible_papers.append({
-                    'paper': paper,
-                    'reason': access_info
-                })
-                continue
-            
-            analyze_start = time()
-            relevance, excerpts, explanations, non_relevant_explanation, excerpt_pages = self.paper_analyzer.analyze_relevance_and_extract(paper_content, claim)
-            paper_stats['analyze_time'] = time() - analyze_start
-            
-            if relevance >= 0.1:
-                score_start = time()
-                paper_score = self.evidence_scorer.calculate_paper_weight(paper)
-                paper_stats['score_time'] = time() - score_start
-                
-                processed_papers.append({
-                    'paper': paper,
-                    'relevance': relevance,
-                    'excerpts': excerpts,
-                    'score': paper_score,
-                    'explanations': explanations,
-                    'content_type': access_info,
-                    'excerpt_pages': excerpt_pages,
-                    'processing_time': time() - paper_start,
-                    'timing_stats': paper_stats
-                })
-            else:
-                non_relevant_papers.append({
-                    'paper': paper,
-                    'explanation': non_relevant_explanation or "Paper was determined to be not relevant to the claim.",
-                    'relevance': relevance,
-                    'score': self.evidence_scorer.calculate_paper_weight(paper),
-                    'content_type': access_info,
-                    'processing_time': time() - paper_start,
-                    'timing_stats': paper_stats
-                })
-
-        timing_stats['paper_processing'] = time() - paper_processing_start
-        timing_stats['papers'] = paper_timing_stats
-
-        self.update_claim_status(batch_id, claim_id, "generating_report")
-        
-        # Generate final report
-        report_start = time()
-        if processed_papers:
-            claim.report = self.generate_final_report(claim, processed_papers, non_relevant_papers, inaccessible_papers)
-            claim.status = 'processed'
-            timing_stats['report_generation'] = time() - report_start
-            timing_stats['total_time'] = time() - start_time
-            claim.report['timing_stats'] = timing_stats
-            self.update_claim_status(batch_id, claim_id, "processed", claim.report, review_type="regular")
-        else:
-            claim.status = 'processed'
-            claim.report = {
-                "supportingPapers": [],
-                "nonRelevantPapers": [
+    def _format_non_relevant_papers(self, papers: List[Dict]) -> List[Dict]:
+        """Format non-relevant papers for the report."""
+        try:
+            return [{
+                "title": paper['paper'].get('title', 'Unknown Title'),
+                "authors": [
                     {
-                        "title": nrp['paper'].title,
-                        "content_type": nrp['content_type'],
+                        "name": author.get('name', 'Unknown'),
+                        "hIndex": author.get('hIndex', 0)
+                    }
+                    for author in paper['paper'].get('authors', [])
+                ],
+                "link": paper['paper'].get('url'),
+                "explanation": paper.get('explanation', 'No explanation available'),
+                "content_type": paper.get('content_type', 'unknown')
+            } for paper in (papers or [])]
+        except Exception as e:
+            logger.error(f"Error formatting non-relevant papers: {str(e)}")
+            return []
+
+    def _format_inaccessible_papers(self, papers: List[Dict]) -> List[Dict]:
+        """Format inaccessible papers for the report."""
+        try:
+            return [{
+                "title": paper.get('title', 'Unknown Title'),
+                "authors": [
+                    {
+                        "name": author.get('name', 'Unknown'),
+                        "hIndex": author.get('hIndex', 0)
+                    }
+                    for author in paper.get('authors', [])
+                ],
+                "link": paper.get('url'),
+                "reason": "Paper content not accessible"
+            } for paper in (papers or [])]
+        except Exception as e:
+            logger.error(f"Error formatting inaccessible papers: {str(e)}")
+            return []
+
+    async def generate_final_report(self, claim_text: str, processed_papers: List[dict], 
+                                  non_relevant_papers: List[dict], 
+                                  inaccessible_papers: List[dict],
+                                  queries: List[str],
+                                  ai_service) -> dict:
+        """Generate the final report for a claim."""
+        try:
+            # Debug logging
+            logger.info(f"Processed papers: {len(processed_papers) if processed_papers else 'None'}")
+            
+            # Safely process paper summaries
+            paper_summaries = []
+            for p in (processed_papers or []):
+                try:
+                    if not p.get('paper'):
+                        logger.error(f"Missing paper object in processed paper: {p}")
+                        continue
+                        
+                    paper_data = p['paper']
+                    authors_str = ', '.join(
+                        f"{author.get('name', 'Unknown')} (H-index: {author.get('hIndex', 0)})"
+                        for author in paper_data.get('authors', [])
+                    )
+                    
+                    summary = (
+                        f"Paper: {paper_data.get('title', 'Unknown Title')}\n"
+                        f"Authors: {authors_str}\n"
+                        f"Relevance: {p.get('relevance', 'Unknown')}\n"
+                        f"Reliability Weight: {p.get('score', 'Unknown')}\n"
+                        f"Excerpts: {p.get('excerpts', [])}"
+                    )
+                    paper_summaries.append(summary)
+                except Exception as e:
+                    logger.error(f"Error processing paper summary: {str(e)}")
+                    continue
+
+            paper_summaries_text = "\n".join(paper_summaries)
+
+            # Prepare input for the LLM
+            prompt = dedent(f"""
+            Evaluate the following claim based on the provided evidence and counter-evidence from scientific papers:
+
+            Claim: {claim_text}
+
+            Evidence:
+            {paper_summaries_text}
+            """).strip()
+
+            system_prompt = dedent("""
+            You are an expert scientific reviewer specializing in evaluating the plausibility of scientific claims based on evidence from academic papers and your expert knowledge. Your task is to synthesize a detailed evaluation of the claim and assign a final plausibility rating based on both your scientific knowledge and the evidence provided in the paper excerpts you receive.
+
+            The final rating you assign should be one of the following:
+            - Contradicted: Strong evidence refutes the claim.
+            - Implausible: Evidence suggests the claim is highly unlikely but not definitively refuted.
+            - No Evidence: No significant evidence is available to support or refute the claim.
+            - Little Evidence: Limited or weak evidence suggests the claim may be plausible but is not conclusive.
+            - Plausible: The claim is supported by reasonable evidence, though it may not be definitive.
+            - Highly Supported: The claim is strongly supported by compelling and consistent evidence.
+            
+            When formulating your evaluation, consider the following aspects:
+            - Supporting Evidence: Summarize the most robust evidence that supports the claim. Be specific, referencing the findings of relevant papers and their implications.
+            - Caveats or Contradictions: Identify any limitations, contradictory findings, or alternative interpretations that might challenge the claim.
+            - Analysis: Based on your expertise, analyze the systems and structures relevant to the claim for any deeper relationships, mechanisms, or second-order implications that might be relevant.
+            - Assessment: Assess the balance of evidence, explaining which side is more compelling and why. Contextualize caveats but avoid undue hedging; consider the overall weight of the evidence like an expert would.
+            - Rating Assignment: Choose a single category from the list above that best reflects the overall strength of evidence for the claim. Assign this rating based on the preponderance of evidence, contextualizing caveats without allowing minor exceptions to overshadow the dominant trend.
+            
+            Write the explanation as an essay with distinct paragraphs for:
+            - Supporting evidence.
+            - Caveats or contradictory evidence.
+            - Analysis of potential underlying mechanisms, deeper relationships, or second-order implications.
+            - An explanation of which rating is most appropriate based on the relative strength of the evidence.
+            
+            You will receive the text of the claim and excerpts from academic papers that could support or refute the claim. Craft your evaluation, then provide a JSON response in the following format:
+            {
+                "explanationEssay": "<plain text detailed essay explanation>",
+                "claimRating": "<rating, one of the following: Contradicted, Implausible, No Evidence, Little Evidence, Plausible, Highly Supported>"
+            }
+            """).strip()
+
+            logger.info("Generating final report with LLM")
+            result = await ai_service.generate_json_async(prompt, system_prompt)
+            response = result['content']
+            usage = result['usage']
+            logger.info("Generated final report")
+
+            # Convert the claimRating to a number
+            claimRating = 0
+            if response.get('claimRating') == 'Contradicted':
+                claimRating = 0
+            elif response.get('claimRating') == 'Implausible':
+                claimRating = 1
+            elif response.get('claimRating') == 'No Evidence':
+                claimRating = 2
+            elif response.get('claimRating') == 'Little Evidence':
+                claimRating = 3
+            elif response.get('claimRating') == 'Plausible':
+                claimRating = 4
+            elif response.get('claimRating') == 'Highly Supported':
+                claimRating = 5
+
+            # Format the final report
+            return {
+                "relevantPapers": [
+                    {
+                        "title": p['paper'].get('title', 'Unknown Title'),
                         "authors": [
                             {
-                                "name": author['name'],
-                                "hIndex": self.evidence_scorer.author_h_indices.get(
-                                    (author.get('authorId', '')), 0
-                                )
+                                "name": author.get('name', 'Unknown'),
+                                "hIndex": author.get('hIndex', 0)
                             }
-                            for author in nrp['paper'].authors
+                            for author in p['paper'].get('authors', [])
                         ],
-                        "link": nrp['paper'].url,
-                        "explanation": nrp['explanation']
-                    }
-                    for nrp in non_relevant_papers
-                ],
-                "inaccessiblePapers": [
-                    {
-                        "title": ip['paper'].title,
-                        "authors": [
+                        "link": p['paper'].get('url'),
+                        "relevance": p.get('relevance', 0),
+                        "weight_score": p.get('score', 0),
+                        "content_type": p.get('content_type', 'unknown'),
+                        "excerpts": p.get('excerpts', []),
+                        "explanations": p.get('explanations', []),
+                        "citations": [
                             {
-                                "name": author['name'],
-                                "hIndex": self.evidence_scorer.author_h_indices.get(
-                                    (author.get('authorId', '')), 0
-                                )
+                                "text": excerpt,
+                                "page": page,
+                                "citation": self._format_citation(p['paper'], page)
                             }
-                            for author in ip['paper'].authors
-                        ],
-                        "link": ip['paper'].url,
-                        "reason": ip['reason']
+                            for excerpt, page in zip(
+                                p.get('excerpts', []), 
+                                p.get('excerpt_pages', []) or [None] * len(p.get('excerpts', []))
+                            )
+                        ]
                     }
-                    for ip in inaccessible_papers
+                    for p in (processed_papers or [])
+                    if p.get('paper')
                 ],
-                "explanation": "No relevant papers were found for this claim after analysis.",
-                "claimRating": 0,
-                "timing_stats": timing_stats,
-                "searchQueries": self.literature_searcher.saved_search_queries
-            }
-            self.update_claim_status(batch_id, claim_id, "processed", claim.report, review_type="regular")
-        return claim
+                "nonRelevantPapers": self._format_non_relevant_papers(non_relevant_papers or []),
+                "inaccessiblePapers": self._format_inaccessible_papers(inaccessible_papers or []),
+                "explanation": response.get('explanationEssay', 'No explanation available'),
+                "claimRating": claimRating,
+                "searchQueries": queries,
+                "usage_stats": {}
+            }, usage
 
-    def update_claim_status(self, batch_id: str, claim_id: str, status: str, additional_info: dict = None, suggested_claim: str = "", review_type: str = "regular"):
-        file_path = os.path.join('saved_jobs', batch_id, f"{claim_id}.txt")
-        with open(file_path, 'r+') as f:
-            content = json.load(f)
-            content['status'] = status
-            if additional_info is not None:
-                content['additional_info'] = additional_info
-            if suggested_claim:
-                content['suggested_claim'] = suggested_claim
-            content['review_type'] = review_type
-            if status == "processed":  # Only add timestamp when processing is complete
-                content['timestamp'] = datetime.now().isoformat()
-            f.seek(0)
-            json.dump(content, f, indent=2)
-            f.truncate()
+        except Exception as e:
+            logger.error(f"Error in generate_final_report: {str(e)}")
+            # Return a safe fallback response with usage stats
+            return {
+                "relevantPapers": [],
+                "nonRelevantPapers": [],
+                "inaccessiblePapers": [],
+                "explanation": f"Error generating final report: {str(e)}",
+                "claimRating": -1,
+                "searchQueries": [],
+                "usage_stats": {}
+            }, {'input_tokens': 0, 'output_tokens': 0, 'cost': 0}  # Add empty usage stats
 
-    def process_batch(self, batch_job: BatchJob) -> BatchJob:
-        for claim in batch_job.claims:
-            self.process_claim(claim, batch_job.id, claim.id)
-        batch_job.status = 'processed'
-        return batch_job
-
-    def parse_claims(self, input_data: Union[str, pd.DataFrame]) -> List[Claim]:
-        if isinstance(input_data, str):
-            return [Claim(text=input_data)]
-        elif isinstance(input_data, pd.DataFrame):
-            return [Claim(text=row['claim']) for _, row in input_data.iterrows()]
-        else:
-            raise ValueError("Invalid input type. Expected string or DataFrame.")
-
-    def validate_claim_format(self, claim: str) -> dict:
-        prompt = f"Evaluate if the following is a valid scientific claim and suggest an optimized version for search:\n\n{claim}"
-        system_prompt = dedent("""
-        You are an AI assistant tasked with evaluating scientific claims and optimizing them for search. 
-        Respond with a JSON object containing 'is_valid' (boolean), 'explanation' (string), and 'suggested' (string).
-        The 'is_valid' field should be true if the input is a proper scientific claim, and false otherwise. 
-        The 'explanation' field should provide a brief reason for your decision.
-        The 'suggested' field should always contain an optimized version of the claim, 
-        even if the original claim is invalid. For invalid claims, provide a corrected or improved version.
-
-        Examples of valid scientific claims (note: these may or may not be true, but they are properly formed claims):
-         1. "Increased consumption of processed foods is linked to higher rates of obesity in urban populations."
-         2. "The presence of certain gut bacteria can influence mood and cognitive function in humans."
-         3. "Exposure to blue light from electronic devices before bedtime does not disrupt the circadian rhythm."
-         4. "Regular meditation practice can lead to structural changes in the brain's gray matter."
-         5. "Higher levels of atmospheric CO2 have no effect on global average temperatures."
-         6. "Calcium channels are affected by AMP."
-         7. "People who drink soda are much healthier than those who don't."
-
-        Examples of non-claims (these are not valid scientific claims):
-         1. "The sky is beautiful." (This is an opinion, not a testable claim)
-         2. "What is the effect of exercise on heart health?" (This is a question, not a claim)
-         3. "Scientists should study climate change more." (This is a recommendation, not a claim)
-         4. "Drink more water!" (This is a command, not a claim),
-         5. "Investigating the cognitive effects of BRCA2 mutations on intelligence quotient (IQ) levels." (This doesn't make a claim about anything)
-
-        Reject claims that include ambiguous abbreviations or shorthand, unless it's clear to you what they mean. Remember, a valid scientific claim should be a specific, testable assertion about a phenomenon or relationship between variables. It doesn't have to be true, but it should be a testable assertion.
-
-        For the 'suggested' field, focus on using clear, concise language with relevant scientific terms that would be 
-        likely to appear in academic papers. Avoid colloquialisms and ensure the suggested version maintains the 
-        original meaning (even if you think it's not true) while being more search-friendly.
-        """).strip()
-        
-        response = self.openai_service.generate_json(prompt, system_prompt=system_prompt)
-        return response
-
-    def generate_final_report(self, claim: Claim, processed_papers: List[dict], non_relevant_papers: List[dict], inaccessible_papers: List[dict]) -> dict:
-        print("Generating final report")
-        # Prepare input for the LLM
-        paper_summaries = "\n".join([
-            f"Paper: {p['paper'].title}\n"
-            f"Authors: {', '.join(author['name'] + ' (H-index: ' + str(self.evidence_scorer.author_h_indices.get(author['authorId'], 0)) + ')' for author in p['paper'].authors)}\n"
-            f"Relevance: {p['relevance']}\nReliability Weight: {p['score']}\nExcerpts: {p['excerpts']}"
-            for p in processed_papers
-        ])
-        
-        prompt = dedent(f"""
-        Evaluate the following claim based on the provided evidence from scientific papers:
-
-        Claim: {claim.text}
-
-        Evidence:
-        {paper_summaries}
-        """).strip()
-
-        system_prompt = dedent("""
-        You are an AI assistant tasked with evaluating scientific claims based on evidence from papers.
-        Provide an explanation in an essay format with newlines between paragraphs, including specific references to the scientific papers. The essay should have a paragraph highlighting supporting evidence, a paragraph highlighting caveats or contradictions, and then an analysis of which of these outweighs the other and how strongly the claim is supported. Assign a claim rating between -10 (unsupported) and 10 (universally supported).
-
-        The JSON response should have the following structure:
-        {
-            "explanation": <str containing a short essay explaining the rating>,
-            "claimRating": <int between -10 and 10, where 10 is universally supported, 0 is no evidence in either direction, and -10 is universally contradicted>
-        }
-        """).strip()
-
-        response = self.openai_service.generate_json(prompt, system_prompt)
-
-        # Use the normalize_author_id method from EvidenceScorer
-        normalize_author_id = self.evidence_scorer.normalize_author_id
-
-        # Construct the supporting papers data from processed_papers
-        supporting_papers = [
-            {
-                "title": p['paper'].title,
-                "authors": [
-                    {
-                        "name": author['name'],
-                        "hIndex": self.evidence_scorer.author_h_indices.get(
-                            normalize_author_id(author.get('authorId', '')), 0
-                        )
-                    }
-                    for author in p['paper'].authors
-                ],
-                "link": p['paper'].url,
-                "relevance": p['relevance'],
-                "weight_score": p['score'],
-                "content_type": p['content_type'],
-                "excerpts": p['excerpts'],
-                "explanations": p['explanations'],
-                "citations": [
-                    {
-                        "text": excerpt,
-                        "page": excerpt_page,  # Assuming excerpt_page is captured during analysis
-                        "citation": self.format_citation(p['paper'], excerpt_page)
-                    }
-                    for excerpt, excerpt_page in zip(p['excerpts'], p.get('excerpt_pages', []))
-                ]
-            }
-            for p in processed_papers
-        ]
-
-        # Construct the non-relevant papers data
-        non_relevant_papers_data = [
-            {
-                "title": nrp['paper'].title,
-                "content_type": nrp['content_type'],
-                "authors": [
-                    {
-                        "name": author['name'],
-                        "hIndex": self.evidence_scorer.author_h_indices.get(
-                            normalize_author_id(author.get('authorId', '')), 0
-                        )
-                    }
-                    for author in nrp['paper'].authors
-                ],
-                "link": nrp['paper'].url,
-                "explanation": nrp['explanation']
-            }
-            for nrp in non_relevant_papers
-        ]
-
-        # Construct the inaccessible papers data
-        inaccessible_papers_data = [
-            {
-                "title": ip['paper'].title,
-                "authors": [
-                    {
-                        "name": author['name'],
-                        "hIndex": self.evidence_scorer.author_h_indices.get(
-                            normalize_author_id(author.get('authorId', '')), 0
-                        )
-                    }
-                    for author in ip['paper'].authors
-                ],
-                "link": ip['paper'].url,
-                "reason": ip['reason']
-            }
-            for ip in inaccessible_papers
-        ]
-
-        # Combine the LLM response with the supporting papers data
-        final_report = {
-            "supportingPapers": supporting_papers,
-            "nonRelevantPapers": non_relevant_papers_data,  # Use the parameter
-            "inaccessiblePapers": inaccessible_papers_data,  # Add inaccessible papers
-            "explanation": response['explanation'],
-            "claimRating": response['claimRating'],
-            "searchQueries": self.literature_searcher.saved_search_queries
-        }
-
-        # Add usage stats to the final report
-        final_report["usage_stats"] = self.openai_service.get_usage_stats()
-
-        return final_report
-
-    def format_citation(self, paper, page_number):
-        # Format citation in RIS format for EndNote
-        authors = ' and '.join([author['name'] for author in paper.authors])
+    def _format_citation(self, paper, page_number):
+        """Format citation in RIS format."""
+        authors = ' and '.join([author.get('name', 'Unknown') for author in paper.get('authors', [])])
         return f"""
         TY  - JOUR
-        TI  - {paper.title}
+        TI  - {paper.get('title', 'Unknown Title')}
         AU  - {authors}
-        PY  - {paper.year}
-        JO  - {paper.journal}
-        UR  - {paper.url}
+        PY  - {paper.get('year')}
+        JO  - {paper.get('venue')}
+        UR  - {paper.get('url')}
         SP  - {page_number}
         ER  -
         """.strip()
+
+    def update_claim_status(self, batch_id: str, claim_id: str, status: str, report: dict = None, claim_text: str = None):
+        """Update claim status and report in saved_jobs directory."""
+        try:
+            claim_dir = os.path.join('saved_jobs', batch_id)
+            os.makedirs(claim_dir, exist_ok=True)
+            claim_file = os.path.join(claim_dir, f"{claim_id}.txt")
+            
+            # Ensure claim_text is included in the data
+            data = {
+                "status": status,
+                "text": claim_text,  # This was being set but not used when claim_text was None
+                "additional_info": ""
+            }
+            if report:
+                data["report"] = report
+                # Also store claim text in report for consistency
+                if claim_text:
+                    data["report"]["claim_text"] = claim_text
+                
+            with open(claim_file, 'w') as f:
+                json.dump(data, f, indent=2)
+                
+        except Exception as e:
+            logger.error(f"Error updating claim status: {str(e)}")

@@ -14,6 +14,7 @@
         <div class="actions-bar">
             <button id="deleteBatchButton" class="danger-button">Delete Batch</button>
             <button id="downloadCSV" class="primary-button">Download CSV</button>
+            <button id="downloadMarkdown" class="primary-button">Bulk Download Markdown</button>
             <input type="text" id="filter-input" placeholder="Filter results..." class="filter-input">
         </div>
         
@@ -49,7 +50,7 @@
                 widthGrow: 1,
                 formatter: function(cell) {
                     const value = cell.getValue();
-                    return value !== null && value !== undefined ? value : 'N/A';
+                    return value === null || value === undefined ? 'N/A' : value;
                 }
             },
             {
@@ -82,7 +83,7 @@
                 widthGrow: 1,
                 formatter: function(cell) {
                     const claim_id = cell.getRow().getData().claim_id;
-                    return `<a href="/results?claim_id=${claim_id}" class="report-link">View Report</a>`;
+                    return `<a href="/results?claim_id=${claim_id}&batch_id=${batchId}" class="report-link">View Report</a>`;
                 },
                 headerSort: false
             }
@@ -90,28 +91,16 @@
 
         function initializeTable(data) {
             const tableData = data.claims.map(claim => {
-                let reportData = {};
-                if (claim.additional_info) {
-                    if (typeof claim.additional_info === 'string') {
-                        try {
-                            reportData = JSON.parse(claim.additional_info);
-                        } catch (e) {
-                            console.error('Error parsing additional_info:', e);
-                            reportData = {};
-                        }
-                    } else {
-                        reportData = claim.additional_info;
-                    }
-                }
+                const report = claim.report || {};
                 
                 if (claim.status === 'processed') {
                     return {
                         text: claim.text || 'N/A',
                         status: claim.status,
-                        claimRating: reportData.claimRating || null,
-                        supporting_papers_count: reportData.supportingPapers?.length || 0,
-                        non_relevant_papers_count: reportData.nonRelevantPapers?.length || 0,
-                        price: reportData.usage_stats?.total_cost || 0,
+                        claimRating: report.claimRating || null,
+                        supporting_papers_count: report.relevantPapers?.length || 0,
+                        non_relevant_papers_count: report.nonRelevantPapers?.length || 0,
+                        price: report.usage_stats?.total_cost || 0,
                         claim_id: claim.claim_id
                     };
                 }
@@ -183,6 +172,11 @@
         // Filter input handler
         document.getElementById('filter-input').addEventListener('keyup', function(e) {
             table.setFilter("text", "like", e.target.value);
+        });
+
+        // Add a click handler for Bulk Download Markdown
+        document.getElementById('downloadMarkdown').addEventListener('click', function() {
+            window.location.href = `/api/v1/batch/${batchId}/download_markdown`;
         });
     </script>
 </body>
