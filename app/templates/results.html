@@ -56,8 +56,14 @@
                 sanitize: true,
                 breaks: true
             });
+
+            // Helper function to safely parse markdown
+            function parseMarkdown(content) {
+                if (content === null || content === undefined) return '';
+                return marked.parse(String(content));
+            }
             
-            const explanation = data.report?.explanation ? marked.parse(data.report.explanation) : 'No explanation available';
+            const explanation = data.report?.explanation ? parseMarkdown(data.report.explanation) : 'No explanation available';
             
             let html = `
                 <h2>Claim: ${data.text}</h2>
@@ -74,31 +80,31 @@
                     ${data.report?.relevantPapers && Array.isArray(data.report.relevantPapers) ? 
                         data.report.relevantPapers.map(paper => `
                             <div class="mechanism-section">
-                                <h4>${marked.parse(paper.title)}</h4>
+                                <h4>${parseMarkdown(paper.title)}</h4>
                                 <div class="paper-details">
                                     <p><strong>Authors:</strong> ${paper.authors && Array.isArray(paper.authors) 
                                         ? paper.authors.map(author => `${author.name} (H-index: ${author.hIndex || 0})`).join(', ')
                                         : 'Authors not available'}</p>
-                                    <p><strong>Relevance:</strong> ${marked.parse(paper.relevance)}</p>
+                                    <p><strong>Relevance:</strong> ${parseMarkdown(paper.relevance)}</p>
                                     <p><strong>Weight Score:</strong> ${paper.weight_score}</p>
                                     
                                     <div class="paper-content">
                                         <strong>Excerpts:</strong>
                                         ${Array.isArray(paper.excerpts) 
-                                            ? `<ul class="content-list">${paper.excerpts.map(excerpt => `<li>${marked.parse(excerpt)}</li>`).join('')}</ul>`
-                                            : `<p>${marked.parse(paper.excerpts || 'No excerpts available')}</p>`
+                                            ? `<ul class="content-list">${paper.excerpts.map(excerpt => `<li>${parseMarkdown(excerpt)}</li>`).join('')}</ul>`
+                                            : `<p>${parseMarkdown(paper.excerpts || 'No excerpts available')}</p>`
                                         }
                                         
                                         <strong>Explanations:</strong>
                                         ${Array.isArray(paper.explanations) 
-                                            ? `<ul class="content-list">${paper.explanations.map(explanation => `<li>${marked.parse(explanation)}</li>`).join('')}</ul>`
-                                            : `<p>${marked.parse(paper.explanations || 'No explanations available')}</p>`
+                                            ? `<ul class="content-list">${paper.explanations.map(explanation => `<li>${parseMarkdown(explanation)}</li>`).join('')}</ul>`
+                                            : `<p>${parseMarkdown(paper.explanations || 'No explanations available')}</p>`
                                         }
                                         
                                         <strong>Citations:</strong>
                                         <ul class="content-list">
                                             ${Array.isArray(paper.citations) 
-                                                ? paper.citations.map(citation => `<li>${marked.parse(citation.citation)}</li>`).join('')
+                                                ? paper.citations.map(citation => `<li>${parseMarkdown(citation.citation)}</li>`).join('')
                                                 : '<li>No citations available</li>'
                                             }
                                         </ul>
@@ -118,12 +124,12 @@
                     ${data.report.nonRelevantPapers && Array.isArray(data.report.nonRelevantPapers) && data.report.nonRelevantPapers.length > 0 ? 
                         data.report.nonRelevantPapers.map(paper => `
                             <div class="mechanism-section">
-                                <h4>${marked.parse(paper.title)}</h4>
+                                <h4>${parseMarkdown(paper.title)}</h4>
                                 <div class="paper-details">
                                     <p><strong>Authors:</strong> ${paper.authors && Array.isArray(paper.authors)
                                         ? paper.authors.map(author => `${author.name} (H-index: ${author.hIndex || 0})`).join(', ')
                                         : 'Authors not available'}</p>
-                                    <p><strong>Why Not Relevant:</strong> ${marked.parse(paper.explanation || 'No explanation provided')}</p>
+                                    <p><strong>Why Not Relevant:</strong> ${parseMarkdown(paper.explanation || 'No explanation provided')}</p>
                                     <p class="paper-type"><strong>Content Type:</strong> ${paper.content_type || 'Not specified'}</p>
                                     <a href="${paper.link}" target="_blank" class="paper-link">Read Paper</a>
                                 </div>
