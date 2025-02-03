@@ -111,11 +111,11 @@ class ClaimProcessor:
             You are an expert scientific reviewer specializing in evaluating the plausibility of scientific claims based on evidence from academic papers and your expert knowledge. Your task is to synthesize a detailed evaluation of the claim and assign a final plausibility rating based on both your scientific knowledge and the evidence provided in the paper excerpts you receive.
 
             The final rating you assign should be one of the following:
-            - False: Strong evidence refutes the claim.
+            - Contradicted: Strong evidence refutes the claim.
             - Likely False: Evidence suggests the claim is unlikely but not definitively refuted.
             - Mixed Evidence: It is not clear whether the supporting or contradicting evidence is stronger.
             - Likely True: The claim is supported by reasonable evidence, though it may not be definitive.
-            - True: The claim is strongly supported by compelling and consistent evidence.
+            - Highly Supported: The claim is strongly supported by compelling and consistent evidence.
             
             When formulating your evaluation, consider the following aspects:
             - Supporting Evidence: Summarize the most robust evidence that supports the claim. Be specific, referencing the findings of relevant papers and their implications.
@@ -133,7 +133,7 @@ class ClaimProcessor:
             You will receive the text of the claim and excerpts from academic papers that could support or refute the claim. Craft your evaluation, then provide a JSON response in the following format:
             {
                 "explanationEssay": "<plain text detailed essay explanation>",
-                "claimRating": "<rating, one of the following: False, Probably False, Mixed Evidence, Probably True, True>"
+                "claimRating": "<rating, one of the following: Contradicted, Likely False, Mixed Evidence, Likely True, Highly Supported>"
             }
             """).strip()
 
@@ -145,7 +145,7 @@ class ClaimProcessor:
 
             # Convert the claimRating to a number
             claimRating = 0
-            if response.get('claimRating') == 'False':
+            if response.get('claimRating') == 'Contradicted':
                 claimRating = 1
             elif response.get('claimRating') == 'Likely False':
                 claimRating = 2
@@ -153,7 +153,7 @@ class ClaimProcessor:
                 claimRating = 3
             elif response.get('claimRating') == 'Likely True':
                 claimRating = 4
-            elif response.get('claimRating') == 'True':
+            elif response.get('claimRating') == 'Highly Supported':
                 claimRating = 5
 
             # Format the final report
