@@ -4,16 +4,15 @@
 
 ## Overview
 
-Valsci is designed to validate scientific claims by leveraging a combination of literature search, paper analysis, and evidence scoring. It automates the process of evaluating claims against existing scientific literature, providing users with detailed reports and insights.
-
+Valsci is designed to validate scientific claims by leveraging a combination of literature search, paper analysis, and evidence scoring. It automates the process of evaluating the veracity of claims against existing academic literature, providing users with detailed reports and insights. It avoids hallucinations by tethering to ground truth in the Semantic Scholar database of academic texts, then uses a guided and interpretable Chain-of-Thought (CoT) reasoning method for each paper and claim to determine on an ordinal scale whether a given claim is contradicted or supported.
 ## Features
 
 - **Claim Validation**: Automatically validate scientific claims using a robust pipeline that includes literature search, paper analysis, and evidence scoring.
 - **Batch Processing**: Submit multiple claims at once via file upload for batch processing.
 - **LLM Evaluation**: Integrate with SOTA LLMs - self-hosted or from providers - to create reasoned, thought-out reports on the literature support for submitted claims.
 - **Web Interface**: User-friendly web interface for submitting claims, checking status, and browsing results.
-- **API Access**: RESTful API for programmatic access to claim validation and batch processing.
-
+- **Grounded Answers**: Reasoning and evaluations are tethered to specific references from the Semantic Scholar corpus of academic literature, which prevents LLM hallucinations.
+- 
 ## Getting Started
 
 ### Prerequisites
