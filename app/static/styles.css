@@ -1583,3 +1583,76 @@ textarea#newClaimText {
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }
+
+/* Add these new styles for the browser page */
+.loading {
+    text-align: center;
+    padding: 20px;
+    color: #666;
+}
+
+.no-results {
+    text-align: center;
+    padding: 20px;
+    color: #666;
+    font-style: italic;
+}
+
+.batch-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 20px;
+}
+
+.batch-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    color: #666;
+}
+
+.table-container {
+    overflow-x: auto;
+    margin: 15px 0;
+}
+
+.view-link {
+    color: var(--primary-color);
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.view-link:hover {
+    text-decoration: underline;
+}
+
+.batch-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+}
+
+.danger-button {
+    background-color: #dc3545;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+.danger-button:hover {
+    background-color: #c82333;
+}
+
+.error-message {
+    background-color: #fff3f3;
+    border: 1px solid #dc3545;
+    border-radius: 4px;
+    color: #dc3545;
+    padding: 15px;
+    margin: 15px 0;
+    text-align: center;
+}

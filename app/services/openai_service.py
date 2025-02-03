@@ -33,7 +33,7 @@ class OpenAIService:
                 self.client = openai.OpenAI(api_key=Config.LLM_API_KEY)
                 self.async_client = openai.AsyncOpenAI(api_key=Config.LLM_API_KEY)
             elif self.provider == "llamacpp":
-                print(f"Using LlamaCPP with model {self.model}")
+                print(f"Using Alternative Model with model {self.model}")
                 self.client = openai.AsyncOpenAI(base_url=self.base_url, api_key="sk-no-key-required")
                 self.async_client = openai.AsyncOpenAI(base_url=self.base_url, api_key="sk-no-key-required")
         

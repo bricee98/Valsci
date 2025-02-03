@@ -207,7 +207,7 @@ class ValsciProcessor:
                 claim_data['report'] = {
                     "relevantPapers": [],
                     "explanation": "No relevant papers were found for this claim.",
-                    "claimRating": -1,
+                    "claimRating": 0,
                     "timing_stats": {},
                     "searchQueries": queries,
                     "claim_text": claim_data['text']
