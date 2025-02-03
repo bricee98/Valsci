@@ -1,6 +1,6 @@
 # Valsci
 
-**A self-hosted, open-source automated literature review tool.**
+**A self-hostable, open-source automated literature review tool.**
 
 ## Overview
 
