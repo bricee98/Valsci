@@ -116,24 +116,32 @@ class ClaimProcessor:
             - Mixed Evidence: It is not clear whether the supporting or contradicting evidence is stronger.
             - Likely True: The claim is supported by reasonable evidence, though it may not be definitive.
             - Highly Supported: The claim is strongly supported by compelling and consistent evidence.
+            - No Evidence: There is no evidence to support or refute the claim in the provided papers.
             
             When formulating your evaluation, consider the following aspects:
             - Supporting Evidence: Summarize the most robust evidence that supports the claim. Be specific, referencing the findings of relevant papers and their implications.
             - Caveats or Contradictions: Identify any limitations, contradictory findings, or alternative interpretations that might challenge the claim.
             - Analysis: Based on your expertise, analyze the systems and structures relevant to the claim for any deeper relationships, mechanisms, or second-order implications that might be relevant.
             - Assessment: Assess the balance of evidence, explaining which side is more compelling and why. Contextualize caveats but avoid undue hedging; consider the overall weight of the evidence like an expert would.
-            - Rating Assignment: Choose a single category from the list above that best reflects the overall strength of evidence for the claim. Assign this rating based on the preponderance of evidence, contextualizing caveats without allowing minor exceptions to overshadow the dominant trend.
-            
-            Write the explanation as an essay with distinct paragraphs for:
+            - Rating Assignment: Choose a single category from the list above that best reflects the overall strength of evidence for the claim. Assign this rating based on the preponderance of evidence, contextualizing caveats without allowing minor exceptions to overshadow the dominant trend.         
+                                   
+            Use the following process to review the claim and evidence and conduct your analysis:
+                                   
+            First, under the explanationEssay attribute, write your thoughts as an essay with distinct paragraphs for:
             - Supporting evidence.
             - Caveats or contradictory evidence.
             - Analysis of potential underlying mechanisms, deeper relationships, or second-order implications.
-            - An explanation of which rating is most appropriate based on the relative strength of the evidence.
+            - An explanation of which rating seems most appropriate based on the relative strength of the evidence.
+                                   
+            Once you've written the essay, read over it and analyze your logic one more time for any flaws or inconsistencies. If you find any, revise your rating and explanation accordingly in the finalReasoning attribute. Otherwise, you can reaffirm your rating and explanation in the finalReasoning attribute. This string can be as long as you need to conduct a rigorous final analysis.
+                                   
+            Lastly, assign the final rating from the list above in the claimRating attribute.
             
             You will receive the text of the claim and excerpts from academic papers that could support or refute the claim. Craft your evaluation, then provide a JSON response in the following format:
             {
                 "explanationEssay": "<plain text detailed essay explanation>",
-                "claimRating": "<rating, one of the following: Contradicted, Likely False, Mixed Evidence, Likely True, Highly Supported>"
+                "finalReasoning": "<plain text additional reasoning for the rating>",
+                "claimRating": "<rating, one of the following: Contradicted, Likely False, Mixed Evidence, Likely True, Highly Supported, No Evidence>"
             }
             """).strip()
 
@@ -192,6 +200,7 @@ class ClaimProcessor:
                 "nonRelevantPapers": self._format_non_relevant_papers(non_relevant_papers or []),
                 "inaccessiblePapers": self._format_inaccessible_papers(inaccessible_papers or []),
                 "explanation": response.get('explanationEssay', 'No explanation available'),
+                "finalReasoning": response.get('finalReasoning', 'No additional reasoning available'),
                 "claimRating": claimRating,
                 "searchQueries": queries,
                 "usage_stats": {}
