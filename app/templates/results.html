@@ -22,6 +22,29 @@
         <button id="downloadCitations">Download Citations</button>
         <button id="deleteClaimButton">Delete Claim</button>
     </div>
+    <style>
+        .hidden {
+            display: none;
+        }
+        .toggle-button {
+            margin: 10px 0;
+            padding: 8px 16px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .toggle-button:hover {
+            background-color: #0056b3;
+        }
+        .final-reasoning-section {
+            margin: 20px 0;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+    </style>
     <script>
         const urlParams = new URLSearchParams(window.location.search);
         const claimId = urlParams.get('claim_id');
@@ -73,6 +96,19 @@
                     <div class="rating-text">${ratingText}</div>
                 </div>
                 <div class="markdown-content">${explanation}</div>
+
+                <!-- Add Final Reasoning section -->
+                ${data.report?.finalReasoning ? `
+                    <div class="final-reasoning-section">
+                        <button id="toggleFinalReasoning" class="toggle-button">
+                            Show Final Reasoning
+                        </button>
+                        <div id="finalReasoningContent" class="hidden markdown-content">
+                            ${parseMarkdown(data.report.finalReasoning)}
+                        </div>
+                    </div>
+                ` : ''}
+
                 <p><strong>Status:</strong> ${data.status}</p>
                 <h3>Relevant Papers:</h3>
                 <div class="papers-section">
@@ -192,6 +228,20 @@
             }
 
             reportContent.innerHTML = html;
+
+            // Add event listener for final reasoning toggle button
+            setTimeout(() => {
+                const toggleButton = document.getElementById('toggleFinalReasoning');
+                const content = document.getElementById('finalReasoningContent');
+                
+                if (toggleButton && content) {
+                    toggleButton.addEventListener('click', () => {
+                        const isHidden = content.classList.contains('hidden');
+                        content.classList.toggle('hidden');
+                        toggleButton.textContent = isHidden ? 'Hide Final Reasoning' : 'Show Final Reasoning';
+                    });
+                }
+            }, 100);
         }
 
         if (claimId) {

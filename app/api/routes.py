@@ -540,6 +540,10 @@ def generate_markdown_report(claim_data):
     md_content.append(f"**Overall Rating**: {report.get('claimRating', 'N/A')}\n")
     md_content.append(f"**Explanation**:\n\n{report.get('explanation', 'No explanation available')}\n")
     
+    # Add final reasoning if it exists
+    if report.get('finalReasoning'):
+        md_content.append(f"\n**Final Reasoning**:\n\n{report['finalReasoning']}\n")
+    
     # Add relevant papers section
     md_content.append("\n## Relevant Papers\n")
     for paper in report.get('relevantPapers', []):
