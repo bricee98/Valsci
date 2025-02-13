@@ -52,6 +52,7 @@
 
         function getRatingText(rating) {
             if (rating === null || rating === undefined) return 'No Rating';
+            if (rating === 0) return 'No Evidence';
             if (rating === 1) return 'Contradicted';
             if (rating === 2) return 'Likely False';
             if (rating === 3) return 'Mixed Evidence';
