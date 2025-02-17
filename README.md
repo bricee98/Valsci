@@ -4,15 +4,36 @@
 
 ## Overview
 
-Valsci is designed to validate scientific claims by leveraging a combination of literature search, paper analysis, and evidence scoring. It automates the process of evaluating the veracity of claims against existing academic literature, providing users with detailed reports and insights. It avoids hallucinations by tethering to ground truth in the Semantic Scholar database of academic texts, then uses a guided and interpretable Chain-of-Thought (CoT) reasoning method for each paper and claim to determine on an ordinal scale whether a given claim is contradicted or supported.
+Valsci is an open-source, self-hostable utility designed to automate large-batch scientific claim verification using any OpenAI-compatible large language model (LLM). It combines retrieval-augmented generation (RAG) with structured bibliometric scoring to efficiently search, evaluate, and summarize evidence from the Semantic Scholar database and other academic sources.
+
+Unlike conventional standalone LLMs, which often suffer from hallucinations and unreliable citations, Valsci grounds its analyses in verifiable published findings through:
+
+1. **Retrieval-Augmented Generation (RAG)**: Seamless integration with Semantic Scholar ensures outputs remain anchored in verifiable sources.
+2. **Structured Bibliometric Scoring**: Incorporates author H-index, citation counts, and journal impact for nuanced source credibility assessment.
+3. **Guided Chain-of-Thought (CoT)**: Uses specialized prompts to systematically organize retrieved evidence into comprehensive verification reports.
+4. **High-Throughput Processing**: Employs asynchronous parallelization to process hundreds of claims per hour.
+
+Valsci has demonstrated significant improvements over base LLM outputs in true/false annotation accuracy and citation hallucination rates across benchmark datasets.
+
 ## Features
 
 - **Claim Validation**: Automatically validate scientific claims using a robust pipeline that includes literature search, paper analysis, and evidence scoring.
-- **Batch Processing**: Submit multiple claims at once via file upload for batch processing.
-- **LLM Evaluation**: Integrate with SOTA LLMs - self-hosted or from providers - to create reasoned, thought-out reports on the literature support for submitted claims.
-- **Web Interface**: User-friendly web interface for submitting claims, checking status, and browsing results.
-- **Grounded Answers**: Reasoning and evaluations are tethered to specific references from the Semantic Scholar corpus of academic literature, which prevents LLM hallucinations.
-- 
+- **Batch Processing**: Process hundreds of claims per hour through asynchronous parallelization.
+- **LLM Integration**: Compatible with any OpenAI-style API, including self-hosted open-source models like LLaMA, Deepseek-R1, and Mistral.
+- **Bibliometric Scoring**: Evaluate source credibility using author H-index, citation counts, and estimated journal impact.
+- **Structured Reports**: Generate detailed reports with supporting evidence, contradictory findings, and mechanistic evaluations.
+- **Verifiable Results**: All citations and excerpts are drawn directly from the Semantic Scholar database, eliminating hallucinations.
+- **Web Interface**: User-friendly interface for submitting claims, monitoring progress, and browsing results.
+
+### Rating Scale
+Claims are rated on an ordinal scale:
+- Contradicted
+- Likely False
+- Mixed Evidence
+- Likely True
+- Highly Supported
+- No Evidence
+
 ## Getting Started
 
 ### Prerequisites
@@ -38,27 +59,26 @@ pip install -r requirements.txt
 
 ### Configuration
 
+Valsci's configuration is managed through a JSON file that controls LLM integration, security settings, and optional features. The system supports various LLM backends including OpenAI's API, Azure OpenAI, and local deployments of open-source models.
+
 1. **Create configuration file:**
 
-Create a `config/env_vars.json` file with the following structure:
+Create a `config/env_vars.json` file with your configuration settings. Below is a template with explanations for each setting:
 
 ```json
 {
     "FLASK_SECRET_KEY": "your_secret_key",
     "USER_EMAIL": "your_email@example.com",
     "SEMANTIC_SCHOLAR_API_KEY": "your_semantic_scholar_api_key",
-    "AI_PROVIDER": "openai",  // Can be "openai", "azure", or "local"
-    "AI_API_KEY": "your_api_key",  // Required for OpenAI and Azure OpenAI
-    "AI_BASE_URL": "http://localhost:8000",  // Required for local AI provider
-    "REQUIRE_PASSWORD": "true",  // Optional password protection for internet hosting
-    "ACCESS_PASSWORD": "your_access_password",  // Required if REQUIRE_PASSWORD is true
-    
-    // Optional Azure OpenAI configuration
+    "LLM_PROVIDER": "openai",
+    "LLM_API_KEY": "your_api_key",
+    "LLM_BASE_URL": "http://localhost:8000",
+    "LLM_EVALUATION_MODEL": "gpt-4o",
+    "REQUIRE_PASSWORD": "true",
+    "ACCESS_PASSWORD": "your_access_password",
     "USE_AZURE_OPENAI": "false",
     "AZURE_OPENAI_ENDPOINT": "your_azure_endpoint",
     "AZURE_OPENAI_API_VERSION": "2024-06-01",
-    
-    // Optional email notification configuration
     "ENABLE_EMAIL_NOTIFICATIONS": "false",
     "EMAIL_SENDER": "your_gmail@gmail.com",
     "EMAIL_APP_PASSWORD": "your_gmail_app_password",
@@ -67,6 +87,34 @@ Create a `config/env_vars.json` file with the following structure:
     "BASE_URL": "https://your-domain.com"
 }
 ```
+
+#### Configuration Options
+
+**Required Settings:**
+- `FLASK_SECRET_KEY`: Secret key for Flask session security
+- `USER_EMAIL`: Your email address
+- `SEMANTIC_SCHOLAR_API_KEY`: Your Semantic Scholar API key
+- `LLM_PROVIDER`: AI provider to use ("openai", "azure", or "local")
+- `LLM_API_KEY`: API key for OpenAI or Azure OpenAI (required for those providers)
+- `LLM_EVALUATION_MODEL`: Model to use for evaluation (e.g., "gpt-4")
+
+**Optional Settings:**
+- `LLM_BASE_URL`: Base URL for local AI provider (required if using "local" provider)
+- `REQUIRE_PASSWORD`: Enable password protection for internet hosting
+- `ACCESS_PASSWORD`: Access password (required if REQUIRE_PASSWORD is "true")
+
+**Azure OpenAI Settings (Optional):**
+- `USE_AZURE_OPENAI`: Enable Azure OpenAI integration
+- `AZURE_OPENAI_ENDPOINT`: Azure OpenAI endpoint URL
+- `AZURE_OPENAI_API_VERSION`: Azure OpenAI API version
+
+**Email Notification Settings (Optional):**
+- `ENABLE_EMAIL_NOTIFICATIONS`: Enable email notifications
+- `EMAIL_SENDER`: Gmail address for sending notifications
+- `EMAIL_APP_PASSWORD`: Gmail app password
+- `SMTP_SERVER`: SMTP server (default: smtp.gmail.com)
+- `SMTP_PORT`: SMTP port (default: 587)
+- `BASE_URL`: Base URL for your deployment
 
 ### Downloading and Indexing Semantic Scholar Datasets
 
@@ -191,11 +239,20 @@ Contributions are welcome! Please fork the repository and submit a pull request 
 
 ## License
 
-This project is licensed under the GNU General Public License. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the GNU General Public License v3.0. See the [LICENSE](LICENSE) file for details.
+
+## Citation
+
+If you use Valsci in your research, please cite:
+
+```bibtex
+@article{edelman2024valsci,
+  title={Valsci: An Open-Source, Self-Hostable Literature Review Utility for Automated Large Batch Scientific Claim Verification Using Large Language Models},
+  author={Edelman, Brice and Skolnick, Jeffrey},
+  year={2024}
+}
+```
 
 ## Contact
 
 For questions or support, please contact [bedelman3@gatech.edu](mailto:bedelman3@gatech.edu).
-
-## Version
-The current version is 0.1.5. This version will increment when any changes are made to the report generation logic that could affect results.
