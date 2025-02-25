@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced Claims Results</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>Enhanced Claims Results</h1>
+        <div class="actions">
+            <a href="/api/v1/enhanced-claims/{{ batch_id }}/download" class="button">Download Enhanced Claims (.txt)</a>
+            <a href="/" class="button">Back to Home</a>
+        </div>
+        <div class="results-table">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Original Claim</th>
+                        <th>Enhanced Claim</th>
+                        <th>Valid?</th>
+                        <th>Explanation</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for claim in results.claims %}
+                    <tr>
+                        <td>{{ claim.original }}</td>
+                        <td>{{ claim.suggested }}</td>
+                        <td>{{ "Yes" if claim.is_valid else "No" }}</td>
+                        <td>{{ claim.explanation }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html> 

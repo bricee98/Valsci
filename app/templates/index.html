@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Valsci</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>Valsci</h1>
+        
+        <!-- 0. Instructions section -->
+        <div class="instructions-container">
+            <button id="toggleInstructions" class="toggle-button">
+                <span class="toggle-text">Show Instructions</span>
+                <span class="toggle-icon">▼</span>
+            </button>
+            <div class="instructions" style="display: none;">
+                <h2>How to Use Valsci</h2>
+                <p>Valsci helps you conduct automated literature reviews by analyzing scientific claims. Follow these simple steps:</p>
+                
+                <div class="instruction-step">
+                    <h3>1. Add Your Claims</h3>
+                    <p>You can add claims in two ways:</p>
+                    <ul>
+                        <li>Type individual claims into the text box below</li>
+                        <li>Upload a .txt file containing multiple claims (one per line)</li>
+                    </ul>
+                </div>
+
+                <div class="instruction-step">
+                    <h3>2. Configure Processing Options</h3>
+                    <p>Choose how many papers you want to search for and the maximum number of results per query that should be returned for analysis.</p>
+                </div>
+
+
+                <div class="instruction-step">
+                    <h3>3. Submit and Track</h3>
+                    <p>Submit your batch for processing. Add your email to receive notifications when your results are ready.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 2. Email notification (now conditional) -->
+        {% if config.ENABLE_EMAIL_NOTIFICATIONS %}
+        <div class="email-notification">
+            <h3>Email Notifications</h3>
+            <div class="email-input-group">
+                <input 
+                    type="email" 
+                    id="notificationEmail" 
+                    placeholder="Enter your email for completion notification"
+                    pattern="[^@\s]+@[^@\s]+\.[^@\s]+"
+                    title="Please enter a valid email address">
+                <div class="checkbox-group">
+                    <input type="checkbox" id="emailNotification" checked>
+                    <label for="emailNotification">Notify me about the status of my batch</label>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- 3. Add claim form -->
+        <div class="add-claim-section">
+            <h3>Add Claim</h3>
+            <div class="claim-input-container">
+                <textarea id="newClaimText" placeholder="Type your claim here..." rows="3"></textarea>
+                <div class="claim-actions">
+                    <button type="button" id="addClaimBtn">Add Claim</button>
+                </div>
+            </div>
+
+            <div class="file-upload-section">
+                <label for="claimFile" class="file-upload-label">
+                    <span>Upload Claims File</span>
+                    <input type="file" id="claimFile" accept=".txt">
+                </label>
+                <span class="file-name" id="fileName"></span>
+            </div>
+        </div>
+
+        <!-- 4. Staging area -->
+        <div class="staging-area">
+            <h2>Staged Claims</h2>
+            <div id="stagedClaims" class="staged-claims">
+                <!-- Claims will be added here dynamically -->
+            </div>
+        </div>
+
+        <!-- 5. Processing Options section -->
+        <div class="processing-options">
+            <h3>Processing Options</h3>
+            <div class="config-panel">
+                <h3>Literature Review Search Options</h3>
+                <p class="subtext">Valsci will search Semantic Scholar to find and analyze relevant papers for your claims.</p>
+                <div class="config-group">
+                    <label for="numQueries">Number of Search Queries:</label>
+                    <input type="number" id="numQueries" name="numQueries" min="1" max="20" value="5">
+                </div>
+                <div class="config-group">
+                    <label for="resultsPerQuery">Results Per Query:</label>
+                    <input type="number" id="resultsPerQuery" name="resultsPerQuery" min="1" max="10" value="5">
+                </div>
+            </div>
+
+            <!-- Add password field if required -->
+            {% if config.REQUIRE_PASSWORD %}
+            <div class="password-field">
+                <input type="password" id="accessPassword" placeholder="Enter access password">
+            </div>
+            {% endif %}
+
+            <button type="button" id="processAllBtn" class="primary-button" disabled>
+                Process Batch
+            </button>
+        </div>
+
+        <!-- 6. Browse Results link -->
+        {% if saved_jobs_exist %}
+        <a href="/browser" class="browse-link">Browse Results</a>
+        {% endif %}
+    </div>
+    <script>
+        const requirePassword = {{ 'true' if config.REQUIRE_PASSWORD else 'false' }};
+    </script>
+    <script src="{{ url_for('static', filename='scripts.js') }}"></script>
+</body>
+</html>

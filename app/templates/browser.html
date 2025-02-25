@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Browse Batches and Claims</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>Browse Batches and Claims</h1>
+        <div class="search-container">
+            <input type="text" id="searchInput" placeholder="Search batches or claims...">
+            <button id="searchButton">Search</button>
+        </div>
+        <div id="batchesContainer"></div>
+    </div>
+    <script>
+        const searchInput = document.getElementById('searchInput');
+        const searchButton = document.getElementById('searchButton');
+        const batchesContainer = document.getElementById('batchesContainer');
+
+        function formatTimestamp(timestamp) {
+            if (!timestamp || timestamp === '1970-01-01T00:00:00') return 'Unknown date';
+            const date = new Date(timestamp);
+            return date.toLocaleString();
+        }
+
+        function formatRating(rating) {
+            if (rating === null || rating === undefined) return 'N/A';
+            return typeof rating === 'number' ? rating.toFixed(1) : rating;
+        }
+
+        function loadBatches(searchTerm = '') {
+            batchesContainer.innerHTML = '<div class="loading">Loading batches...</div>';
+            
+            fetch(`/api/v1/browse?search=${encodeURIComponent(searchTerm)}`)
+                .then(response => response.json())
+                .then(data => {
+                    batchesContainer.innerHTML = '';
+                    
+                    if (data.error) {
+                        batchesContainer.innerHTML = `<div class="error-message">${data.error}</div>`;
+                        return;
+                    }
+                    
+                    if (!data.batches || data.batches.length === 0) {
+                        batchesContainer.innerHTML = '<div class="no-results">No batches found</div>';
+                        return;
+                    }
+
+                    data.batches.forEach(batch => {
+                        const batchElement = document.createElement('div');
+                        batchElement.className = 'batch-preview';
+                        
+                        const claimsTable = batch.preview_claims.length > 0 ? `
+                            <h3>Preview Claims:</h3>
+                            <div class="table-container">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Claim</th>
+                                            <th>Status</th>
+                                            <th>Rating</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${batch.preview_claims.map(claim => `
+                                            <tr>
+                                                <td>${claim.text}</td>
+                                                <td>${claim.status}</td>
+                                                <td>${formatRating(claim.rating)}</td>
+                                                <td>
+                                                    <a href="/progress?batch_id=${batch.batch_id}&claim_id=${claim.claim_id}" 
+                                                       class="view-link">View Report</a>
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        ` : '<p>No claims available for preview</p>';
+
+                        batchElement.innerHTML = `
+                            <div class="batch-header">
+                                <h2>Batch ID: ${batch.batch_id}</h2>
+                                <div class="batch-meta">
+                                    <span>Created: ${formatTimestamp(batch.timestamp)}</span>
+                                    <span>Total Claims: ${batch.total_claims}</span>
+                                </div>
+                            </div>
+                            ${claimsTable}
+                            <div class="batch-actions">
+                                <a href="/batch_results?batch_id=${batch.batch_id}" 
+                                   class="primary-button">View Full Batch</a>
+                                <button onclick="deleteBatch('${batch.batch_id}')" 
+                                        class="danger-button">Delete Batch</button>
+                            </div>
+                        `;
+                        batchesContainer.appendChild(batchElement);
+                    });
+                })
+                .catch(error => {
+                    console.error('Error fetching batches:', error);
+                    batchesContainer.innerHTML = '<div class="error-message">Error fetching batches. Please try again later.</div>';
+                });
+        }
+
+        async function deleteBatch(batchId) {
+            if (!confirm('Are you sure you want to delete this batch? This action cannot be undone.')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/v1/delete/batch/${batchId}`, {
+                    method: 'DELETE'
+                });
+                const data = await response.json();
+                
+                if (response.ok) {
+                    loadBatches(searchInput.value);
+                } else {
+                    alert(data.error || 'Failed to delete batch');
+                }
+            } catch (error) {
+                console.error('Error deleting batch:', error);
+                alert('Error deleting batch. Please try again.');
+            }
+        }
+
+        searchButton.addEventListener('click', () => {
+            loadBatches(searchInput.value);
+        });
+
+        searchInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                loadBatches(searchInput.value);
+            }
+        });
+
+        // Load batches on page load
+        loadBatches();
+    </script>
+</body>
+</html>

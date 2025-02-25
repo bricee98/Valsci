@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Processing Claims</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <style>
+        .progress-container {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .status-list {
+            list-style: none;
+            padding: 0;
+        }
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 5px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .status-count {
+            font-weight: bold;
+        }
+        progress {
+            width: 100%;
+            height: 20px;
+            margin: 10px 0;
+        }
+        .current-claim {
+            margin-top: 20px;
+            padding: 10px;
+            background: #f5f5f5;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Processing Claims</h1>
+        <div id="referenceContainer" class="progress-container">
+            <h2>Reference IDs</h2>
+            <ul id="referenceList"></ul>
+        </div>
+        <div id="progressContainer" class="progress-container">
+            <h2>Progress</h2>
+            <div id="overallProgress"></div>
+            <div id="statusBreakdown"></div>
+            <div id="currentClaim"></div>
+        </div>
+    </div>
+
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const batchId = urlParams.get('batch_id');
+        const referenceList = document.getElementById('referenceList');
+        const overallProgress = document.getElementById('overallProgress');
+        const statusBreakdown = document.getElementById('statusBreakdown');
+        const currentClaim = document.getElementById('currentClaim');
+
+        // Add batch ID to reference list
+        if (batchId) {
+            const li = document.createElement('li');
+            li.textContent = `Batch ID: ${batchId}`;
+            referenceList.appendChild(li);
+        }
+
+        function updateProgress() {
+            if (!batchId) return;
+
+            fetch(`/api/v1/batch/${batchId}/progress`)
+                .then(response => response.json())
+                .then(data => {
+                    // Update overall progress
+                    const progress = (data.processed_claims / data.total_claims) * 100;
+                    overallProgress.innerHTML = `
+                        <p>Processing ${data.processed_claims} of ${data.total_claims} claims</p>
+                        <progress value="${data.processed_claims}" max="${data.total_claims}"></progress>
+                        <p>${progress.toFixed(1)}% complete</p>
+                    `;
+
+                    // Update status breakdown
+                    let breakdownHtml = '<h3>Status Breakdown</h3><ul class="status-list">';
+                    for (const [status, count] of Object.entries(data.detailed_counts)) {
+                        if (count > 0) {  // Only show statuses with claims
+                            breakdownHtml += `
+                                <li class="status-item">
+                                    <span class="status-label">${status}</span>
+                                    <span class="status-count">${count}</span>
+                                </li>
+                            `;
+                        }
+                    }
+                    breakdownHtml += '</ul>';
+                    statusBreakdown.innerHTML = breakdownHtml;
+
+                    // Update current claim info
+                    if (data.current_claim_id) {
+                        currentClaim.innerHTML = `
+                            <div class="current-claim">
+                                <h3>Currently Processing</h3>
+                                <p>Claim ID: ${data.current_claim_id}</p>
+                            </div>
+                        `;
+                    } else {
+                        currentClaim.innerHTML = '';
+                    }
+
+                    // Handle completion
+                    if (data.status === "completed") {
+                        window.location.href = `/batch_results?batch_id=${batchId}`;
+                    } else if (data.status === "error") {
+                        alert("Error processing batch");
+                    } else {
+                        setTimeout(updateProgress, 5000);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching progress:', error);
+                    setTimeout(updateProgress, 5000);
+                });
+        }
+
+        // Start progress updates
+        updateProgress();
+    </script>
+</body>
+</html>

@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Claim Report</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>Claim Report</h1>
+        <div id="reportContent"></div>
+        <div id="usageStats"></div>
+        <div id="timingStats">
+            <h3>Processing Time Breakdown:</h3>
+            <div class="timing-breakdown" id="timingBreakdown">
+                <!-- Timing data will be populated by JavaScript -->
+            </div>
+        </div>
+        <button id="downloadReport">Download Report</button>
+        <button id="downloadCitations">Download Citations</button>
+        <button id="deleteClaimButton">Delete Claim</button>
+    </div>
+    <style>
+        .hidden {
+            display: none;
+        }
+        .toggle-button {
+            margin: 10px 0;
+            padding: 8px 16px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .toggle-button:hover {
+            background-color: #0056b3;
+        }
+        .final-reasoning-section {
+            margin: 20px 0;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+    </style>
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const claimId = urlParams.get('claim_id');
+        const reportContent = document.getElementById('reportContent');
+
+        function getRatingText(rating) {
+            if (rating === null || rating === undefined) return 'No Rating';
+            if (rating === 0) return 'No Evidence';
+            if (rating === 1) return 'Contradicted';
+            if (rating === 2) return 'Likely False';
+            if (rating === 3) return 'Mixed Evidence';
+            if (rating === 4) return 'Likely True';
+            if (rating === 5) return 'Highly Supported';
+            return 'No Rating';
+        }
+
+        function getRatingColor(rating) {
+            if (rating === null || rating === undefined) return '#6c757d'; // gray
+            if (rating === 0) return '#6c757d'; // gray
+            if (rating === 1) return '#dc3545'; // red
+            if (rating === 2) return '#e17055'; // orange-red
+            if (rating === 3) return '#6c757d'; // gray
+            if (rating === 4) return '#74b9ff'; // light blue
+            if (rating === 5) return '#00b894'; // green-blue
+            return '#6c757d'; // gray
+        }
+
+        function displayReport(data) {
+            const ratingText = getRatingText(data.report?.claimRating);
+            const ratingColor = getRatingColor(data.report?.claimRating);
+            
+            marked.setOptions({
+                sanitize: true,
+                breaks: true
+            });
+
+            // Helper function to safely parse markdown
+            function parseMarkdown(content) {
+                if (content === null || content === undefined) return '';
+                return marked.parse(String(content));
+            }
+            
+            const explanation = data.report?.explanation ? parseMarkdown(data.report.explanation) : 'No explanation available';
+            
+            let html = `
+                <h2>Claim: ${data.text}</h2>
+                <div class="claim-rating" style="background-color: ${ratingColor}">
+                    <h3>Overall Assessment:</h3>
+                    <div class="rating-value">${data.report?.claimRating ?? 'N/A'}</div>
+                    <div class="rating-text">${ratingText}</div>
+                </div>
+                <div class="markdown-content">${explanation}</div>
+
+                <!-- Add Final Reasoning section -->
+                ${data.report?.finalReasoning ? `
+                    <div class="final-reasoning-section">
+                        <button id="toggleFinalReasoning" class="toggle-button">
+                            Show Final Reasoning
+                        </button>
+                        <div id="finalReasoningContent" class="hidden markdown-content">
+                            ${parseMarkdown(data.report.finalReasoning)}
+                        </div>
+                    </div>
+                ` : ''}
+
+                <p><strong>Status:</strong> ${data.status}</p>
+                <h3>Relevant Papers:</h3>
+                <div class="papers-section">
+                    ${data.report?.relevantPapers && Array.isArray(data.report.relevantPapers) ? 
+                        data.report.relevantPapers.map(paper => `
+                            <div class="mechanism-section">
+                                <h4>${parseMarkdown(paper.title)}</h4>
+                                <div class="paper-details">
+                                    <p><strong>Authors:</strong> ${paper.authors && Array.isArray(paper.authors) 
+                                        ? paper.authors.map(author => `${author.name} (H-index: ${author.hIndex || 0})`).join(', ')
+                                        : 'Authors not available'}</p>
+                                    <p><strong>Relevance:</strong> ${parseMarkdown(paper.relevance)}</p>
+                                    <p><strong>Weight Score:</strong> ${paper.weight_score}</p>
+                                    
+                                    <div class="paper-content">
+                                        <strong>Excerpts:</strong>
+                                        ${Array.isArray(paper.excerpts) 
+                                            ? `<ul class="content-list">${paper.excerpts.map(excerpt => `<li>${parseMarkdown(excerpt)}</li>`).join('')}</ul>`
+                                            : `<p>${parseMarkdown(paper.excerpts || 'No excerpts available')}</p>`
+                                        }
+                                        
+                                        <strong>Explanations:</strong>
+                                        ${Array.isArray(paper.explanations) 
+                                            ? `<ul class="content-list">${paper.explanations.map(explanation => `<li>${parseMarkdown(explanation)}</li>`).join('')}</ul>`
+                                            : `<p>${parseMarkdown(paper.explanations || 'No explanations available')}</p>`
+                                        }
+                                        
+                                        <strong>Citations:</strong>
+                                        <ul class="content-list">
+                                            ${Array.isArray(paper.citations) 
+                                                ? paper.citations.map(citation => `<li>${parseMarkdown(citation.citation)}</li>`).join('')
+                                                : '<li>No citations available</li>'
+                                            }
+                                        </ul>
+                                    </div>
+                                    
+                                    <p class="paper-type"><strong>Content Type:</strong> ${paper.content_type || 'Not specified'}</p>
+                                    <a href="${paper.link}" target="_blank" class="paper-link">Read Paper</a>
+                                </div>
+                            </div>
+                        `).join('')
+                        : '<div class="error-message">No relevant papers available</div>'
+                    }
+                </div>
+
+                <h3>Other Reviewed Papers:</h3>
+                <div class="papers-section">
+                    ${data.report.nonRelevantPapers && Array.isArray(data.report.nonRelevantPapers) && data.report.nonRelevantPapers.length > 0 ? 
+                        data.report.nonRelevantPapers.map(paper => `
+                            <div class="mechanism-section">
+                                <h4>${parseMarkdown(paper.title)}</h4>
+                                <div class="paper-details">
+                                    <p><strong>Authors:</strong> ${paper.authors && Array.isArray(paper.authors)
+                                        ? paper.authors.map(author => `${author.name} (H-index: ${author.hIndex || 0})`).join(', ')
+                                        : 'Authors not available'}</p>
+                                    <p><strong>Why Not Relevant:</strong> ${parseMarkdown(paper.explanation || 'No explanation provided')}</p>
+                                    <p class="paper-type"><strong>Content Type:</strong> ${paper.content_type || 'Not specified'}</p>
+                                    <a href="${paper.link}" target="_blank" class="paper-link">Read Paper</a>
+                                </div>
+                            </div>
+                        `).join('')
+                        : '<div class="error-message">No other papers were reviewed.</div>'
+                    }
+                </div>
+
+                <h3>Inaccessible Papers:</h3>
+                <div class="inaccessible-papers">
+                    ${data.report.inaccessiblePapers && Array.isArray(data.report.inaccessiblePapers) && data.report.inaccessiblePapers.length > 0 ? `
+                        <ul>
+                            ${data.report.inaccessiblePapers.map(paper => {
+                                const authorText = paper.authors && Array.isArray(paper.authors)
+                                    ? paper.authors.map(author => author.name).join(', ')
+                                    : 'Authors not available';
+                                
+                                return `
+                                    <li>
+                                        <h4>${paper.title}</h4>
+                                        <p><strong>Authors:</strong> ${authorText}</p>
+                                        <p><strong>Reason:</strong> ${paper.reason || 'No reason provided'}</p>
+                                        <p><a href="${paper.link}" target="_blank">Read Paper</a></p>
+                                    </li>
+                                `;
+                            }).join('')}
+                        </ul>
+                    ` : '<p>No inaccessible papers were found.</p>'}
+                </div>
+
+                <h3>Search Queries:</h3>
+                <ul>${Array.isArray(data.report.searchQueries) 
+                    ? data.report.searchQueries.map(query => `<li>${query}</li>`).join('')
+                    : '<li>No search queries available</li>'
+                }</ul>
+
+                <h3>Processing Time Breakdown:</h3>
+                <div class="timing-breakdown" id="timingBreakdown">
+                    ${data.report.timing_stats ? `
+                        <p><strong>Paper Search:</strong> ${data.report.timing_stats.search_papers ? data.report.timing_stats.search_papers.toFixed(2) : 'N/A'}s</p>
+                        <p><strong>Paper Processing:</strong> ${data.report.timing_stats.paper_processing ? data.report.timing_stats.paper_processing.toFixed(2) : 'N/A'}s</p>
+                        <p><strong>Report Generation:</strong> ${data.report.timing_stats.report_generation ? data.report.timing_stats.report_generation.toFixed(2) : 'N/A'}s</p>
+                        <p><strong>Total Time:</strong> ${data.report.timing_stats.total_time ? data.report.timing_stats.total_time.toFixed(2) : 'N/A'}s</p>
+                    ` : '<p>Timing information not available</p>'}
+                </div>
+            `;
+
+            if (data.report?.usage_stats) {
+                const stats = data.report.usage_stats;
+                const usageStatsHtml = `
+                    <h3>OpenAI API Usage:</h3>
+                    <p>Prompt Tokens: ${stats.prompt_tokens || 0}</p>
+                    <p>Completion Tokens: ${stats.completion_tokens || 0}</p>
+                    <p>Total Tokens: ${stats.total_tokens || 0}</p>
+                    <p>Estimated Cost: $${(stats.total_cost || 0).toFixed(4)}</p>
+                `;
+                document.getElementById('usageStats').innerHTML = usageStatsHtml;
+            } else {
+                document.getElementById('usageStats').innerHTML = '<p>Usage statistics not available</p>';
+            }
+
+            reportContent.innerHTML = html;
+
+            // Add event listener for final reasoning toggle button
+            setTimeout(() => {
+                const toggleButton = document.getElementById('toggleFinalReasoning');
+                const content = document.getElementById('finalReasoningContent');
+                
+                if (toggleButton && content) {
+                    toggleButton.addEventListener('click', () => {
+                        const isHidden = content.classList.contains('hidden');
+                        content.classList.toggle('hidden');
+                        toggleButton.textContent = isHidden ? 'Hide Final Reasoning' : 'Show Final Reasoning';
+                    });
+                }
+            }, 100);
+        }
+
+        if (claimId) {
+            const batchId = urlParams.get('batch_id');
+            
+            if (!batchId) {
+                reportContent.textContent = 'Error: Batch ID is required';
+            } else {
+                fetch(`/api/v1/claims/${batchId}/${claimId}/report`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.report || data.additional_info) {  // Check for both possible properties
+                            displayReport(data);
+                        } else {
+                            reportContent.textContent = 'Report not found.';
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error fetching report:', error);
+                        reportContent.textContent = 'Error loading report.';
+                    });
+            }
+        }
+
+        document.getElementById('downloadReport').addEventListener('click', function() {
+            const batchId = urlParams.get('batch_id');
+            if (claimId && batchId) {
+                window.location.href = `/api/v1/claims/${batchId}/${claimId}/download_md`;
+            }
+        });
+
+        document.getElementById('downloadCitations').addEventListener('click', function() {
+            const batchId = urlParams.get('batch_id');
+            if (claimId && batchId) {
+                window.location.href = `/api/v1/claims/${batchId}/${claimId}/download_citations`;
+            }
+        });
+
+        document.getElementById('deleteClaimButton').addEventListener('click', function() {
+            const batchId = urlParams.get('batch_id');
+            if (!batchId) {
+                alert('Error: Batch ID is required');
+                return;
+            }
+            
+            if (confirm('Are you sure you want to delete this claim?')) {
+                fetch(`/api/v1/delete/claim/${batchId}/${claimId}`, { method: 'DELETE' })
+                    .then(response => response.json())
+                    .then(data => {
+                        alert(data.message);
+                        window.location.href = '/browser';
+                    })
+                    .catch(error => {
+                        console.error('Error deleting claim:', error);
+                        alert('Error deleting claim. Please try again.');
+                    });
+            }
+        });
+    </script>
+</body>
+</html>
