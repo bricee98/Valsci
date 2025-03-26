@@ -53,9 +53,9 @@ class ValsciProcessor:
         self.claim_token_usage = {}
         self.max_tokens_per_claim = 300000
         self.request_token_estimates = []
-        self.max_tokens_per_window = 25000
-        self.max_requests_per_window = 10
-        self.window_size_seconds = 5
+        self.max_tokens_per_window = 12000
+        self.max_requests_per_window = 5
+        self.window_size_seconds = 10
         self.last_token_update_time = time.time()
         self.model = settings.Config.LLM_EVALUATION_MODEL
 
@@ -240,6 +240,21 @@ class ValsciProcessor:
 
     async def analyze_claim(self, claim_data, batch_id: str, claim_id: str) -> None:
         """Analyze the claim."""
+        # Check for token limit exceeded at the beginning
+        if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
+            logger.warning(f"Claim {claim_id} has exceeded token limit in analyze_claim. Marking as processed.")
+            claim_data['status'] = 'processed'
+            claim_data['report'] = {
+                "relevantPapers": [],
+                "explanation": "Stopped: token usage exceeded our cap.",
+                "claimRating": 0,
+                "timing_stats": {},
+                "searchQueries": claim_data.get('semantic_scholar_queries', []),
+                "claim_text": claim_data.get('text', '')
+            }
+            await self._save_processed_claim(claim_data, batch_id, claim_id)
+            return
+            
         # Initialize lists if they don't exist
         if 'inaccessible_papers' not in claim_data:
             claim_data['inaccessible_papers'] = []
@@ -578,6 +593,22 @@ class ValsciProcessor:
                             async with aiofiles.open(file_path, 'r') as f:
                                 claim_data = json.loads(await f.read())
                                 self.claims_in_memory[(batch_id, claim_id)] = claim_data
+                        
+                        # Check for token limit exceeded, regardless of status
+                        if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
+                            if claim_data['status'] != 'processed':
+                                logger.warning(f"Claim {claim_id} exceeded token cap but wasn't marked as processed. Fixing.")
+                                claim_data['status'] = 'processed'
+                                claim_data['report'] = {
+                                    "relevantPapers": [],
+                                    "explanation": "Stopped: token usage exceeded our cap.",
+                                    "claimRating": 0,
+                                    "timing_stats": {},
+                                    "searchQueries": claim_data.get('semantic_scholar_queries', []),
+                                    "claim_text": claim_data.get('text', '')
+                                }
+                                await self._save_processed_claim(claim_data, batch_id, claim_id)
+                                continue
                         
                         # Process based on status
                         if claim_data['status'] == 'queued':
