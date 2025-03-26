@@ -23,6 +23,10 @@ class Config:
     AZURE_OPENAI_ENDPOINT = env_vars.get('AZURE_OPENAI_ENDPOINT')
     AZURE_OPENAI_API_VERSION = env_vars.get('AZURE_OPENAI_API_VERSION', '2024-06-01')
 
+    # Azure AI Inference configuration (for Phi-4 and similar models)
+    AZURE_AI_INFERENCE_ENDPOINT = env_vars.get('AZURE_AI_INFERENCE_ENDPOINT')
+    AZURE_AI_INFERENCE_MODEL = env_vars.get('AZURE_AI_INFERENCE_MODEL', 'Phi-4')
+
     # Email notification configuration
     ENABLE_EMAIL_NOTIFICATIONS = env_vars.get('ENABLE_EMAIL_NOTIFICATIONS', 'false').lower() == 'true'
     EMAIL_SENDER = env_vars.get('EMAIL_SENDER')  # Gmail address
@@ -36,7 +40,7 @@ class Config:
     ACCESS_PASSWORD = env_vars.get('ACCESS_PASSWORD')
 
     # AI Service Settings
-    LLM_PROVIDER = env_vars.get("LLM_PROVIDER", "openai")  # 'azure', 'openai', or 'local'
+    LLM_PROVIDER = env_vars.get("LLM_PROVIDER", "openai")  # 'azure-openai', 'azure-inference', 'openai', or 'local'
     LLM_BASE_URL = env_vars.get("LLM_BASE_URL", "http://localhost:8000")
     LLM_API_KEY = env_vars.get("LLM_API_KEY", "")
     LLM_EVALUATION_MODEL = env_vars.get("LLM_EVALUATION_MODEL", "gpt-4o")
@@ -45,12 +49,14 @@ class Config:
     @classmethod
     def validate_config(cls):
         required_keys = ['LLM_PROVIDER', 'SECRET_KEY', 'USER_EMAIL', 'SEMANTIC_SCHOLAR_API_KEY']
-        if cls.LLM_PROVIDER == "azure":
+        if cls.LLM_PROVIDER == "azure-openai":
             required_keys.extend(['LLM_API_KEY', 'AZURE_OPENAI_ENDPOINT', 'AZURE_OPENAI_API_VERSION'])
         elif cls.LLM_PROVIDER == "openai":
             required_keys.append('LLM_API_KEY')
-        elif cls.LLM_PROVIDER == "llamacpp":
+        elif cls.LLM_PROVIDER == "llamacpp" or cls.LLM_PROVIDER == "local":
             required_keys.append('LLM_BASE_URL')
+        elif cls.LLM_PROVIDER == "azure-inference":
+            required_keys.extend(['AZURE_AI_INFERENCE_ENDPOINT', 'LLM_API_KEY'])
         
         if cls.ENABLE_EMAIL_NOTIFICATIONS:
             required_keys.extend(['EMAIL_SENDER', 'EMAIL_APP_PASSWORD', 'SMTP_SERVER', 'SMTP_PORT', 'BASE_URL'])

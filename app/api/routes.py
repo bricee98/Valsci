@@ -41,6 +41,7 @@ def save_claim_to_file(claim, batch_id, claim_id):
             "batch_id": batch_id,
             "claim_id": claim_id,
             "search_config": claim.search_config,
+            "bibliometric_config": claim.bibliometric_config,
             "additional_info": ""
         }, f, indent=2)
 
@@ -107,6 +108,14 @@ def start_batch_job():
     num_queries = int(request.form.get('numQueries', 5))
     results_per_query = int(request.form.get('resultsPerQuery', 5))
     
+    # Get bibliometric configuration
+    bibliometric_config = {
+        'use_bibliometrics': request.form.get('useBibliometrics', 'true').lower() == 'true',
+        'author_impact_weight': float(request.form.get('authorImpactWeight', 0.4)),
+        'citation_impact_weight': float(request.form.get('citationImpactWeight', 0.4)),
+        'venue_impact_weight': float(request.form.get('venueImpactWeight', 0.2))
+    }
+    
     # Get email notification settings
     notification_email = request.form.get('email')
     
@@ -138,7 +147,26 @@ def start_batch_job():
             }
             claim_id = str(uuid.uuid4())[:8]
             claim_ids[claim_text] = claim_id
-            save_claim_to_file(claim, batch_id, claim_id)
+            
+            # Save claim to file with bibliometric config
+            claim_dir = os.path.join(QUEUED_JOBS_DIR, batch_id)
+            os.makedirs(claim_dir, exist_ok=True)
+            claim_file = os.path.join(claim_dir, f"{claim_id}.txt")
+            
+            # Ensure claim.text is a string, not a list
+            claim_text = claim.text[0] if isinstance(claim.text, list) else claim.text
+            
+            with open(claim_file, 'w') as f:
+                json.dump({
+                    "text": claim_text,
+                    "status": "queued",
+                    "batch_id": batch_id,
+                    "claim_id": claim_id,
+                    "search_config": claim.search_config,
+                    "bibliometric_config": bibliometric_config,
+                    "additional_info": ""
+                }, f, indent=2)
+            
             batch_claims.append(claim)
         
         batch_job = BatchJob(claims=batch_claims)
@@ -544,6 +572,10 @@ def generate_markdown_report(claim_data):
     if report.get('finalReasoning'):
         md_content.append(f"\n**Final Reasoning**:\n\n{report['finalReasoning']}\n")
     
+    # Check if bibliometrics are enabled
+    bibliometric_config = report.get('bibliometric_config', {})
+    use_bibliometrics = bibliometric_config.get('use_bibliometrics', True) if bibliometric_config else True
+    
     # Add relevant papers section
     md_content.append("\n## Relevant Papers\n")
     for paper in report.get('relevantPapers', []):
@@ -553,7 +585,10 @@ def generate_markdown_report(claim_data):
                                for a in paper['authors']])
             md_content.append(f"**Authors**: {authors}\n")
         md_content.append(f"**Relevance**: {paper.get('relevance', 'N/A')}\n")
-        md_content.append(f"**Weight Score**: {paper.get('weight_score', 'N/A')}\n")
+        
+        # Only show bibliometric impact if enabled
+        if use_bibliometrics and 'bibliometric_impact' in paper:
+            md_content.append(f"**Bibliometric Impact**: {paper.get('bibliometric_impact', 'N/A')}\n")
         
         if paper.get('excerpts'):
             md_content.append("\n**Excerpts**:\n")
@@ -592,6 +627,15 @@ def generate_markdown_report(claim_data):
         md_content.append(f"- Completion Tokens: {stats.get('completion_tokens', 0)}\n")
         md_content.append(f"- Total Tokens: {stats.get('total_tokens', 0)}\n")
         md_content.append(f"- Estimated Cost: ${stats.get('total_cost', 0):.4f}\n")
+    
+    # Add bibliometric configuration if available
+    if bibliometric_config:
+        md_content.append("\n## Bibliometric Configuration\n")
+        md_content.append(f"- Use Bibliometrics: {bibliometric_config.get('use_bibliometrics', True)}\n")
+        if use_bibliometrics:
+            md_content.append(f"- Author Impact Weight: {bibliometric_config.get('author_impact_weight', 0.4)}\n")
+            md_content.append(f"- Citation Impact Weight: {bibliometric_config.get('citation_impact_weight', 0.4)}\n")
+            md_content.append(f"- Venue Impact Weight: {bibliometric_config.get('venue_impact_weight', 0.2)}\n")
     
     return "\n".join(md_content)
 

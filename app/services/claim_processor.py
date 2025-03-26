@@ -63,7 +63,8 @@ class ClaimProcessor:
                                   non_relevant_papers: List[dict], 
                                   inaccessible_papers: List[dict],
                                   queries: List[str],
-                                  ai_service) -> dict:
+                                  ai_service,
+                                  bibliometric_config=None) -> dict:
         """Generate the final report for a claim."""
         try:
             # Debug logging
@@ -83,13 +84,26 @@ class ClaimProcessor:
                         for author in paper_data.get('authors', [])
                     )
                     
-                    summary = (
-                        f"Paper: {paper_data.get('title', 'Unknown Title')}\n"
-                        f"Authors: {authors_str}\n"
-                        f"Relevance: {p.get('relevance', 'Unknown')}\n"
-                        f"Reliability Weight: {p.get('score', 'Unknown')}\n"
-                        f"Excerpts: {p.get('excerpts', [])}"
-                    )
+                    # Check if bibliometrics are enabled
+                    use_bibliometrics = True
+                    if bibliometric_config and 'use_bibliometrics' in bibliometric_config:
+                        use_bibliometrics = bibliometric_config.get('use_bibliometrics')
+                    
+                    if use_bibliometrics:
+                        summary = (
+                            f"Paper: {paper_data.get('title', 'Unknown Title')}\n"
+                            f"Authors: {authors_str}\n"
+                            f"Relevance: {p.get('relevance', 'Unknown')}\n"
+                            f"Bibliometric Impact: {p.get('score', 'Unknown')}\n"
+                            f"Excerpts: {p.get('excerpts', [])}"
+                        )
+                    else:
+                        summary = (
+                            f"Paper: {paper_data.get('title', 'Unknown Title')}\n"
+                            f"Authors: {authors_str}\n"
+                            f"Relevance: {p.get('relevance', 'Unknown')}\n"
+                            f"Excerpts: {p.get('excerpts', [])}"
+                        )
                     paper_summaries.append(summary)
                 except Exception as e:
                     logger.error(f"Error processing paper summary: {str(e)}")
@@ -164,46 +178,60 @@ class ClaimProcessor:
             elif response.get('claimRating') == 'Highly Supported':
                 claimRating = 5
 
+            # Determine whether to include bibliometric impact
+            use_bibliometrics = True
+            if bibliometric_config and 'use_bibliometrics' in bibliometric_config:
+                use_bibliometrics = bibliometric_config.get('use_bibliometrics')
+
             # Format the final report
+            relevant_papers = []
+            for p in (processed_papers or []):
+                if not p.get('paper'):
+                    continue
+                    
+                paper_info = {
+                    "title": p['paper'].get('title', 'Unknown Title'),
+                    "authors": [
+                        {
+                            "name": author.get('name', 'Unknown'),
+                            "hIndex": author.get('hIndex', 0)
+                        }
+                        for author in p['paper'].get('authors', [])
+                    ],
+                    "link": p['paper'].get('url'),
+                    "relevance": p.get('relevance', 0),
+                    "content_type": p.get('content_type', 'unknown'),
+                    "excerpts": p.get('excerpts', []),
+                    "explanations": p.get('explanations', []),
+                    "citations": [
+                        {
+                            "text": excerpt,
+                            "page": page,
+                            "citation": self._format_citation(p['paper'], page)
+                        }
+                        for excerpt, page in zip(
+                            p.get('excerpts', []), 
+                            p.get('excerpt_pages', []) or [None] * len(p.get('excerpts', []))
+                        )
+                    ]
+                }
+                
+                # Add bibliometric impact (renamed from weight_score)
+                if use_bibliometrics:
+                    paper_info["bibliometric_impact"] = p.get('score', 0)
+                
+                relevant_papers.append(paper_info)
+
             return {
-                "relevantPapers": [
-                    {
-                        "title": p['paper'].get('title', 'Unknown Title'),
-                        "authors": [
-                            {
-                                "name": author.get('name', 'Unknown'),
-                                "hIndex": author.get('hIndex', 0)
-                            }
-                            for author in p['paper'].get('authors', [])
-                        ],
-                        "link": p['paper'].get('url'),
-                        "relevance": p.get('relevance', 0),
-                        "weight_score": p.get('score', 0),
-                        "content_type": p.get('content_type', 'unknown'),
-                        "excerpts": p.get('excerpts', []),
-                        "explanations": p.get('explanations', []),
-                        "citations": [
-                            {
-                                "text": excerpt,
-                                "page": page,
-                                "citation": self._format_citation(p['paper'], page)
-                            }
-                            for excerpt, page in zip(
-                                p.get('excerpts', []), 
-                                p.get('excerpt_pages', []) or [None] * len(p.get('excerpts', []))
-                            )
-                        ]
-                    }
-                    for p in (processed_papers or [])
-                    if p.get('paper')
-                ],
+                "relevantPapers": relevant_papers,
                 "nonRelevantPapers": self._format_non_relevant_papers(non_relevant_papers or []),
                 "inaccessiblePapers": self._format_inaccessible_papers(inaccessible_papers or []),
                 "explanation": response.get('explanationEssay', 'No explanation available'),
                 "finalReasoning": response.get('finalReasoning', 'No additional reasoning available'),
                 "claimRating": claimRating,
                 "searchQueries": queries,
-                "usage_stats": {}
+                "usage_stats": {},
+                "bibliometric_config": bibliometric_config
             }, usage
 
         except Exception as e:
@@ -216,7 +244,8 @@ class ClaimProcessor:
                 "explanation": f"Error generating final report: {str(e)}",
                 "claimRating": -1,
                 "searchQueries": [],
-                "usage_stats": {}
+                "usage_stats": {},
+                "bibliometric_config": bibliometric_config
             }, {'input_tokens': 0, 'output_tokens': 0, 'cost': 0}  # Add empty usage stats
 
     def _format_citation(self, paper, page_number):

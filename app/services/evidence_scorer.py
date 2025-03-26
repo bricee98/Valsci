@@ -9,9 +9,26 @@ logger = logging.getLogger(__name__)
 
 class EvidenceScorer:
 
-    async def calculate_paper_weight(self, processed_paper, ai_service) -> float:
-        """Calculate the weight/reliability score for a paper."""
+    async def calculate_paper_weight(self, processed_paper, ai_service, bibliometric_config=None) -> float:
+        """Calculate the weight/reliability score for a paper.
+        
+        Args:
+            processed_paper: The paper to score
+            ai_service: Service for AI operations
+            bibliometric_config: Optional configuration for bibliometric scoring
+                {
+                    'use_bibliometrics': bool,
+                    'author_impact_weight': float,
+                    'citation_impact_weight': float,
+                    'venue_impact_weight': float
+                }
+        """
         try:
+            # Check if bibliometrics should be used
+            if bibliometric_config is not None and not bibliometric_config.get('use_bibliometrics', True):
+                # Return neutral score if bibliometrics are disabled
+                return 0.5, {'input_tokens': 0, 'output_tokens': 0, 'cost': 0}
+            
             # Add validation for processed_paper
             if processed_paper is None:
                 logger.error("processed_paper is None")
@@ -43,12 +60,26 @@ class EvidenceScorer:
             normalized_citation_impact = min(citation_impact / 1000, 1.0)
             normalized_venue_impact = min(venue_impact / 10, 1.0)
             
-            # Calculate weighted average
+            # Calculate weighted average with default or provided weights
             weights = {
                 'author_impact': 0.4,
                 'citation_impact': 0.4,
                 'venue_impact': 0.2
             }
+            
+            # Override with custom weights if provided
+            if bibliometric_config:
+                if 'author_impact_weight' in bibliometric_config:
+                    weights['author_impact'] = bibliometric_config['author_impact_weight']
+                if 'citation_impact_weight' in bibliometric_config:
+                    weights['citation_impact'] = bibliometric_config['citation_impact_weight']
+                if 'venue_impact_weight' in bibliometric_config:
+                    weights['venue_impact'] = bibliometric_config['venue_impact_weight']
+            
+            # Normalize weights to ensure they sum to 1
+            weight_sum = sum(weights.values())
+            if weight_sum > 0:
+                weights = {k: v/weight_sum for k, v in weights.items()}
             
             score = (
                 normalized_h_index * weights['author_impact'] +
@@ -62,6 +93,7 @@ class EvidenceScorer:
                 - Citation impact: {citation_impact} (normalized: {normalized_citation_impact:.2f})
                 - Venue impact: {venue_impact} (normalized: {normalized_venue_impact:.2f})
                 - Final score: {score:.2f}
+                - Weights used: {weights}
             """)
             
             return score, usage

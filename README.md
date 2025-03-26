@@ -59,7 +59,7 @@ pip install -r requirements.txt
 
 ### Configuration
 
-Valsci's configuration is managed through a JSON file that controls LLM integration, security settings, and optional features. The system supports various LLM backends including OpenAI's API, Azure OpenAI, and local deployments of open-source models.
+Valsci's configuration is managed through a JSON file that controls LLM integration, security settings, and optional features. The system supports various LLM backends including OpenAI's API, Azure OpenAI, Azure AI Inference, and local deployments of open-source models.
 
 1. **Create configuration file:**
 
@@ -76,9 +76,10 @@ Create a `config/env_vars.json` file with your configuration settings. Below is 
     "LLM_EVALUATION_MODEL": "gpt-4o",
     "REQUIRE_PASSWORD": "true",
     "ACCESS_PASSWORD": "your_access_password",
-    "USE_AZURE_OPENAI": "false",
     "AZURE_OPENAI_ENDPOINT": "your_azure_endpoint",
     "AZURE_OPENAI_API_VERSION": "2024-06-01",
+    "AZURE_AI_INFERENCE_ENDPOINT": "your_azure_ai_inference_endpoint",
+    "AZURE_AI_INFERENCE_MODEL": "Phi-4",
     "ENABLE_EMAIL_NOTIFICATIONS": "false",
     "EMAIL_SENDER": "your_gmail@gmail.com",
     "EMAIL_APP_PASSWORD": "your_gmail_app_password",
@@ -94,19 +95,22 @@ Create a `config/env_vars.json` file with your configuration settings. Below is 
 - `FLASK_SECRET_KEY`: Secret key for Flask session security
 - `USER_EMAIL`: Your email address
 - `SEMANTIC_SCHOLAR_API_KEY`: Your Semantic Scholar API key
-- `LLM_PROVIDER`: AI provider to use ("openai", "azure", or "local")
-- `LLM_API_KEY`: API key for OpenAI or Azure OpenAI (required for those providers)
-- `LLM_EVALUATION_MODEL`: Model to use for evaluation (e.g., "gpt-4")
+- `LLM_PROVIDER`: AI provider to use ("openai", "azure-openai", "azure-inference", or "local")
+- `LLM_API_KEY`: API key for OpenAI, Azure OpenAI, or Azure AI Inference
+- `LLM_EVALUATION_MODEL`: Model to use for evaluation (e.g., "gpt-4") when using OpenAI
 
 **Optional Settings:**
 - `LLM_BASE_URL`: Base URL for local AI provider (required if using "local" provider)
 - `REQUIRE_PASSWORD`: Enable password protection for internet hosting
 - `ACCESS_PASSWORD`: Access password (required if REQUIRE_PASSWORD is "true")
 
-**Azure OpenAI Settings (Optional):**
-- `USE_AZURE_OPENAI`: Enable Azure OpenAI integration
+**Azure OpenAI Settings (Required for azure-openai provider):**
 - `AZURE_OPENAI_ENDPOINT`: Azure OpenAI endpoint URL
 - `AZURE_OPENAI_API_VERSION`: Azure OpenAI API version
+
+**Azure AI Inference Settings (Required for azure-inference provider):**
+- `AZURE_AI_INFERENCE_ENDPOINT`: Azure AI Inference endpoint URL
+- `AZURE_AI_INFERENCE_MODEL`: The model to use (e.g., "Phi-4")
 
 **Email Notification Settings (Optional):**
 - `ENABLE_EMAIL_NOTIFICATIONS`: Enable email notifications
@@ -169,7 +173,33 @@ Valsci consists of two main services:
 
 ### AI Integrations
 
-Valsci can be used with any OpenAI-compatible text completion LLM API provider. It's set up for out-of-the-box usage with a locally-hosted llama.cpp server, the OpenAI API, or the Azure-hosted OpenAI API.
+Valsci can be used with any OpenAI-compatible text completion LLM API provider. It supports:
+
+1. **OpenAI API**: Use "openai" as the provider and provide your OpenAI API key
+2. **Azure OpenAI Service**: Use "azure-openai" as the provider and provide your Azure OpenAI endpoint and API key
+3. **Azure AI Inference SDK**: Use "azure-inference" as the provider for models like Phi-4
+4. **Local Deployment**: Use "local" as the provider with a locally-hosted server like llama.cpp
+
+#### Azure AI Inference SDK Integration
+
+To use models like Phi-4 with Azure AI Inference SDK:
+
+1. Set `LLM_PROVIDER` to "azure-inference"
+2. Set `LLM_API_KEY` to your Azure AI API key
+3. Set `AZURE_AI_INFERENCE_ENDPOINT` to your Azure AI endpoint (e.g., "https://Phi-4-dxdep.eastus.models.ai.azure.com")
+4. Set `AZURE_AI_INFERENCE_MODEL` to the model name (e.g., "Phi-4")
+
+Example configuration for Phi-4:
+```json
+{
+    "LLM_PROVIDER": "azure-inference",
+    "LLM_API_KEY": "your_api_key",
+    "AZURE_AI_INFERENCE_ENDPOINT": "https://your-model-endpoint.models.ai.azure.com",
+    "AZURE_AI_INFERENCE_MODEL": "Phi-4"
+}
+```
+
+#### Local Model Setup
 
 To set up a locally-hosted inference server, please see the [llama.cpp repository](https://github.com/ggerganov/llama.cpp) and specifically the [server examples](https://github.com/ggerganov/llama.cpp/tree/master/examples/server). For OpenAI and Azure OpenAI, you must set up appropriate API credentials in your configuration file.
 

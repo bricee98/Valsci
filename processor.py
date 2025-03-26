@@ -351,6 +351,10 @@ class ValsciProcessor:
                         sum(len(explanation) for paper in claim_data.get('processed_papers', [])
                             for explanation in paper.get('explanations', []) if isinstance(explanation, str))
                     ) / 3.5
+
+                    if estimated_tokens_for_final_report > self.max_tokens_per_window:
+                        # clamp the estimated tokens to the max tokens per window minus 1000
+                        estimated_tokens_for_final_report = self.max_tokens_per_window - 1000
                     
                     current_num_requests, current_num_tokens = self.calculate_tokens_in_window()
                     if (estimated_tokens_for_final_report + current_num_tokens < self.max_tokens_per_window and 
@@ -360,7 +364,7 @@ class ValsciProcessor:
                         print(f"Generating final report for claim {claim_id}")
                         asyncio.create_task(self.generate_final_report(batch_id, claim_id))
                     else:
-                        print(f"Claim {claim_id} does not have enough tokens for final report generation")
+                        print(f"Current window is full. Claim {claim_id} does not have enough tokens for final report generation right now")
                         return
                 except Exception as e:
                     logger.error(f"Error preparing final report: {e}")
@@ -468,9 +472,16 @@ class ValsciProcessor:
             if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
                 return
 
+            # Get claim data to access bibliometric config
+            claim_data = self.claims_in_memory[(batch_id, claim_id)]
+            
+            # Get bibliometric configuration
+            bibliometric_config = claim_data.get('bibliometric_config', None)
+
             score, usage = await self.evidence_scorer.calculate_paper_weight(
                 processed_paper, 
-                ai_service=self.openai_service
+                ai_service=self.openai_service,
+                bibliometric_config=bibliometric_config
             )
 
             print(f"Claim {claim_id} token usage as of scoring: {self.claim_token_usage[claim_id]}")
@@ -516,6 +527,9 @@ class ValsciProcessor:
             if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
                 return
 
+            # Get bibliometric configuration
+            bibliometric_config = claim_data.get('bibliometric_config', None)
+
             if len(claim_data['processed_papers']) == 0:
                 logger.error(f"No processed papers found for claim {claim_id}")
                 claim_data['status'] = "processed"
@@ -527,7 +541,8 @@ class ValsciProcessor:
                     "claimRating": -1,
                     "timing_stats": {},
                     "searchQueries": claim_data['semantic_scholar_queries'],
-                    "claim_text": claim_data['text']
+                    "claim_text": claim_data['text'],
+                    "bibliometric_config": bibliometric_config
                 }
                 claim_data['report'] = report
             else:
@@ -537,7 +552,8 @@ class ValsciProcessor:
                     claim_data['non_relevant_papers'],
                     claim_data['inaccessible_papers'],
                     claim_data['semantic_scholar_queries'],
-                    ai_service=self.openai_service
+                    ai_service=self.openai_service,
+                    bibliometric_config=bibliometric_config
                 )
                 
                 claim_data['status'] = "processed"

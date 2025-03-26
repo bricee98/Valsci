@@ -103,6 +103,54 @@
                     <input type="number" id="resultsPerQuery" name="resultsPerQuery" min="1" max="10" value="5">
                 </div>
             </div>
+            
+            <!-- Bibliometric Configuration -->
+            <div class="config-panel">
+                <div class="panel-header toggle-section" id="toggleBibliometrics">
+                    <h3>Bibliometric Configuration</h3>
+                    <span class="toggle-icon">▼</span>
+                </div>
+                <div class="panel-content hidden" id="bibliometricOptions">
+                    <p class="subtext">Configure how papers are weighted based on bibliometric indicators.</p>
+                    
+                    <div class="config-group checkbox-group">
+                        <input type="checkbox" id="useBibliometrics" name="useBibliometrics" checked>
+                        <label for="useBibliometrics">Use bibliometric scoring</label>
+                    </div>
+                    
+                    <div id="bibliometricWeights" class="bibliometric-weights">
+                        <p class="subtext">Adjust the relative weights of different bibliometric factors:</p>
+                        
+                        <div class="config-group slider-group">
+                            <label for="authorImpactWeight">Author Impact (h-index):</label>
+                            <div class="slider-container">
+                                <input type="range" id="authorImpactWeight" name="authorImpactWeight" min="0" max="1" step="0.1" value="0.4">
+                                <span class="slider-value" id="authorImpactValue">0.4</span>
+                            </div>
+                        </div>
+                        
+                        <div class="config-group slider-group">
+                            <label for="citationImpactWeight">Citation Impact:</label>
+                            <div class="slider-container">
+                                <input type="range" id="citationImpactWeight" name="citationImpactWeight" min="0" max="1" step="0.1" value="0.4">
+                                <span class="slider-value" id="citationImpactValue">0.4</span>
+                            </div>
+                        </div>
+                        
+                        <div class="config-group slider-group">
+                            <label for="venueImpactWeight">Venue Impact:</label>
+                            <div class="slider-container">
+                                <input type="range" id="venueImpactWeight" name="venueImpactWeight" min="0" max="1" step="0.1" value="0.2">
+                                <span class="slider-value" id="venueImpactValue">0.2</span>
+                            </div>
+                        </div>
+                        
+                        <div class="helper-text">
+                            <p><strong>Note:</strong> The values will be normalized to sum to 1.0 when processed.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
             <!-- Add password field if required -->
             {% if config.REQUIRE_PASSWORD %}

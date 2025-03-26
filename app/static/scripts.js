@@ -161,6 +161,20 @@ document.addEventListener('DOMContentLoaded', function() {
             formData.append('numQueries', config.numQueries);
             formData.append('resultsPerQuery', config.resultsPerQuery);
 
+            // Add bibliometric configuration
+            const useBibliometrics = document.getElementById('useBibliometrics');
+            formData.append('useBibliometrics', useBibliometrics ? useBibliometrics.checked : true);
+            
+            if (useBibliometrics && useBibliometrics.checked) {
+                const authorImpactWeight = document.getElementById('authorImpactWeight');
+                const citationImpactWeight = document.getElementById('citationImpactWeight');
+                const venueImpactWeight = document.getElementById('venueImpactWeight');
+                
+                formData.append('authorImpactWeight', authorImpactWeight ? authorImpactWeight.value : 0.4);
+                formData.append('citationImpactWeight', citationImpactWeight ? citationImpactWeight.value : 0.4);
+                formData.append('venueImpactWeight', venueImpactWeight ? venueImpactWeight.value : 0.2);
+            }
+
             const response = await fetch('/api/v1/batch', {
                 method: 'POST',
                 body: formData,
@@ -237,5 +251,78 @@ document.addEventListener('DOMContentLoaded', function() {
             console.error('Error checking claim status:', error);
             return null;
         }
+    }
+
+    // Initialize bibliometric configuration toggle
+    const toggleBibliometrics = document.getElementById('toggleBibliometrics');
+    const bibliometricOptions = document.getElementById('bibliometricOptions');
+    const toggleIcon = toggleBibliometrics.querySelector('.toggle-icon');
+    
+    if (toggleBibliometrics) {
+        toggleBibliometrics.addEventListener('click', function() {
+            bibliometricOptions.classList.toggle('hidden');
+            toggleIcon.classList.toggle('rotated');
+        });
+    }
+    
+    // Initialize slider value displays
+    const sliders = document.querySelectorAll('input[type="range"]');
+    sliders.forEach(slider => {
+        const valueDisplay = document.getElementById(slider.id + 'Value');
+        if (valueDisplay) {
+            // Initialize with current value
+            valueDisplay.textContent = slider.value;
+            
+            // Update on input change
+            slider.addEventListener('input', function() {
+                valueDisplay.textContent = this.value;
+            });
+        }
+    });
+    
+    // Toggle bibliometric weights visibility based on checkbox
+    const useBibliometrics = document.getElementById('useBibliometrics');
+    const bibliometricWeights = document.getElementById('bibliometricWeights');
+    
+    if (useBibliometrics && bibliometricWeights) {
+        // Set initial state
+        bibliometricWeights.style.display = useBibliometrics.checked ? 'block' : 'none';
+        
+        // Update on change
+        useBibliometrics.addEventListener('change', function() {
+            bibliometricWeights.style.display = this.checked ? 'block' : 'none';
+        });
+    }
+    
+    // Ensure bibliometric config is included in form submission
+    const processAllBtn = document.getElementById('processAllBtn');
+    
+    if (processAllBtn) {
+        const originalClick = processAllBtn.onclick;
+        
+        processAllBtn.onclick = function(event) {
+            if (originalClick) {
+                // Call the original handler first
+                originalClick.call(this, event);
+            }
+            
+            // Add bibliometric configuration to form data
+            const formData = new FormData(document.querySelector('form'));
+            
+            // Add bibliometric configuration
+            if (useBibliometrics) {
+                formData.append('useBibliometrics', useBibliometrics.checked);
+                
+                if (useBibliometrics.checked) {
+                    const authorImpactWeight = document.getElementById('authorImpactWeight');
+                    const citationImpactWeight = document.getElementById('citationImpactWeight');
+                    const venueImpactWeight = document.getElementById('venueImpactWeight');
+                    
+                    if (authorImpactWeight) formData.append('authorImpactWeight', authorImpactWeight.value);
+                    if (citationImpactWeight) formData.append('citationImpactWeight', citationImpactWeight.value);
+                    if (venueImpactWeight) formData.append('venueImpactWeight', venueImpactWeight.value);
+                }
+            }
+        };
     }
 });

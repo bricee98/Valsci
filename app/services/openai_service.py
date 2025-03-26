@@ -6,6 +6,9 @@ import asyncio
 import random
 import logging
 from asyncio import timeout
+from azure.ai.inference import ChatCompletionsClient
+from azure.core.credentials import AzureKeyCredential
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +17,7 @@ class OpenAIService:
         self.model = Config.LLM_EVALUATION_MODEL
         self.provider = Config.LLM_PROVIDER.lower()
         self.count = 0
-        if self.provider == "azure":
+        if self.provider == "azure-openai":
             print(f"Using Azure OpenAI with model {self.model}")
             self.client = openai.AzureOpenAI(
                 api_key=Config.LLM_API_KEY,
@@ -26,15 +29,26 @@ class OpenAIService:
                 azure_endpoint=Config.AZURE_OPENAI_ENDPOINT,
                 api_version=Config.AZURE_OPENAI_API_VERSION
             )
+        elif self.provider == "azure-inference":
+            print(f"Using Azure AI Inference with model {Config.AZURE_AI_INFERENCE_MODEL}")
+            self.model = Config.AZURE_AI_INFERENCE_MODEL
+            self.endpoint = Config.AZURE_AI_INFERENCE_ENDPOINT
+            self.api_key = Config.LLM_API_KEY
+            self.ai_chat_client = ChatCompletionsClient(
+                endpoint=self.endpoint,
+                credential=AzureKeyCredential(self.api_key)
+            )
+            # We'll use httpx for async calls
+            self.async_client = None  # Not using OpenAI's async client for Azure AI Inference
         else:
             self.base_url = Config.LLM_BASE_URL
             if self.provider == "openai":
                 print(f"Using OpenAI with model {self.model}")
                 self.client = openai.OpenAI(api_key=Config.LLM_API_KEY)
                 self.async_client = openai.AsyncOpenAI(api_key=Config.LLM_API_KEY)
-            elif self.provider == "llamacpp":
+            elif self.provider == "llamacpp" or self.provider == "local":
                 print(f"Using Alternative Model with model {self.model}")
-                self.client = openai.AsyncOpenAI(base_url=self.base_url, api_key="sk-no-key-required")
+                self.client = openai.OpenAI(base_url=self.base_url, api_key="sk-no-key-required")
                 self.async_client = openai.AsyncOpenAI(base_url=self.base_url, api_key="sk-no-key-required")
         
 
@@ -54,29 +68,78 @@ class OpenAIService:
         self.count += 1
         print(f"OAI Service Count: {self.count}")
 
-        async with asyncio.timeout(180):  # 180 seconds = 3 minutes
-            response = await self.async_client.chat.completions.create(
-                model=model or self.model,
-                messages=messages,
-                response_format={"type": "json_object"},
-                temperature=0.0
-            )
-        
-        logger.info(f"API call completed for model {model or self.model}")
-        
-        # Calculate and return token usage and cost along with the response
-        input_tokens = response.usage.prompt_tokens
-        output_tokens = response.usage.completion_tokens
-        cost = self.tokens_to_cost(input_tokens, output_tokens, model or self.model)
-        
-        return {
-            'content': json.loads(response.choices[0].message.content),
-            'usage': {
-                'input_tokens': input_tokens,
-                'output_tokens': output_tokens,
-                'cost': cost
+        if self.provider == "azure-inference":
+            # Use Azure AI Inference SDK for Phi-4 and other Azure AI models
+            try:
+                from azure.ai.inference.models import SystemMessage, UserMessage
+                
+                async with asyncio.timeout(180):  # 180 seconds = 3 minutes
+                    # Create proper message formats for Azure AI Inference
+                    ai_messages = [
+                        SystemMessage(content=system_prompt or "You are a helpful assistant. Please provide your response in valid JSON format."),
+                        UserMessage(content=prompt)
+                    ]
+                    
+                    # Use asyncio to run the synchronous client in a thread pool
+                    response = await asyncio.to_thread(
+                        self.ai_chat_client.complete,
+                        messages=ai_messages,
+                        max_tokens=2048,
+                        temperature=0.0,
+                        model=model or self.model
+                    )
+                    
+                    # Parse the response content as JSON
+                    response_content = response.choices[0].message.content
+                    json_content = json.loads(response_content)
+                    
+                    # Estimate token usage - this is just an approximation since Azure AI Inference doesn't report tokens
+                    input_tokens = len(prompt) // 4 + len(system_prompt or "") // 4
+                    output_tokens = len(response_content) // 4
+                    
+                    return {
+                        'content': json_content,
+                        'usage': {
+                            'input_tokens': input_tokens,
+                            'output_tokens': output_tokens,
+                            'cost': 0.0  # We don't have standard pricing for Azure AI Inference models yet
+                        }
+                    }
+            except Exception as e:
+                logger.error(f"Error with Azure AI Inference SDK: {str(e)}")
+                return {
+                    'content': {"error": f"Azure AI Inference error: {str(e)}"},
+                    'usage': {
+                        'input_tokens': 0,
+                        'output_tokens': 0,
+                        'cost': 0.0
+                    }
+                }
+        else:
+            # Use OpenAI compatible API for other providers
+            async with asyncio.timeout(180):  # 180 seconds = 3 minutes
+                response = await self.async_client.chat.completions.create(
+                    model=model or self.model,
+                    messages=messages,
+                    response_format={"type": "json_object"},
+                    temperature=0.0
+                )
+            
+            logger.info(f"API call completed for model {model or self.model}")
+            
+            # Calculate and return token usage and cost along with the response
+            input_tokens = response.usage.prompt_tokens
+            output_tokens = response.usage.completion_tokens
+            cost = self.tokens_to_cost(input_tokens, output_tokens, model or self.model)
+            
+            return {
+                'content': json.loads(response.choices[0].message.content),
+                'usage': {
+                    'input_tokens': input_tokens,
+                    'output_tokens': output_tokens,
+                    'cost': cost
+                }
             }
-        }
 
     async def generate_text_async(self, prompt: str, system_prompt: Optional[str] = None, model: str = None) -> str:
         if len(prompt) + len(system_prompt or "") > 320000:
@@ -90,29 +153,76 @@ class OpenAIService:
         # Add jitter between 0 and 1.5 seconds
         jitter = random.uniform(0, 1.5)
         await asyncio.sleep(jitter)
-
-        async with asyncio.timeout(180):  # 180 seconds = 3 minutes
-            response = await self.async_client.chat.completions.create(
-                model=model or self.model,
-                messages=messages,
-                temperature=0.0
-            )
         
-        logger.info(f"API call completed for model {model or self.model}")
+        if self.provider == "azure-inference":
+            # Use Azure AI Inference SDK for models like Phi-4
+            try:
+                from azure.ai.inference.models import SystemMessage, UserMessage
+                
+                async with asyncio.timeout(180):  # 180 seconds = 3 minutes
+                    # Create proper message formats for Azure AI Inference
+                    ai_messages = [
+                        SystemMessage(content=system_prompt or "You are a helpful assistant."),
+                        UserMessage(content=prompt)
+                    ]
+                    
+                    # Use asyncio to run the synchronous client in a thread pool
+                    response = await asyncio.to_thread(
+                        self.ai_chat_client.complete,
+                        messages=ai_messages,
+                        max_tokens=2048,
+                        temperature=0.0,
+                        model=model or self.model
+                    )
+                    
+                    # Get the response content as text
+                    response_content = response.choices[0].message.content
+                    
+                    # Estimate token usage - this is just an approximation since Azure AI Inference doesn't report tokens
+                    input_tokens = len(prompt) // 4 + len(system_prompt or "") // 4
+                    output_tokens = len(response_content) // 4
+                    
+                    return {
+                        'content': response_content,
+                        'usage': {
+                            'input_tokens': input_tokens,
+                            'output_tokens': output_tokens,
+                            'cost': 0.0  # We don't have standard pricing for Azure AI Inference models yet
+                        }
+                    }
+            except Exception as e:
+                logger.error(f"Error with Azure AI Inference SDK: {str(e)}")
+                return {
+                    'content': f"Azure AI Inference error: {str(e)}",
+                    'usage': {
+                        'input_tokens': 0,
+                        'output_tokens': 0,
+                        'cost': 0.0
+                    }
+                }
+        else:
+            async with asyncio.timeout(180):  # 180 seconds = 3 minutes
+                response = await self.async_client.chat.completions.create(
+                    model=model or self.model,
+                    messages=messages,
+                    temperature=0.0
+                )
+            
+            logger.info(f"API call completed for model {model or self.model}")
 
-        # Calculate and return token usage and cost along with the response
-        input_tokens = response.usage.prompt_tokens
-        output_tokens = response.usage.completion_tokens
-        cost = self.tokens_to_cost(input_tokens, output_tokens, model or self.model)
-        
-        return {
-            'content': response.choices[0].message.content,
-            'usage': {
-                'input_tokens': input_tokens,
-                'output_tokens': output_tokens,
-                'cost': cost
+            # Calculate and return token usage and cost along with the response
+            input_tokens = response.usage.prompt_tokens
+            output_tokens = response.usage.completion_tokens
+            cost = self.tokens_to_cost(input_tokens, output_tokens, model or self.model)
+            
+            return {
+                'content': response.choices[0].message.content,
+                'usage': {
+                    'input_tokens': input_tokens,
+                    'output_tokens': output_tokens,
+                    'cost': cost
+                }
             }
-        }
     
     def tokens_to_cost(self, input_tokens: int, output_tokens: int, model: str = None) -> float:
         if model is None:
@@ -121,5 +231,7 @@ class OpenAIService:
             return (input_tokens * 2.50/1000000) + (output_tokens * 10.00/1000000)
         elif model == "gpt-4o-mini":
             return (input_tokens * 0.15/1000000) + (output_tokens * 0.6/1000000)
+        elif model.startswith("phi-"):
+            return 0.0  # For now, we don't have pricing info for Phi models
         else:
             return 0.0

@@ -45,6 +45,10 @@
             border-radius: 4px;
         }
     </style>
+    <div id="bibliometricConfigContainer" class="result-section" style="display: none;">
+        <h2>Bibliometric Configuration</h2>
+        <div id="bibliometricConfig"></div>
+    </div>
     <script>
         const urlParams = new URLSearchParams(window.location.search);
         const claimId = urlParams.get('claim_id');
@@ -122,7 +126,7 @@
                                         ? paper.authors.map(author => `${author.name} (H-index: ${author.hIndex || 0})`).join(', ')
                                         : 'Authors not available'}</p>
                                     <p><strong>Relevance:</strong> ${parseMarkdown(paper.relevance)}</p>
-                                    <p><strong>Weight Score:</strong> ${paper.weight_score}</p>
+                                    <p data-field="weight-score"><strong>Bibliometric Impact:</strong> ${paper.bibliometric_impact}</p>
                                     
                                     <div class="paper-content">
                                         <strong>Excerpts:</strong>
@@ -300,6 +304,54 @@
                         alert('Error deleting claim. Please try again.');
                     });
             }
+        });
+
+        $(document).ready(function() {
+            const originalProcessClaimData = processClaimData;
+            
+            window.processClaimData = function(data) {
+                if (originalProcessClaimData) {
+                    originalProcessClaimData(data);
+                }
+                
+                const bibliometricConfig = data.report?.bibliometric_config || {};
+                const useBibliometrics = bibliometricConfig.use_bibliometrics !== false;
+                
+                if (data.report && data.report.relevantPapers) {
+                    data.report.relevantPapers.forEach((paper, index) => {
+                        const paperElement = document.querySelector(`.paper-item:nth-child(${index + 1})`);
+                        if (paperElement) {
+                            const weightScoreElement = paperElement.querySelector('[data-field="weight-score"]');
+                            
+                            if (weightScoreElement) {
+                                if (useBibliometrics && paper.bibliometric_impact !== undefined) {
+                                    weightScoreElement.innerHTML = `<strong>Bibliometric Impact:</strong> ${paper.bibliometric_impact}`;
+                                    weightScoreElement.style.display = 'block';
+                                } else {
+                                    weightScoreElement.style.display = 'none';
+                                }
+                            }
+                        }
+                    });
+                }
+                
+                if (bibliometricConfig) {
+                    let configHtml = `<p><strong>Use Bibliometrics:</strong> ${useBibliometrics ? 'Yes' : 'No'}</p>`;
+                    
+                    if (useBibliometrics) {
+                        configHtml += `
+                            <p><strong>Author Impact Weight:</strong> ${bibliometricConfig.author_impact_weight || 0.4}</p>
+                            <p><strong>Citation Impact Weight:</strong> ${bibliometricConfig.citation_impact_weight || 0.4}</p>
+                            <p><strong>Venue Impact Weight:</strong> ${bibliometricConfig.venue_impact_weight || 0.2}</p>
+                        `;
+                    }
+                    
+                    $('#bibliometricConfig').html(configHtml);
+                    $('#bibliometricConfigContainer').show();
+                } else {
+                    $('#bibliometricConfigContainer').hide();
+                }
+            };
         });
     </script>
 </body>
