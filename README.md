@@ -79,7 +79,6 @@ Create a `config/env_vars.json` file with your configuration settings. Below is 
     "AZURE_OPENAI_ENDPOINT": "your_azure_endpoint",
     "AZURE_OPENAI_API_VERSION": "2024-06-01",
     "AZURE_AI_INFERENCE_ENDPOINT": "your_azure_ai_inference_endpoint",
-    "AZURE_AI_INFERENCE_MODEL": "Phi-4",
     "ENABLE_EMAIL_NOTIFICATIONS": "false",
     "EMAIL_SENDER": "your_gmail@gmail.com",
     "EMAIL_APP_PASSWORD": "your_gmail_app_password",
@@ -97,7 +96,7 @@ Create a `config/env_vars.json` file with your configuration settings. Below is 
 - `SEMANTIC_SCHOLAR_API_KEY`: Your Semantic Scholar API key
 - `LLM_PROVIDER`: AI provider to use ("openai", "azure-openai", "azure-inference", or "local")
 - `LLM_API_KEY`: API key for OpenAI, Azure OpenAI, or Azure AI Inference
-- `LLM_EVALUATION_MODEL`: Model to use for evaluation (e.g., "gpt-4") when using OpenAI
+- `LLM_EVALUATION_MODEL`: Model to use for evaluation (e.g., "gpt-4o" for OpenAI, "Phi-4" for Azure AI Inference)
 
 **Optional Settings:**
 - `LLM_BASE_URL`: Base URL for local AI provider (required if using "local" provider)
@@ -110,7 +109,6 @@ Create a `config/env_vars.json` file with your configuration settings. Below is 
 
 **Azure AI Inference Settings (Required for azure-inference provider):**
 - `AZURE_AI_INFERENCE_ENDPOINT`: Azure AI Inference endpoint URL
-- `AZURE_AI_INFERENCE_MODEL`: The model to use (e.g., "Phi-4")
 
 **Email Notification Settings (Optional):**
 - `ENABLE_EMAIL_NOTIFICATIONS`: Enable email notifications
@@ -187,7 +185,7 @@ To use models like Phi-4 with Azure AI Inference SDK:
 1. Set `LLM_PROVIDER` to "azure-inference"
 2. Set `LLM_API_KEY` to your Azure AI API key
 3. Set `AZURE_AI_INFERENCE_ENDPOINT` to your Azure AI endpoint (e.g., "https://Phi-4-dxdep.eastus.models.ai.azure.com")
-4. Set `AZURE_AI_INFERENCE_MODEL` to the model name (e.g., "Phi-4")
+4. Set `LLM_EVALUATION_MODEL` to the model name (e.g., "Phi-4")
 
 Example configuration for Phi-4:
 ```json
@@ -195,7 +193,7 @@ Example configuration for Phi-4:
     "LLM_PROVIDER": "azure-inference",
     "LLM_API_KEY": "your_api_key",
     "AZURE_AI_INFERENCE_ENDPOINT": "https://your-model-endpoint.models.ai.azure.com",
-    "AZURE_AI_INFERENCE_MODEL": "Phi-4"
+    "LLM_EVALUATION_MODEL": "Phi-4"
 }
 ```
 

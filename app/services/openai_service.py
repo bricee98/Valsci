@@ -30,8 +30,8 @@ class OpenAIService:
                 api_version=Config.AZURE_OPENAI_API_VERSION
             )
         elif self.provider == "azure-inference":
-            print(f"Using Azure AI Inference with model {Config.AZURE_AI_INFERENCE_MODEL}")
-            self.model = Config.AZURE_AI_INFERENCE_MODEL
+            print(f"Using Azure AI Inference with model {Config.LLM_EVALUATION_MODEL}")
+            self.model = Config.LLM_EVALUATION_MODEL
             self.endpoint = Config.AZURE_AI_INFERENCE_ENDPOINT
             self.api_key = Config.LLM_API_KEY
             self.ai_chat_client = ChatCompletionsClient(

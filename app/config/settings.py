@@ -25,7 +25,6 @@ class Config:
 
     # Azure AI Inference configuration (for Phi-4 and similar models)
     AZURE_AI_INFERENCE_ENDPOINT = env_vars.get('AZURE_AI_INFERENCE_ENDPOINT')
-    AZURE_AI_INFERENCE_MODEL = env_vars.get('AZURE_AI_INFERENCE_MODEL', 'Phi-4')
 
     # Email notification configuration
     ENABLE_EMAIL_NOTIFICATIONS = env_vars.get('ENABLE_EMAIL_NOTIFICATIONS', 'false').lower() == 'true'
