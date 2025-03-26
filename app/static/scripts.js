@@ -295,8 +295,6 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // Ensure bibliometric config is included in form submission
-    const processAllBtn = document.getElementById('processAllBtn');
-    
     if (processAllBtn) {
         const originalClick = processAllBtn.onclick;
         

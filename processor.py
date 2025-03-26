@@ -53,7 +53,7 @@ class ValsciProcessor:
         self.claim_token_usage = {}
         self.max_tokens_per_claim = 300000
         self.request_token_estimates = []
-        self.max_tokens_per_window = 12000
+        self.max_tokens_per_window = 25000
         self.max_requests_per_window = 5
         self.window_size_seconds = 10
         self.last_token_update_time = time.time()
