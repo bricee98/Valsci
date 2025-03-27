@@ -268,7 +268,9 @@ document.addEventListener('DOMContentLoaded', function() {
     // Initialize slider value displays
     const sliders = document.querySelectorAll('input[type="range"]');
     sliders.forEach(slider => {
-        const valueDisplay = document.getElementById(slider.id + 'Value');
+        // Get the base name without "Weight" to match the ID in the HTML
+        const baseId = slider.id.replace('Weight', '');
+        const valueDisplay = document.getElementById(baseId + 'Value');
         if (valueDisplay) {
             // Initialize with current value
             valueDisplay.textContent = slider.value;
