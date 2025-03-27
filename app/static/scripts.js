@@ -295,34 +295,4 @@ document.addEventListener('DOMContentLoaded', function() {
             bibliometricWeights.style.display = this.checked ? 'block' : 'none';
         });
     }
-    
-    // Ensure bibliometric config is included in form submission
-    if (processAllBtn) {
-        const originalClick = processAllBtn.onclick;
-        
-        processAllBtn.onclick = function(event) {
-            if (originalClick) {
-                // Call the original handler first
-                originalClick.call(this, event);
-            }
-            
-            // Add bibliometric configuration to form data
-            const formData = new FormData(document.querySelector('form'));
-            
-            // Add bibliometric configuration
-            if (useBibliometrics) {
-                formData.append('useBibliometrics', useBibliometrics.checked);
-                
-                if (useBibliometrics.checked) {
-                    const authorImpactWeight = document.getElementById('authorImpactWeight');
-                    const citationImpactWeight = document.getElementById('citationImpactWeight');
-                    const venueImpactWeight = document.getElementById('venueImpactWeight');
-                    
-                    if (authorImpactWeight) formData.append('authorImpactWeight', authorImpactWeight.value);
-                    if (citationImpactWeight) formData.append('citationImpactWeight', citationImpactWeight.value);
-                    if (venueImpactWeight) formData.append('venueImpactWeight', venueImpactWeight.value);
-                }
-            }
-        };
-    }
 });
