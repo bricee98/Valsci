@@ -8,7 +8,14 @@
 </head>
 <body>
     <div class="container">
-        <h1>Valsci</h1>
+        <header>
+            <h1>Valsci</h1>
+            {% if config.REQUIRE_PASSWORD %}
+            <div class="auth-nav">
+                <a href="/logout" class="logout-link">Logout</a>
+            </div>
+            {% endif %}
+        </header>
         
         <!-- 0. Instructions section -->
         <div class="instructions-container">

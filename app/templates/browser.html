@@ -8,7 +8,15 @@
 </head>
 <body>
     <div class="container">
-        <h1>Browse Batches and Claims</h1>
+        <header>
+            <h1>Browse Batches and Claims</h1>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Home</a>
+                {% if config.REQUIRE_PASSWORD %}
+                <a href="/logout" class="logout-link">Logout</a>
+                {% endif %}
+            </div>
+        </header>
         <div class="search-container">
             <input type="text" id="searchInput" placeholder="Search batches or claims...">
             <button id="searchButton">Search</button>
@@ -31,12 +39,38 @@
             return typeof rating === 'number' ? rating.toFixed(1) : rating;
         }
 
+        async function fetchWithAuth(url, options = {}) {
+            try {
+                const response = await fetch(url, options);
+                
+                // Check for authentication errors
+                if (response.status === 401) {
+                    const data = await response.json();
+                    if (data.code === 'AUTH_REQUIRED') {
+                        // Redirect to login page
+                        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
+                        return null;
+                    }
+                }
+                
+                return response;
+            } catch (error) {
+                console.error('Fetch error:', error);
+                throw error;
+            }
+        }
+
         function loadBatches(searchTerm = '') {
             batchesContainer.innerHTML = '<div class="loading">Loading batches...</div>';
             
-            fetch(`/api/v1/browse?search=${encodeURIComponent(searchTerm)}`)
-                .then(response => response.json())
+            fetchWithAuth(`/api/v1/browse?search=${encodeURIComponent(searchTerm)}`)
+                .then(response => {
+                    if (!response) return null; // Redirected to login
+                    return response.json();
+                })
                 .then(data => {
+                    if (!data) return; // Redirected to login
+                    
                     batchesContainer.innerHTML = '';
                     
                     if (data.error) {
@@ -113,9 +147,12 @@
             }
 
             try {
-                const response = await fetch(`/api/v1/delete/batch/${batchId}`, {
+                const response = await fetchWithAuth(`/api/v1/delete/batch/${batchId}`, {
                     method: 'DELETE'
                 });
+                
+                if (!response) return; // Redirected to login
+                
                 const data = await response.json();
                 
                 if (response.ok) {

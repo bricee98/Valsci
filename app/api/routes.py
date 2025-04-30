@@ -1,4 +1,5 @@
 from flask import Blueprint, request, jsonify, send_file, render_template, current_app, Response
+from flask import session, redirect, url_for, flash
 import os
 import uuid
 import shutil
@@ -15,6 +16,7 @@ import math
 from app.services.email_service import EmailService
 import logging
 import traceback
+from functools import wraps
 
 api = Blueprint('api', __name__)
 
@@ -52,7 +54,31 @@ def verify_password(password):
         return password == current_app.config['ACCESS_PASSWORD']
     return True
 
+def is_authenticated():
+    """Check if the user is authenticated"""
+    if not current_app.config['REQUIRE_PASSWORD']:
+        return True
+    return session.get('authenticated', False)
+
+def auth_required(f):
+    """Decorator to require authentication for a route"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_app.config['REQUIRE_PASSWORD']:
+            return f(*args, **kwargs)
+        
+        if not is_authenticated():
+            if request.path.startswith('/api/v1/'):
+                # Return JSON error for API routes
+                return jsonify({"error": "Authentication required", "code": "AUTH_REQUIRED"}), 401
+            else:
+                # Redirect to login page for UI routes
+                return redirect(url_for('api.login', next=request.path))
+        return f(*args, **kwargs)
+    return decorated_function
+
 @api.route('/api/v1/claims/<batch_id>/<claim_id>', methods=['GET'])
+@auth_required
 def get_claim_status(batch_id, claim_id):
     # Check queued jobs first
     claim_file = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
@@ -83,6 +109,7 @@ def get_claim_status(batch_id, claim_id):
     return jsonify({"error": "Claim not found"}), 404
 
 @api.route('/api/v1/claims/<batch_id>/<claim_id>/report', methods=['GET'])
+@auth_required
 def get_claim_report(batch_id, claim_id):
     claim_file = os.path.join(SAVED_JOBS_DIR, batch_id, f"{claim_id}.txt")
     if os.path.exists(claim_file):
@@ -97,12 +124,12 @@ def get_claim_report(batch_id, claim_id):
     return jsonify({"error": "Claim not found"}), 404
 
 @api.route('/api/v1/batch', methods=['POST'])
+@auth_required
 def start_batch_job():
     if 'file' not in request.files:
         return jsonify({"error": "No file part"}), 400
     
-    if not verify_password(request.form.get('password')):
-        return jsonify({"error": "Invalid password"}), 403
+    # No need to check password here as @auth_required does that for us already
     
     # Get search configuration
     num_queries = int(request.form.get('numQueries', 5))
@@ -198,6 +225,7 @@ def start_batch_job():
         }), 202
 
 @api.route('/api/v1/batch/<batch_id>/download', methods=['GET'])
+@auth_required
 def download_batch_reports(batch_id):
     batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
     if not os.path.exists(batch_dir):
@@ -209,6 +237,7 @@ def download_batch_reports(batch_id):
     return send_file(zip_path, as_attachment=True)
 
 @api.route('/', methods=['GET'])
+@auth_required
 def index():
     saved_jobs_path = os.path.join(current_app.root_path, '..', 'saved_jobs')
     saved_jobs_exist = os.path.isdir(saved_jobs_path)
@@ -217,10 +246,12 @@ def index():
                          config=current_app.config)
 
 @api.route('/results', methods=['GET'])
+@auth_required
 def results():
     return render_template('results.html')
 
 @api.route('/progress', methods=['GET'])
+@auth_required
 def progress():
     claim_id = request.args.get('claim_id')
     batch_id = request.args.get('batch_id')
@@ -245,6 +276,7 @@ def progress():
     return render_template('progress.html', claim_id=claim_id, batch_id=batch_id)
 
 @api.route('/api/v1/batch/<batch_id>', methods=['GET'])
+@auth_required
 def get_batch_status(batch_id):
     batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
     if not os.path.exists(batch_dir):
@@ -298,6 +330,7 @@ def get_batch_status(batch_id):
     }), 200
 
 @api.route('/api/v1/batch/<batch_id>/progress', methods=['GET'])
+@auth_required
 def get_batch_progress(batch_id):
     """Get overall batch progress and detailed status breakdown."""
     detailed_counts = {
@@ -372,6 +405,7 @@ def get_batch_progress(batch_id):
     })
 
 @api.route('/batch_results', methods=['GET'])
+@auth_required
 def batch_results():
     batch_id = request.args.get('batch_id')
     # Fetch batch information to determine review_type
@@ -397,10 +431,12 @@ def batch_results():
 # Add these new routes
 
 @api.route('/browser', methods=['GET'])
+@auth_required
 def browser():
     return render_template('browser.html')
 
 @api.route('/api/v1/browse', methods=['GET'])
+@auth_required
 def browse_batches():
     try:
         search_term = request.args.get('search', '').lower()
@@ -485,6 +521,7 @@ def browse_batches():
         }), 500
 
 @api.route('/api/v1/delete/claim/<claim_id>', methods=['DELETE'])
+@auth_required
 def delete_claim(claim_id):
     try:
         for root, dirs, files in os.walk(SAVED_JOBS_DIR):
@@ -509,6 +546,7 @@ def delete_claim(claim_id):
         }), 500
 
 @api.route('/api/v1/delete/batch/<batch_id>', methods=['DELETE'])
+@auth_required
 def delete_batch(batch_id):
     try:
         batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
@@ -533,6 +571,7 @@ def delete_batch(batch_id):
         }), 500
 
 @api.route('/api/v1/claims/<claim_id>/download_citations', methods=['GET'])
+@auth_required
 def download_citations(claim_id):
     try:
         # Find and load the claim data
@@ -640,6 +679,7 @@ def generate_markdown_report(claim_data):
     return "\n".join(md_content)
 
 @api.route('/api/v1/claims/<batch_id>/<claim_id>/download_md', methods=['GET'])
+@auth_required
 def download_claim_md(batch_id, claim_id):
     """Download a single claim's final report as a markdown (.md) file."""
     saved_file = os.path.join(SAVED_JOBS_DIR, batch_id, f"{claim_id}.txt")
@@ -660,6 +700,7 @@ def download_claim_md(batch_id, claim_id):
     )
 
 @api.route('/api/v1/batch/<batch_id>/download_markdown', methods=['GET'])
+@auth_required
 def download_batch_markdown(batch_id):
     """Download a zip of markdown files for all claims in a batch."""
     batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
@@ -690,3 +731,26 @@ def download_batch_markdown(batch_id):
         as_attachment=True,
         download_name=f"batch_{batch_id}_reports.zip"
     )
+
+@api.route('/login', methods=['GET', 'POST'])
+def login():
+    # Skip login if password is not required
+    if not current_app.config['REQUIRE_PASSWORD']:
+        return redirect(url_for('api.index'))
+    
+    error = None
+    if request.method == 'POST':
+        password = request.form.get('password')
+        if verify_password(password):
+            session['authenticated'] = True
+            next_page = request.args.get('next', url_for('api.index'))
+            return redirect(next_page)
+        else:
+            error = 'Invalid password. Please try again.'
+    
+    return render_template('login.html', error=error)
+
+@api.route('/logout', methods=['GET'])
+def logout():
+    session.pop('authenticated', None)
+    return redirect(url_for('api.login'))

@@ -242,9 +242,32 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     // Add this function to check claim status with batch_id
+    async function fetchWithAuth(url, options = {}) {
+        try {
+            const response = await fetch(url, options);
+            
+            // Check for authentication errors
+            if (response.status === 401) {
+                const data = await response.json();
+                if (data.code === 'AUTH_REQUIRED') {
+                    // Redirect to login page
+                    window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
+                    return null;
+                }
+            }
+            
+            return response;
+        } catch (error) {
+            console.error('Fetch error:', error);
+            throw error;
+        }
+    }
+
     async function checkClaimStatus(claimId, batchId) {
         try {
-            const response = await fetch(`/api/v1/claims/${batchId}/${claimId}`);
+            const response = await fetchWithAuth(`/api/v1/claims/${batchId}/${claimId}`);
+            if (!response) return null; // Redirected to login
+            
             const data = await response.json();
             return data;
         } catch (error) {
