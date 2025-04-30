@@ -2,25 +2,25 @@ version: '3.8'
 
 services:
   web:
-    image: valsci:latest
-    container_name: valsci-web
+    build: .
+    container_name: valsci-web-dev
     ports:
       - "3000:3000"
     environment:
       - FLASK_APP=run.py
     volumes:
-      - ./app/config/env_vars.json:/valsci/app/config/env_vars.json
+      - ./:/valsci
       - semantic_scholar_data:/valsci/semantic_scholar/datasets
       - queued_jobs:/valsci/queued_jobs
       - saved_jobs:/valsci/saved_jobs
     restart: unless-stopped
 
   processor:
-    image: valsci:latest
-    container_name: valsci-processor
+    build: .
+    container_name: valsci-processor-dev
     command: python processor.py
     volumes:
-      - ./app/config/env_vars.json:/valsci/app/config/env_vars.json
+      - ./:/valsci
       - semantic_scholar_data:/valsci/semantic_scholar/datasets
       - queued_jobs:/valsci/queued_jobs
       - saved_jobs:/valsci/saved_jobs
@@ -31,4 +31,4 @@ services:
 volumes:
   semantic_scholar_data:
   queued_jobs:
-  saved_jobs:
+  saved_jobs: 
