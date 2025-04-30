@@ -1,0 +1,23 @@
+{
+    "FLASK_SECRET_KEY": "your_secret_key_here",
+    "USER_EMAIL": "your_email@example.com",
+    "SEMANTIC_SCHOLAR_API_KEY": "your_semantic_scholar_api_key",
+    
+    "LLM_PROVIDER": "openai",
+    "LLM_API_KEY": "your_api_key",
+    "LLM_EVALUATION_MODEL": "gpt-4o",
+    
+    "REQUIRE_PASSWORD": "true",
+    "ACCESS_PASSWORD": "your_access_password",
+    
+    "AZURE_OPENAI_ENDPOINT": "",
+    "AZURE_OPENAI_API_VERSION": "2024-06-01",
+    "AZURE_AI_INFERENCE_ENDPOINT": "",
+    
+    "ENABLE_EMAIL_NOTIFICATIONS": "false",
+    "EMAIL_SENDER": "",
+    "EMAIL_APP_PASSWORD": "",
+    "SMTP_SERVER": "smtp.gmail.com",
+    "SMTP_PORT": "587",
+    "BASE_URL": "http://localhost:3000"
+}
