@@ -16,6 +16,11 @@ This package contains a pre-built Docker image for running Valsci without needin
 
 ## Quick Setup Guide
 
+0. **Make sure you have extracted the distribution tarball to a new directory**
+```bash
+   tar -xzvf valsci-docker-dist.tar.gz
+```
+
 1. **Load the Docker image**:
    ```bash
    gunzip -c valsci-image.tar.gz | docker load
