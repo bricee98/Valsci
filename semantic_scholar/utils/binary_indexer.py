@@ -16,6 +16,7 @@ import random
 from rich.table import Table
 import heapq
 import logging
+from itertools import count
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -200,19 +201,22 @@ class BinaryIndexer:
                 heap = []
                 chunk_files = []
                 
+                _tie_breaker = count()
+
                 for chunk_path in chunk_paths:
                     f = open(chunk_path, 'rb')
                     chunk_files.append(f)
                     data = f.read(IndexEntry.ENTRY_SIZE)
                     if data:
                         entry = IndexEntry.from_bytes(data)
-                        heap.append((entry.id, entry, f))
+                        # Use a monotonically increasing tie-breaker to avoid comparing IndexEntry objects when IDs are identical
+                        heap.append((entry.id, next(_tie_breaker), entry, f))
                 
                 heapq.heapify(heap)
                 
                 # Merge chunks
                 while heap:
-                    _, entry, chunk_f = heapq.heappop(heap)
+                    _, _, entry, chunk_f = heapq.heappop(heap)
                     out_f.write(entry.to_bytes())
                     entry_count += 1
                     
@@ -220,7 +224,7 @@ class BinaryIndexer:
                     data = chunk_f.read(IndexEntry.ENTRY_SIZE)
                     if data:
                         next_entry = IndexEntry.from_bytes(data)
-                        heapq.heappush(heap, (next_entry.id, next_entry, chunk_f))
+                        heapq.heappush(heap, (next_entry.id, next(_tie_breaker), next_entry, chunk_f))
 
             # Close all chunk files
             for f in chunk_files:
