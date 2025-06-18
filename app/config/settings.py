@@ -44,6 +44,11 @@ class Config:
     LLM_API_KEY = env_vars.get("LLM_API_KEY", "")
     LLM_EVALUATION_MODEL = env_vars.get("LLM_EVALUATION_MODEL", "gpt-4o")
 
+    # Rate limiting configuration (optional)
+    RATE_LIMIT_MAX_TOKENS_PER_CLAIM = int(env_vars.get("RATE_LIMIT_MAX_TOKENS_PER_CLAIM", 300000))
+    RATE_LIMIT_MAX_TOKENS_PER_WINDOW = int(env_vars.get("RATE_LIMIT_MAX_TOKENS_PER_WINDOW", 25000))
+    RATE_LIMIT_MAX_REQUESTS_PER_WINDOW = int(env_vars.get("RATE_LIMIT_MAX_REQUESTS_PER_WINDOW", 5))
+    RATE_LIMIT_WINDOW_SIZE_SECONDS = int(env_vars.get("RATE_LIMIT_WINDOW_SIZE_SECONDS", 10))
 
     @classmethod
     def validate_config(cls):

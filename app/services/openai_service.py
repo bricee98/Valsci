@@ -233,5 +233,7 @@ class OpenAIService:
             return (input_tokens * 0.15/1000000) + (output_tokens * 0.6/1000000)
         elif model.startswith("phi-"):
             return 0.0  # For now, we don't have pricing info for Phi models
+        elif model == "o3":
+            return (input_tokens * 2.00/1000000) + (output_tokens * 8.00/1000000)
         else:
             return 0.0

@@ -51,11 +51,11 @@ class ValsciProcessor:
 
         # Token tracking
         self.claim_token_usage = {}
-        self.max_tokens_per_claim = 300000
+        self.max_tokens_per_claim = settings.Config.RATE_LIMIT_MAX_TOKENS_PER_CLAIM
         self.request_token_estimates = []
-        self.max_tokens_per_window = 25000
-        self.max_requests_per_window = 5
-        self.window_size_seconds = 10
+        self.max_tokens_per_window = settings.Config.RATE_LIMIT_MAX_TOKENS_PER_WINDOW
+        self.max_requests_per_window = settings.Config.RATE_LIMIT_MAX_REQUESTS_PER_WINDOW
+        self.window_size_seconds = settings.Config.RATE_LIMIT_WINDOW_SIZE_SECONDS
         self.last_token_update_time = time.time()
         self.model = settings.Config.LLM_EVALUATION_MODEL
 
