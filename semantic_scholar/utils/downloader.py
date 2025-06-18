@@ -928,7 +928,6 @@ def main():
     parser.add_argument('--verify-index', nargs='*', help='Verify index completeness. Optionally specify datasets to verify')
     parser.add_argument('--audit', nargs='*', help='Audit datasets and indexing status')
     parser.add_argument('--index-only', nargs='*', help='Only run indexing on downloaded files')
-    parser.add_argument('--download-only', action='store_true', help='Only download files without indexing')
     parser.add_argument('--repair', action='store_true', help='Repair/resume incomplete indexes')
     parser.add_argument('--count', action='store_true', help='Show detailed index counts for each file')
     # New flag to perform an incremental update based on diff end-points
@@ -1151,18 +1150,42 @@ def main():
                 else:
                     console.print(f"[red]× Failed to index {dataset}[/red]")
                     
-        elif args.download_only:
-            # Download all datasets without indexing
+        elif args.repair:
+            # Repair mode: re-index datasets that are missing or unhealthy for the latest local release
             release_id = args.release
             if release_id == 'latest':
-                release_id = downloader.get_latest_release()
-                
-            console.print(f"[bold cyan]Downloading datasets for release {release_id}...[/bold cyan]")
-            
+                release_id = downloader._get_latest_local_release()
+
+            if not release_id:
+                console.print("[red]No local releases found to repair[/red]")
+                return
+
+            console.print(f"[bold cyan]Repairing indices for release {release_id}...[/bold cyan]")
+
+            # Get current index stats (may be empty)
+            stats = downloader.indexer.get_index_stats(release_id)
+
             for dataset in downloader.datasets_to_download:
-                console.print(f"\n[bold]Downloading {dataset}...[/bold]")
-                downloader.download_dataset(dataset, release_id, args.mini, index=False)
-                
+                # Determine for every id_type if index exists and is healthy
+                needs_rebuild = False
+                for _, id_type in downloader.dataset_id_fields[dataset]:
+                    key = f"{dataset}_{id_type}"
+                    if key not in stats:
+                        needs_rebuild = True
+                        break
+                    if not stats[key]['healthy']:
+                        needs_rebuild = True
+                        break
+
+                if needs_rebuild:
+                    console.print(f"\n[bold]Re-indexing {dataset}...[/bold]")
+                    if downloader.index_dataset(dataset, release_id):
+                        console.print(f"[green]✓ Successfully re-indexed {dataset}[/green]")
+                    else:
+                        console.print(f"[red]× Failed to re-index {dataset}[/red]")
+
+            console.print("\n[bold cyan]Repair completed[/bold cyan]")
+
         else:
             # Download and index all datasets
             release_id = args.release
