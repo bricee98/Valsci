@@ -922,6 +922,8 @@ def main():
     parser.add_argument('--download-only', action='store_true', help='Only download files without indexing')
     parser.add_argument('--repair', action='store_true', help='Repair/resume incomplete indexes')
     parser.add_argument('--count', action='store_true', help='Show detailed index counts for each file')
+    # New flag to perform an incremental update based on diff end-points
+    parser.add_argument('--update', action='store_true', help='Incrementally update all local datasets to the latest release using Semantic Scholar diff files')
     args = parser.parse_args()
     
     with S2DatasetDownloader(version=args.version) as downloader:
@@ -1111,6 +1113,14 @@ def main():
                     console.print(f"\n[bold]Performing detailed verification...[/bold]")
                     downloader.indexer.verify_all_indices(release_id, show_details=True)
                     
+        elif args.update:
+            # Perform an incremental update (diff-based). This downloads only the changes
+            # between the current local release and the latest available release, then
+            # rebuilds the binary indices.  Falls back to a full download if diffs are
+            # unavailable.
+            success = downloader.update_datasets()
+            # Exit code indicates success (0) or failure (1) for shell scripts
+            sys.exit(0 if success else 1)
         elif args.index_only is not None:
             datasets = validate_datasets(args.index_only)
             if datasets is None:
