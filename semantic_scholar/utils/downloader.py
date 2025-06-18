@@ -740,18 +740,27 @@ class S2DatasetDownloader:
             return dst_dir
 
         for file in src_dir.glob("*.json"):
+            # Skip metadata.json here; we'll handle it explicitly below
+            if file.name == "metadata.json":
+                continue
+
             dest = dst_dir / file.name
             if dest.exists():
+                # File (or hard-link) already in place
                 continue
             try:
                 os.link(file, dest)  # Hard-link (O(1) if same filesystem)
             except Exception:
                 shutil.copy2(file, dest)  # Fall-back to regular copy
 
-        # Also copy metadata.json if present
+        # Copy metadata.json once (if it isn't already present)
         meta_src = src_dir / "metadata.json"
-        if meta_src.exists():
-            shutil.copy2(meta_src, dst_dir / "metadata.json")
+        meta_dst = dst_dir / "metadata.json"
+        if meta_src.exists() and not meta_dst.exists():
+            try:
+                os.link(meta_src, meta_dst)
+            except Exception:
+                shutil.copy2(meta_src, meta_dst)
 
         return dst_dir
 
