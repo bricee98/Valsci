@@ -116,14 +116,23 @@ class OpenAIService:
                     }
                 }
         else:
-            # Use OpenAI compatible API for other providers
+            # Determine the effective model (explicitly provided or the default one)
+            effective_model = model or self.model
+
+            # Build the request parameters. Some models (e.g. "o3") do not support an explicit
+            # temperature value, so we only set it when the model allows overriding.
+            request_kwargs = {
+                "model": effective_model,
+                "messages": messages,
+                "response_format": {"type": "json_object"}
+            }
+
+            if effective_model != "o3":
+                # Most models support temperature control; keep it at 0.0 for deterministic output
+                request_kwargs["temperature"] = 0.0
+
             async with asyncio.timeout(180):  # 180 seconds = 3 minutes
-                response = await self.async_client.chat.completions.create(
-                    model=model or self.model,
-                    messages=messages,
-                    response_format={"type": "json_object"},
-                    temperature=0.0
-                )
+                response = await self.async_client.chat.completions.create(**request_kwargs)
             
             logger.info(f"API call completed for model {model or self.model}")
             
@@ -201,12 +210,18 @@ class OpenAIService:
                     }
                 }
         else:
+            effective_model = model or self.model
+
+            request_kwargs = {
+                "model": effective_model,
+                "messages": messages
+            }
+
+            if effective_model != "o3":
+                request_kwargs["temperature"] = 0.0
+
             async with asyncio.timeout(180):  # 180 seconds = 3 minutes
-                response = await self.async_client.chat.completions.create(
-                    model=model or self.model,
-                    messages=messages,
-                    temperature=0.0
-                )
+                response = await self.async_client.chat.completions.create(**request_kwargs)
             
             logger.info(f"API call completed for model {model or self.model}")
 
