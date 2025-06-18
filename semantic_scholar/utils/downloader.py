@@ -1,7 +1,7 @@
 import os
 import json
 import requests
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Set
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
@@ -355,7 +355,7 @@ class S2DatasetDownloader:
             console.print(f"[red]Error downloading dataset {dataset_name}: {str(e)}[/red]")
             return False
 
-    def index_dataset(self, dataset: str, release_id: str) -> bool:
+    def index_dataset(self, dataset: str, release_id: str, skip_ids: Optional[Set[str]] = None) -> bool:
         """Create binary indices for a dataset"""
         try:
             dataset_dir = self.base_dir / release_id / dataset
@@ -464,7 +464,8 @@ class S2DatasetDownloader:
 
                     with open(chunk_path, 'wb') as f:
                         for entry in entries:
-                            f.write(entry.to_bytes())
+                            if skip_ids is None or entry.id not in skip_ids:
+                                f.write(entry.to_bytes())
 
                 total_entries += entries_in_file
                 console.print(f"[green]Created {entries_in_file:,} index entries from {file_path.name}[/green]")
@@ -569,126 +570,190 @@ class S2DatasetDownloader:
             raise
 
     def update_datasets(self) -> bool:
+        """Incrementally update all datasets to the latest release using the official
+        diff end-points provided by Semantic Scholar.  If the diff API is not
+        available (or something goes wrong mid-way) we gracefully fall back to
+        downloading the full dataset for the new release – this guarantees that
+        Valsci will continue to work even on the first update attempt.
+
+        The high-level algorithm is:
+
+        1.  Identify the *current* (local) release as well as the *latest*
+            release available from the API.
+        2.  For each dataset:
+            a.  Copy the existing JSONL shard files from the current release to
+                a new directory for the latest release.  Hard-links are used on
+                filesystems that support them to save disk space; otherwise a
+                normal copy is performed.
+            b.  Download every «update» diff file and place it in the new
+                directory.
+            c.  Collect the primary-key values that appear in «delete» diff
+                files so we can exclude them when (re)building the binary index
+                for the new release.
+        3.  Re-index the dataset (calling the enhanced index_dataset method
+            which accepts a *skip_ids* set).
+        4.  Run a quick verification step to ensure the rebuilt index is
+            internally consistent with the source files.
+
+        Returns True on success, False otherwise.
         """
-        Update all datasets to the latest release using diffs.
-        Automatically maintains indices during the update.
-        """
+
         try:
             current_release = self._get_latest_local_release()
             if not current_release:
-                console.print("[yellow]No local datasets found. Please run initial download first.[/yellow]")
+                console.print("[yellow]No local datasets found. Please run an initial download first.[/yellow]")
                 return False
-            
+
             latest_release = self.get_latest_release()
             if current_release == latest_release:
-                console.print("[green]Datasets already at latest release.[/green]")
+                console.print("[green]Datasets already at the latest release – nothing to do.[/green]")
                 return True
-            
-            console.print(f"[cyan]Updating from {current_release} to {latest_release}...[/cyan]")
-            
-            # Process each dataset
+
+            console.print(f"[cyan]Updating from {current_release} ➜ {latest_release} using diffs...[/cyan]")
+
             for dataset in self.datasets_to_download:
+                console.print(f"\n[bold]Dataset: {dataset}[/bold]")
+
+                # We will lazily create/populate the destination directory *only*
+                # if there are any diff chunks to apply.  This avoids copying a
+                # potentially huge dataset when we subsequently fall back to a
+                # full download.
+                dst_dir: Optional[Path] = None
+                deletion_ids: Set[str] = set()
+
+                # ------------------------------------------------------------------
+                # Retrieve diff manifest for this dataset
+                # ------------------------------------------------------------------
+                if dataset == 's2orc':
+                    diff_url = f"https://api.semanticscholar.org/datasets/v1/diffs/{current_release}/to/{latest_release}/s2orc/"
+                else:
+                    diff_url = f"{BASE_URL}/diffs/{current_release}/to/{latest_release}/{dataset}"
+
                 try:
-                    # Special handling for S2ORC dataset
-                    if dataset == 's2orc':
-                        try:
-                            diff_url = f"https://api.semanticscholar.org/datasets/v1/diffs/{current_release}/to/{latest_release}/s2orc/"
-                            response = self.make_request(diff_url)
-                            diffs = response.json()
-                            
-                            # Filter and process S2ORC diffs
-                            if 'diffs' in diffs:
-                                for diff in diffs['diffs']:
-                                    diff['update_files'] = [
-                                        {
-                                            'url': url,
-                                            'shard': re.match(r"https://ai2-s2ag.s3.amazonaws.com/staging/(.*)/s2orc/(.*).gz(.*)", url).group(2)
-                                        }
-                                        for url in diff['update_files']
-                                    ]
-                                    diff['delete_files'] = [
-                                        {
-                                            'url': url,
-                                            'shard': re.match(r"https://ai2-s2ag.s3.amazonaws.com/staging/(.*)/s2orc/(.*).gz(.*)", url).group(2)
-                                        }
-                                        for url in diff['delete_files']
-                                    ]
-                        except requests.exceptions.HTTPError as e:
-                            console.print("[red]Error accessing S2ORC dataset. Make sure your API key has S2ORC access.[/red]")
-                            console.print("[yellow]For S2ORC access, visit: https://api.semanticscholar.org/s2orc[/yellow]")
-                            raise
-                    else:
-                        # Standard dataset handling
-                        diff_url = f"{BASE_URL}/diffs/{current_release}/to/{latest_release}/{dataset}"
-                        response = self.make_request(diff_url)
-                        diffs = response.json()
-                    
-                    dataset_dir = self.base_dir / latest_release / dataset
-                    dataset_dir.mkdir(parents=True, exist_ok=True)
-                    
-                    with Progress() as progress:
-                        total_files = sum(
-                            len(diff['update_files']) + len(diff['delete_files']) 
-                            for diff in diffs['diffs']
-                        )
-                        task = progress.add_task(
-                            f"[cyan]Updating {dataset}...", 
-                            total=total_files
-                        )
-                        
-                        # Process each diff sequentially
-                        for diff in diffs['diffs']:
-                            # Handle updates
-                            update_files = diff['update_files']
-                            if dataset == 's2orc':
-                                update_files = [f['url'] for f in update_files]
-                                
-                            for url in update_files:
-                                temp_file = dataset_dir / f"temp_{Path(url).name}"
-                                try:
-                                    success, output_path = self.download_file(url, dataset_dir)
-                                    if success and output_path:
-                                        # Update index with new/updated records
-                                        self._update_index_for_file(output_path, dataset, latest_release)
-                                finally:
-                                    if temp_file.exists():
-                                        temp_file.unlink()
-                                progress.advance(task)
-                            
-                            # Handle deletes
-                            delete_files = diff['delete_files']
-                            if dataset == 's2orc':
-                                delete_files = [f['url'] for f in delete_files]
-                                
-                            for url in delete_files:
-                                temp_file = dataset_dir / f"temp_delete_{Path(url).name}"
-                                try:
-                                    success, output_path = self.download_file(url, dataset_dir)
-                                    if success and output_path:
-                                        # Remove deleted records from index
-                                        self._remove_from_index(output_path, dataset)
-                                        output_path.unlink()  # Remove the delete file after processing
-                                finally:
-                                    if temp_file.exists():
-                                        temp_file.unlink()
-                                progress.advance(task)
-                        
-                        # Verify index integrity after updates
-                        console.print(f"[cyan]Verifying {dataset} index after update...[/cyan]")
-                        self.verify_index_completeness()
-                        
-                    console.print(f"[green]Dataset {dataset} updated successfully![/green]")
-                    
+                    diffs_resp = self.make_request(diff_url)
+                    diffs = diffs_resp.json().get('diffs', [])
                 except Exception as e:
-                    console.print(f"[red]Error updating dataset {dataset}: {str(e)}[/red]")
+                    console.print(f"[yellow]Could not retrieve diff for {dataset} (reason: {e}). Falling back to full download.[/yellow]")
+                    # Full download fall-back
+                    self.download_dataset(dataset, latest_release, mini=False, index=True)
+                    continue
+
+                total_diff_files = sum(len(d.get('update_files', [])) + len(d.get('delete_files', [])) for d in diffs)
+                if total_diff_files == 0:
+                    console.print("[green]No changes for this dataset – skipping.[/green]")
+                    # Even if there are no changes we still need an index file
+                    # for the new release so we copy the existing one.
+                    for field, id_type in self.dataset_id_fields[dataset]:
+                        old_idx = self.index_dir / f"{current_release}_{dataset}_{id_type}.idx"
+                        new_idx = self.index_dir / f"{latest_release}_{dataset}_{id_type}.idx"
+                        if old_idx.exists() and not new_idx.exists():
+                            shutil.copy2(old_idx, new_idx)
+                    continue
+
+                # At this point we know there are some diff files – now we can
+                # prepare the destination directory by copying (or hard-linking)
+                # the current release.
+                dst_dir = self._prepare_dataset_dir_for_update(current_release, latest_release, dataset)
+
+                with Progress() as progress:
+                    task_id = progress.add_task(f"[cyan]Applying diffs for {dataset}...", total=total_diff_files)
+
+                    # Loop through every diff segment chronologically.
+                    for diff in diffs:
+                        # ---------------------------
+                        #   UPDATE  files
+                        # ---------------------------
+                        upd_urls = diff.get('update_files', [])
+                        if dataset == 's2orc':
+                            upd_urls = [u['url'] for u in upd_urls]
+
+                        for url in upd_urls:
+                            success, _ = self.download_file(url, dst_dir)
+                            if not success:
+                                console.print(f"[red]Failed to download update file: {url}[/red]")
+                            progress.advance(task_id)
+
+                        # ---------------------------
+                        #   DELETE files
+                        # ---------------------------
+                        del_urls = diff.get('delete_files', [])
+                        if dataset == 's2orc':
+                            del_urls = [u['url'] for u in del_urls]
+
+                        for url in del_urls:
+                            success, del_path = self.download_file(url, dst_dir)
+                            if success and del_path:
+                                # Extract primary keys that need to be removed
+                                try:
+                                    with open(del_path, 'rb') as f_del:
+                                        for line in f_del:
+                                            try:
+                                                decoded = bytes.fromhex(line.strip().decode('ascii')).decode('utf-8')
+                                                rec = json.loads(decoded)
+                                            except Exception:
+                                                try:
+                                                    rec = json.loads(line.strip())
+                                                except Exception:
+                                                    continue
+
+                                            for field, _ in self.dataset_id_fields[dataset]:
+                                                if field in rec:
+                                                    deletion_ids.add(str(rec[field]))
+                                finally:
+                                    # Delete the diff delete file – we only
+                                    # needed it to collect the IDs.
+                                    del_path.unlink(missing_ok=True)
+                            progress.advance(task_id)
+
+                # After all diff chunks processed, rebuild the binary indices
+                console.print("[cyan]Re-building binary index...[/cyan]")
+                if not self.index_dataset(dataset, latest_release, skip_ids=deletion_ids):
+                    console.print(f"[red]Failed to rebuild index for {dataset}")
                     return False
-            
-            console.print("[green]All datasets updated successfully![/green]")
+
+                # Quick verification (±10 % margin).
+                self.verify_index_completeness(latest_release, dataset, quick_estimate=True)
+
+            console.print("\n[green]All datasets updated successfully![/green]")
             return True
-            
+
         except Exception as e:
-            console.print(f"[red]Error updating datasets: {str(e)}[/red]")
+            console.print(f"[red]Error during incremental update: {e}")
             return False
+
+    def _prepare_dataset_dir_for_update(self, current_release: str, latest_release: str, dataset: str) -> Path:
+        """Helper that copies (or hard-links) the current-release dataset files
+        into a fresh directory for the *latest_release*.  Returns the new
+        directory path.  If the directory already exists it is returned as-is.
+        """
+
+        src_dir = self.base_dir / current_release / dataset
+        dst_dir = self.base_dir / latest_release / dataset
+
+        if dst_dir.exists():
+            return dst_dir
+
+        dst_dir.mkdir(parents=True, exist_ok=True)
+
+        if not src_dir.exists():
+            # This should not happen but we guard against it.
+            return dst_dir
+
+        for file in src_dir.glob("*.json"):
+            dest = dst_dir / file.name
+            if dest.exists():
+                continue
+            try:
+                os.link(file, dest)  # Hard-link (O(1) if same filesystem)
+            except Exception:
+                shutil.copy2(file, dest)  # Fall-back to regular copy
+
+        # Also copy metadata.json if present
+        meta_src = src_dir / "metadata.json"
+        if meta_src.exists():
+            shutil.copy2(meta_src, dst_dir / "metadata.json")
+
+        return dst_dir
 
     def _get_latest_local_release(self) -> Optional[str]:
         """Get the latest release ID from local datasets directory."""
@@ -835,30 +900,11 @@ class S2DatasetDownloader:
 
     def verify_index_completeness(self, release_id: str, dataset: Optional[str] = None, 
                                 sample_size: int = 1000, quick_estimate: bool = False) -> bool:
-        """
-        Verify that indices contain all entries from source files.
-        Uses sampling for large files to estimate counts.
-        
-        Args:
-            quick_estimate: If True, uses a faster estimation method based on first file
+        """Thin wrapper around BinaryIndexer.verify_index_completeness so callers
+        don't need to import the indexer directly.
         """
         try:
-            self._load_metadata(release_id)
-            if release_id not in self.metadata:
-                console.print(f"[red]No metadata found for release {release_id}[/red]")
-                return False
-
-            datasets_to_check = [dataset] if dataset else {
-                k.split('_')[0] for k in self.metadata[release_id].keys()
-            }
-
-            all_valid = True
-            source_counts = defaultdict(int)
-            confidence_levels = defaultdict(float)
-
-            # Use the binary indexer's verify_index_completeness method
             return self.indexer.verify_index_completeness(release_id, dataset, quick_estimate=quick_estimate)
-
         except Exception as e:
             console.print(f"[red]Error verifying index completeness: {str(e)}[/red]")
             return False
