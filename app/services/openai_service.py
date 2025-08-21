@@ -127,7 +127,7 @@ class OpenAIService:
                 "response_format": {"type": "json_object"}
             }
 
-            if effective_model != "o3":
+            if effective_model != "o3" and effective_model != "gpt-5":
                 # Most models support temperature control; keep it at 0.0 for deterministic output
                 request_kwargs["temperature"] = 0.0
 
@@ -217,7 +217,7 @@ class OpenAIService:
                 "messages": messages
             }
 
-            if effective_model != "o3":
+            if effective_model != "o3" and effective_model != "gpt-5":
                 request_kwargs["temperature"] = 0.0
 
             async with asyncio.timeout(180):  # 180 seconds = 3 minutes
@@ -250,5 +250,7 @@ class OpenAIService:
             return 0.0  # For now, we don't have pricing info for Phi models
         elif model == "o3":
             return (input_tokens * 2.00/1000000) + (output_tokens * 8.00/1000000)
+        elif model == "gpt-5":
+            return (input_tokens * 1.25/1000000) + (output_tokens * 10.00/1000000)
         else:
             return 0.0
