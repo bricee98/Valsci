@@ -252,5 +252,7 @@ class OpenAIService:
             return (input_tokens * 2.00/1000000) + (output_tokens * 8.00/1000000)
         elif model == "gpt-5":
             return (input_tokens * 1.25/1000000) + (output_tokens * 10.00/1000000)
+        elif model == "gpt-5-mini":
+            return (input_tokens * 0.25/1000000) + (output_tokens * 2.00/1000000)
         else:
             return 0.0
