@@ -127,7 +127,7 @@ class OpenAIService:
                 "response_format": {"type": "json_object"}
             }
 
-            if effective_model != "o3" and effective_model != "gpt-5":
+            if effective_model != "o3" and effective_model != "gpt-5" and effective_model != "gpt-5-mini":
                 # Most models support temperature control; keep it at 0.0 for deterministic output
                 request_kwargs["temperature"] = 0.0
 
@@ -217,7 +217,7 @@ class OpenAIService:
                 "messages": messages
             }
 
-            if effective_model != "o3" and effective_model != "gpt-5":
+            if effective_model != "o3" and effective_model != "gpt-5" and effective_model != "gpt-5-mini":
                 request_kwargs["temperature"] = 0.0
 
             async with asyncio.timeout(180):  # 180 seconds = 3 minutes
