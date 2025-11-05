@@ -39,10 +39,12 @@ class Config:
     ACCESS_PASSWORD = env_vars.get('ACCESS_PASSWORD')
 
     # AI Service Settings
-    LLM_PROVIDER = env_vars.get("LLM_PROVIDER", "openai")  # 'azure-openai', 'azure-inference', 'openai', or 'local'
+    LLM_PROVIDER = env_vars.get("LLM_PROVIDER", "openai")  # 'azure-openai', 'azure-inference', 'openai', 'openrouter', or 'local'
     LLM_BASE_URL = env_vars.get("LLM_BASE_URL", "http://localhost:8000")
     LLM_API_KEY = env_vars.get("LLM_API_KEY", "")
     LLM_EVALUATION_MODEL = env_vars.get("LLM_EVALUATION_MODEL", "gpt-4o")
+    LLM_HTTP_REFERER = env_vars.get("LLM_HTTP_REFERER")
+    LLM_SITE_NAME = env_vars.get("LLM_SITE_NAME")
 
     # Rate limiting configuration (optional)
     RATE_LIMIT_MAX_TOKENS_PER_CLAIM = int(env_vars.get("RATE_LIMIT_MAX_TOKENS_PER_CLAIM", 300000))
@@ -56,6 +58,8 @@ class Config:
         if cls.LLM_PROVIDER == "azure-openai":
             required_keys.extend(['LLM_API_KEY', 'AZURE_OPENAI_ENDPOINT', 'AZURE_OPENAI_API_VERSION'])
         elif cls.LLM_PROVIDER == "openai":
+            required_keys.append('LLM_API_KEY')
+        elif cls.LLM_PROVIDER == "openrouter":
             required_keys.append('LLM_API_KEY')
         elif cls.LLM_PROVIDER == "llamacpp" or cls.LLM_PROVIDER == "local":
             required_keys.append('LLM_BASE_URL')

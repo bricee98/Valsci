@@ -17,6 +17,7 @@ class OpenAIService:
         self.model = Config.LLM_EVALUATION_MODEL
         self.provider = Config.LLM_PROVIDER.lower()
         self.count = 0
+        self.extra_headers = {}
         if self.provider == "azure-openai":
             print(f"Using Azure OpenAI with model {self.model}")
             self.client = openai.AzureOpenAI(
@@ -46,6 +47,18 @@ class OpenAIService:
                 print(f"Using OpenAI with model {self.model}")
                 self.client = openai.OpenAI(api_key=Config.LLM_API_KEY)
                 self.async_client = openai.AsyncOpenAI(api_key=Config.LLM_API_KEY)
+            elif self.provider == "openrouter":
+                print(f"Using OpenRouter with model {self.model}")
+                if not self.base_url or self.base_url == "http://localhost:8000":
+                    self.base_url = "https://openrouter.ai/api/v1"
+                referer = getattr(Config, "LLM_HTTP_REFERER", None)
+                site_name = getattr(Config, "LLM_SITE_NAME", None)
+                if referer:
+                    self.extra_headers["HTTP-Referer"] = referer
+                if site_name:
+                    self.extra_headers["X-Title"] = site_name
+                self.client = openai.OpenAI(base_url=self.base_url, api_key=Config.LLM_API_KEY)
+                self.async_client = openai.AsyncOpenAI(base_url=self.base_url, api_key=Config.LLM_API_KEY)
             elif self.provider == "llamacpp" or self.provider == "local":
                 print(f"Using Alternative Model with model {self.model}")
                 self.client = openai.OpenAI(base_url=self.base_url, api_key="sk-no-key-required")
@@ -126,6 +139,9 @@ class OpenAIService:
                 "messages": messages,
                 "response_format": {"type": "json_object"}
             }
+
+            if self.extra_headers:
+                request_kwargs["extra_headers"] = self.extra_headers
 
             if effective_model != "o3" and effective_model != "gpt-5" and effective_model != "gpt-5-mini":
                 # Most models support temperature control; keep it at 0.0 for deterministic output
@@ -216,6 +232,9 @@ class OpenAIService:
                 "model": effective_model,
                 "messages": messages
             }
+
+            if self.extra_headers:
+                request_kwargs["extra_headers"] = self.extra_headers
 
             if effective_model != "o3" and effective_model != "gpt-5" and effective_model != "gpt-5-mini":
                 request_kwargs["temperature"] = 0.0
