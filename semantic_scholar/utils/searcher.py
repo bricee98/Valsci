@@ -10,6 +10,8 @@ import asyncio
 import mmap
 import logging
 from textwrap import dedent
+from app.services.llm.gateway import LLMTask
+from app.services.llm.types import empty_usage
 
 logging.basicConfig(
     level=logging.INFO,
@@ -88,7 +90,15 @@ class S2Searcher:
         logger.info(f"Found releases in base directory: {releases}")
         return max(releases) if releases else None
 
-    async def generate_search_queries(self, claim_text: str, num_queries: int = 5, ai_service = None) -> List[str]:
+    async def generate_search_queries(
+        self,
+        claim_text: str,
+        num_queries: int = 5,
+        ai_service=None,
+        batch_id: Optional[str] = None,
+        claim_id: Optional[str] = None,
+        model_override: Optional[str] = None,
+    ) -> List[str]:
         """Generate search queries for a claim using GPT."""
         system_prompt = dedent("""
             You are an expert at converting scientific claims into strategic literature search queries. Specifically, your queries will be used to search the Semantic Scholar database. Your goal is to generate queries that will comprehensively evaluate both supporting and contradicting evidence for a given claim.
@@ -148,7 +158,14 @@ class S2Searcher:
         try:
             print("About to generate queries")
 
-            result = await ai_service.generate_json_async(user_prompt, system_prompt)
+            result = await ai_service.chat_json(
+                user_prompt=user_prompt,
+                system_prompt=system_prompt,
+                task=LLMTask.QUERY_GENERATION,
+                batch_id=batch_id,
+                claim_id=claim_id,
+                model_override=model_override,
+            )
             response = result['content']
             usage = result['usage']
             queries = response.get('queries', [])
@@ -163,7 +180,7 @@ class S2Searcher:
         except Exception as e:
             logger.error(f"Error generating search queries: {str(e)}")
             # Return empty queries and usage stats in error case
-            return [], {'input_tokens': 0, 'output_tokens': 0, 'cost': 0}
+            return [], empty_usage(is_estimated=True)
 
     async def search_papers_for_claim(self, queries: List[str], results_per_query: int = 5) -> List[Dict]:
         """Search papers relevant to a claim."""

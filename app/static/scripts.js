@@ -175,6 +175,24 @@ document.addEventListener('DOMContentLoaded', function() {
                 formData.append('venueImpactWeight', venueImpactWeight ? venueImpactWeight.value : 0.2);
             }
 
+            const modelQuery = document.getElementById('modelQueryGeneration');
+            const modelAnalysis = document.getElementById('modelPaperAnalysis');
+            const modelVenue = document.getElementById('modelVenueScoring');
+            const modelFinal = document.getElementById('modelFinalReport');
+
+            if (modelQuery && modelQuery.value.trim()) {
+                formData.append('model_query_generation', modelQuery.value.trim());
+            }
+            if (modelAnalysis && modelAnalysis.value.trim()) {
+                formData.append('model_paper_analysis', modelAnalysis.value.trim());
+            }
+            if (modelVenue && modelVenue.value.trim()) {
+                formData.append('model_venue_scoring', modelVenue.value.trim());
+            }
+            if (modelFinal && modelFinal.value.trim()) {
+                formData.append('model_final_report', modelFinal.value.trim());
+            }
+
             const response = await fetch('/api/v1/batch', {
                 method: 'POST',
                 body: formData,

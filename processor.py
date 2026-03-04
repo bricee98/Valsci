@@ -9,7 +9,8 @@ from semantic_scholar.utils.searcher import S2Searcher
 from app.models.claim import Claim
 from app.models.paper import Paper
 from app.services.email_service import EmailService
-from app.services.openai_service import OpenAIService
+from app.services.llm.gateway import LLMGateway, LLMTask
+from app.services.llm.types import empty_usage, merge_usage, normalize_usage
 from app.services.paper_analyzer import PaperAnalyzer
 from app.services.evidence_scorer import EvidenceScorer
 import time
@@ -19,6 +20,7 @@ import aiofiles
 import aiofiles.os as async_os
 from contextlib import asynccontextmanager
 from filelock import FileLock
+import gzip
 
 # Configure logging
 logging.basicConfig(
@@ -36,7 +38,7 @@ class ValsciProcessor:
         self.paper_analyzer = PaperAnalyzer()
         self.evidence_scorer = EvidenceScorer()
         self.claim_processor = ClaimProcessor()
-        self.openai_service = OpenAIService()
+        self.ai_service = LLMGateway()
         self.email_service = EmailService()
 
         # In-memory storage for claims
@@ -61,6 +63,40 @@ class ValsciProcessor:
 
         self._active_locks = set()
 
+    def _ensure_claim_usage(self, claim_data: Dict) -> None:
+        current = claim_data.get("usage")
+        claim_data["usage"] = normalize_usage(current)
+        usage_by_stage = claim_data.get("usage_by_stage")
+        if not isinstance(usage_by_stage, dict):
+            usage_by_stage = {}
+        claim_data["usage_by_stage"] = usage_by_stage
+
+    def _add_claim_usage(self, claim_data: Dict, stage: str, usage: Dict) -> None:
+        self._ensure_claim_usage(claim_data)
+        claim_data["usage"] = merge_usage(claim_data["usage"], usage)
+        stage_usage = claim_data["usage_by_stage"].get(stage, empty_usage())
+        claim_data["usage_by_stage"][stage] = merge_usage(stage_usage, usage)
+
+    @staticmethod
+    def _get_model_override(claim_data: Dict, task: str):
+        overrides = claim_data.get("model_overrides")
+        if isinstance(overrides, dict):
+            return overrides.get(task)
+        return None
+
+    async def _attach_report_debug(self, batch_id: str, claim_id: str, claim_data: Dict, report: Dict) -> Dict:
+        self._ensure_claim_usage(claim_data)
+        issues = await self.ai_service.get_claim_issues(batch_id, claim_id)
+        debug_trace = await self.ai_service.build_debug_trace(batch_id, claim_id)
+
+        usage_summary = normalize_usage(claim_data.get("usage"))
+        report["issues"] = issues
+        report["debug_trace"] = debug_trace
+        report["usage_summary"] = usage_summary
+        report["usage_by_stage"] = claim_data.get("usage_by_stage", {})
+        report["usage_stats"] = usage_summary
+        return report
+
     async def _add_tokens_for_claim(self, claim_id: str, tokens: float, batch_id: str):
         """Track token usage for a claim and handle over-limit cases."""
         current_usage = self.claim_token_usage.get(claim_id, 0)
@@ -71,8 +107,16 @@ class ValsciProcessor:
             logger.warning(f"Claim {claim_id} exceeded token cap of {self.max_tokens_per_claim}. Marking as processed.")
             claim_data = self.claims_in_memory.get((batch_id, claim_id))
             if claim_data:
+                await self.ai_service.add_issue(
+                    batch_id=batch_id,
+                    claim_id=claim_id,
+                    severity="ERROR",
+                    stage="system",
+                    message="Claim processing stopped: token usage exceeded configured cap.",
+                    details={"max_tokens_per_claim": self.max_tokens_per_claim, "claim_tokens": new_usage},
+                )
                 claim_data['status'] = 'processed'
-                claim_data['report'] = {
+                report = {
                     "relevantPapers": [],
                     "explanation": "Stopped: token usage exceeded our cap.",
                     "claimRating": 0,
@@ -80,6 +124,7 @@ class ValsciProcessor:
                     "searchQueries": claim_data.get('semantic_scholar_queries', []),
                     "claim_text": claim_data.get('text', '')
                 }
+                claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
                 await self._save_processed_claim(claim_data, batch_id, claim_id)
 
     async def _save_processed_claim(self, claim_data: Dict, batch_id: str, claim_id: str):
@@ -92,6 +137,9 @@ class ValsciProcessor:
         saved_file_path = os.path.join(saved_batch_dir, f"{claim_id}.txt")
         async with aiofiles.open(saved_file_path, 'w') as f:
             await f.write(json.dumps(claim_data, indent=2))
+
+        if settings.Config.TRACE_COMPRESS_ON_COMPLETE:
+            await self._compress_trace_files(batch_id, claim_id)
         
         # Remove the original file from queued_jobs
         queued_file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
@@ -103,6 +151,23 @@ class ValsciProcessor:
         
         # Check if batch is complete
         await self._check_batch_completion(batch_id)
+
+    async def _compress_trace_files(self, batch_id: str, claim_id: str) -> None:
+        files = [
+            self.ai_service.get_trace_file_path(batch_id, claim_id),
+            self.ai_service.get_issues_file_path(batch_id, claim_id),
+        ]
+        for file_path in files:
+            if not os.path.exists(file_path):
+                continue
+            gz_path = file_path + ".gz"
+            if os.path.exists(gz_path):
+                continue
+            try:
+                with open(file_path, "rb") as src, gzip.open(gz_path, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+            except Exception as exc:
+                logger.warning(f"Could not compress trace file {file_path}: {exc}")
 
     async def _check_batch_completion(self, batch_id: str):
         """Check if all claims in a batch are processed and handle notifications."""
@@ -138,6 +203,7 @@ class ValsciProcessor:
     async def generate_search_queries(self, claim_data, batch_id: str, claim_id: str) -> None:
         """Generate search queries for a claim."""
         try:
+            self._ensure_claim_usage(claim_data)
             # Token tracking
             estimated_tokens = 1000 + (len(claim_data['text']) / 3.5)
             self.request_token_estimates.append({'tokens': estimated_tokens, 'timestamp': time.time()})
@@ -151,17 +217,28 @@ class ValsciProcessor:
             queries, usage = await self.s2_searcher.generate_search_queries(
                 claim_data['text'],
                 claim_data['search_config']['num_queries'],
-                ai_service=self.openai_service
+                ai_service=self.ai_service,
+                batch_id=batch_id,
+                claim_id=claim_id,
+                model_override=self._get_model_override(claim_data, LLMTask.QUERY_GENERATION),
             )
 
             # Update in-memory claim data
             claim_data = self.claims_in_memory[(batch_id, claim_id)]
             claim_data['semantic_scholar_queries'] = queries
             claim_data['status'] = 'ready_for_search'
-            claim_data['usage'] = usage
+            self._add_claim_usage(claim_data, LLMTask.QUERY_GENERATION, usage)
 
         except Exception as e:
             logger.error(f"Error generating search queries for claim {claim_id}: {str(e)}")
+            await self.ai_service.add_issue(
+                batch_id=batch_id,
+                claim_id=claim_id,
+                severity="ERROR",
+                stage=LLMTask.QUERY_GENERATION,
+                message="Search query generation failed.",
+                details={"exception_message": str(e)},
+            )
         finally:
             self.claims_query_generation_in_progress.discard(claim_id)
 
@@ -204,7 +281,15 @@ class ValsciProcessor:
             # Update claim data in memory
             if not papers:
                 claim_data['status'] = 'processed'
-                claim_data['report'] = {
+                await self.ai_service.add_issue(
+                    batch_id=batch_id,
+                    claim_id=claim_id,
+                    severity="WARN",
+                    stage="paper_search",
+                    message="No papers found for generated search queries.",
+                    details={"queries": queries},
+                )
+                report = {
                     "relevantPapers": [],
                     "explanation": "No relevant papers were found for this claim.",
                     "claimRating": 0,
@@ -212,6 +297,7 @@ class ValsciProcessor:
                     "searchQueries": queries,
                     "claim_text": claim_data['text']
                 }
+                claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
                 # Save final state since we're done
                 await self._save_processed_claim(claim_data, batch_id, claim_id)
             else:
@@ -220,6 +306,14 @@ class ValsciProcessor:
 
         except Exception as e:
             logger.error(f"Error searching for papers for claim {claim_id}: {str(e)}")
+            await self.ai_service.add_issue(
+                batch_id=batch_id,
+                claim_id=claim_id,
+                severity="ERROR",
+                stage="paper_search",
+                message="Paper search failed.",
+                details={"exception_message": str(e)},
+            )
         finally:
             self.claims_searching_in_progress.discard(claim_id)
 
@@ -243,8 +337,19 @@ class ValsciProcessor:
         # Check for token limit exceeded at the beginning
         if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
             logger.warning(f"Claim {claim_id} has exceeded token limit in analyze_claim. Marking as processed.")
+            await self.ai_service.add_issue(
+                batch_id=batch_id,
+                claim_id=claim_id,
+                severity="ERROR",
+                stage="system",
+                message="Claim processing stopped: token usage exceeded configured cap.",
+                details={
+                    "max_tokens_per_claim": self.max_tokens_per_claim,
+                    "claim_tokens": self.claim_token_usage.get(claim_id, 0),
+                },
+            )
             claim_data['status'] = 'processed'
-            claim_data['report'] = {
+            report = {
                 "relevantPapers": [],
                 "explanation": "Stopped: token usage exceeded our cap.",
                 "claimRating": 0,
@@ -252,6 +357,7 @@ class ValsciProcessor:
                 "searchQueries": claim_data.get('semantic_scholar_queries', []),
                 "claim_text": claim_data.get('text', '')
             }
+            claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
             await self._save_processed_claim(claim_data, batch_id, claim_id)
             return
             
@@ -287,6 +393,14 @@ class ValsciProcessor:
                     if content_dict is None or content_dict.get('text') is None:
                         # Add to inaccessible papers
                         claim_data['inaccessible_papers'].append(raw_paper)
+                        await self.ai_service.add_issue(
+                            batch_id=batch_id,
+                            claim_id=claim_id,
+                            severity="WARN",
+                            stage="paper_fetch",
+                            message="Paper content was not accessible.",
+                            details={"paper_id": str(corpus_id)},
+                        )
                         continue
 
                     raw_paper['content'] = content_dict['text']
@@ -398,6 +512,8 @@ class ValsciProcessor:
         """Analyze a single paper."""
         try:
             self.papers_analyzing_in_progress.add(raw_paper['corpusId'])
+            claim_data = self.claims_in_memory[(batch_id, claim_id)]
+            self._ensure_claim_usage(claim_data)
             
             # Estimate tokens before analysis
             estimated_tokens_for_analysis = 1000 + (len(raw_paper['content']) / 3.5)
@@ -411,7 +527,14 @@ class ValsciProcessor:
                 await self.paper_analyzer.analyze_relevance_and_extract(
                     raw_paper['content'], 
                     claim_text, 
-                    ai_service=self.openai_service
+                    ai_service=self.ai_service,
+                    batch_id=batch_id,
+                    claim_id=claim_id,
+                    paper_id=str(raw_paper.get('corpusId')),
+                    model_override=self._get_model_override(
+                        self.claims_in_memory[(batch_id, claim_id)],
+                        LLMTask.PAPER_ANALYSIS
+                    ),
                 )
             )
 
@@ -436,9 +559,7 @@ class ValsciProcessor:
                         'excerpt_pages': excerpt_pages
                     })
                     # Add usage to claim data
-                    claim_data['usage']['input_tokens'] += usage['input_tokens']
-                    claim_data['usage']['output_tokens'] += usage['output_tokens']
-                    claim_data['usage']['cost'] += usage['cost']
+                    self._add_claim_usage(claim_data, LLMTask.PAPER_ANALYSIS, usage)
                 else:
                     logger.warning(f"Skipping duplicate paper {raw_paper['corpusId']} for claim {claim_id}")
             else:
@@ -452,12 +573,18 @@ class ValsciProcessor:
                     })
 
                 # Add usage to claim data
-                claim_data['usage']['input_tokens'] += usage['input_tokens']
-                claim_data['usage']['output_tokens'] += usage['output_tokens']
-                claim_data['usage']['cost'] += usage['cost']
+                self._add_claim_usage(claim_data, LLMTask.PAPER_ANALYSIS, usage)
 
         except Exception as e:
             logger.error(f"Error analyzing paper {raw_paper['corpusId']}: {str(e)}")
+            await self.ai_service.add_issue(
+                batch_id=batch_id,
+                claim_id=claim_id,
+                severity="ERROR",
+                stage=LLMTask.PAPER_ANALYSIS,
+                message="Paper analysis failed.",
+                details={"paper_id": str(raw_paper.get('corpusId')), "exception_message": str(e)},
+            )
         finally:
             self.papers_analyzing_in_progress.discard(raw_paper['corpusId'])
 
@@ -474,14 +601,19 @@ class ValsciProcessor:
 
             # Get claim data to access bibliometric config
             claim_data = self.claims_in_memory[(batch_id, claim_id)]
+            self._ensure_claim_usage(claim_data)
             
             # Get bibliometric configuration
             bibliometric_config = claim_data.get('bibliometric_config', None)
 
             score, usage = await self.evidence_scorer.calculate_paper_weight(
                 processed_paper, 
-                ai_service=self.openai_service,
-                bibliometric_config=bibliometric_config
+                ai_service=self.ai_service,
+                bibliometric_config=bibliometric_config,
+                batch_id=batch_id,
+                claim_id=claim_id,
+                paper_id=str(paper_id),
+                model_override=self._get_model_override(claim_data, LLMTask.VENUE_SCORING),
             )
 
             print(f"Claim {claim_id} token usage as of scoring: {self.claim_token_usage[claim_id]}")
@@ -497,12 +629,18 @@ class ValsciProcessor:
                     break
 
             # Add usage to claim data
-            claim_data['usage']['input_tokens'] += usage['input_tokens']
-            claim_data['usage']['output_tokens'] += usage['output_tokens']
-            claim_data['usage']['cost'] += usage['cost']
+            self._add_claim_usage(claim_data, LLMTask.VENUE_SCORING, usage)
 
         except Exception as e:
             logger.error(f"Error scoring paper: {str(e)}")
+            await self.ai_service.add_issue(
+                batch_id=batch_id,
+                claim_id=claim_id,
+                severity="ERROR",
+                stage=LLMTask.VENUE_SCORING,
+                message="Evidence scoring failed for paper.",
+                details={"paper_id": str(processed_paper.get('paper', {}).get('corpusId')), "exception_message": str(e)},
+            )
         finally:
             if 'paper_id' in locals():
                 self.papers_scoring_in_progress.discard(paper_id)
@@ -512,6 +650,7 @@ class ValsciProcessor:
         try:
             # Get claim data from memory
             claim_data = self.claims_in_memory[(batch_id, claim_id)]
+            self._ensure_claim_usage(claim_data)
             
             # Estimate tokens for final report generation
             estimated_tokens_for_final_report = 2000 + (
@@ -544,7 +683,7 @@ class ValsciProcessor:
                     "claim_text": claim_data['text'],
                     "bibliometric_config": bibliometric_config
                 }
-                claim_data['report'] = report
+                claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
             else:
                 report, usage = await self.claim_processor.generate_final_report(
                     claim_data['text'],
@@ -552,30 +691,53 @@ class ValsciProcessor:
                     claim_data['non_relevant_papers'],
                     claim_data['inaccessible_papers'],
                     claim_data['semantic_scholar_queries'],
-                    ai_service=self.openai_service,
-                    bibliometric_config=bibliometric_config
+                    ai_service=self.ai_service,
+                    bibliometric_config=bibliometric_config,
+                    batch_id=batch_id,
+                    claim_id=claim_id,
+                    model_override=self._get_model_override(claim_data, LLMTask.FINAL_REPORT),
                 )
                 
                 claim_data['status'] = "processed"
                 # Add usage to claim data
-                claim_data['usage']['input_tokens'] += usage['input_tokens']
-                claim_data['usage']['output_tokens'] += usage['output_tokens']
-                claim_data['usage']['cost'] += usage['cost']
-
-                # Add usage to report
-                report['usage_stats'] = {
-                    'input_tokens': claim_data['usage']['input_tokens'],
-                    'output_tokens': claim_data['usage']['output_tokens'],
-                    'total_cost': claim_data['usage']['cost']
-                }
-
-                claim_data['report'] = report
+                self._add_claim_usage(claim_data, LLMTask.FINAL_REPORT, usage)
+                claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
 
             # Save the final processed claim
             await self._save_processed_claim(claim_data, batch_id, claim_id)
 
         except Exception as e:
             logger.error(f"Error preparing final report: {e}")
+            await self.ai_service.add_issue(
+                batch_id=batch_id,
+                claim_id=claim_id,
+                severity="ERROR",
+                stage=LLMTask.FINAL_REPORT,
+                message="Final report generation failed.",
+                details={"exception_message": str(e)},
+            )
+            claim_data = self.claims_in_memory.get((batch_id, claim_id))
+            if claim_data:
+                claim_data["status"] = "processed"
+                fallback_report = {
+                    "relevantPapers": [],
+                    "nonRelevantPapers": self.claim_processor._format_non_relevant_papers(
+                        claim_data.get("non_relevant_papers", [])
+                    ),
+                    "inaccessiblePapers": self.claim_processor._format_inaccessible_papers(
+                        claim_data.get("inaccessible_papers", [])
+                    ),
+                    "explanation": f"Error generating final report: {str(e)}",
+                    "claimRating": -1,
+                    "timing_stats": {},
+                    "searchQueries": claim_data.get("semantic_scholar_queries", []),
+                    "claim_text": claim_data.get("text", ""),
+                    "bibliometric_config": claim_data.get("bibliometric_config"),
+                }
+                claim_data["report"] = await self._attach_report_debug(
+                    batch_id, claim_id, claim_data, fallback_report
+                )
+                await self._save_processed_claim(claim_data, batch_id, claim_id)
         finally:
             self.claims_final_reporting_in_progress.discard(claim_id)
 
@@ -608,14 +770,28 @@ class ValsciProcessor:
                             # Load new claim into memory
                             async with aiofiles.open(file_path, 'r') as f:
                                 claim_data = json.loads(await f.read())
+                                self._ensure_claim_usage(claim_data)
                                 self.claims_in_memory[(batch_id, claim_id)] = claim_data
+
+                        self._ensure_claim_usage(claim_data)
                         
                         # Check for token limit exceeded, regardless of status
                         if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
                             if claim_data['status'] != 'processed':
                                 logger.warning(f"Claim {claim_id} exceeded token cap but wasn't marked as processed. Fixing.")
                                 claim_data['status'] = 'processed'
-                                claim_data['report'] = {
+                                await self.ai_service.add_issue(
+                                    batch_id=batch_id,
+                                    claim_id=claim_id,
+                                    severity="ERROR",
+                                    stage="system",
+                                    message="Claim processing stopped: token usage exceeded configured cap.",
+                                    details={
+                                        "max_tokens_per_claim": self.max_tokens_per_claim,
+                                        "claim_tokens": self.claim_token_usage.get(claim_id, 0),
+                                    },
+                                )
+                                report = {
                                     "relevantPapers": [],
                                     "explanation": "Stopped: token usage exceeded our cap.",
                                     "claimRating": 0,
@@ -623,6 +799,9 @@ class ValsciProcessor:
                                     "searchQueries": claim_data.get('semantic_scholar_queries', []),
                                     "claim_text": claim_data.get('text', '')
                                 }
+                                claim_data['report'] = await self._attach_report_debug(
+                                    batch_id, claim_id, claim_data, report
+                                )
                                 await self._save_processed_claim(claim_data, batch_id, claim_id)
                                 continue
                         

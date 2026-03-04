@@ -3,13 +3,24 @@ from typing import Dict, List
 from app.models.paper import Paper
 from textwrap import dedent
 from app.config.settings import Config
+from app.services.llm.gateway import LLMTask
+from app.services.llm.types import empty_usage
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class EvidenceScorer:
 
-    async def calculate_paper_weight(self, processed_paper, ai_service, bibliometric_config=None) -> float:
+    async def calculate_paper_weight(
+        self,
+        processed_paper,
+        ai_service,
+        bibliometric_config=None,
+        batch_id=None,
+        claim_id=None,
+        paper_id=None,
+        model_override=None,
+    ) -> float:
         """Calculate the weight/reliability score for a paper.
         
         Args:
@@ -27,17 +38,17 @@ class EvidenceScorer:
             # Check if bibliometrics should be used
             if bibliometric_config is not None and not bibliometric_config.get('use_bibliometrics', True):
                 # Return neutral score if bibliometrics are disabled
-                return 0.5, {'input_tokens': 0, 'output_tokens': 0, 'cost': 0}
+                return 0.5, empty_usage()
             
             # Add validation for processed_paper
             if processed_paper is None:
                 logger.error("processed_paper is None")
-                return 0.0, {'input_tokens': 0, 'output_tokens': 0, 'cost': 0}
+                return 0.0, empty_usage()
             
             # Add validation for paper key
             if 'paper' not in processed_paper:
                 logger.error(f"No 'paper' key in processed_paper: {processed_paper}")
-                return 0.0, {'input_tokens': 0, 'output_tokens': 0, 'cost': 0}
+                return 0.0, empty_usage()
 
             # Get the nested paper data
             paper = processed_paper['paper']
@@ -45,7 +56,7 @@ class EvidenceScorer:
             # Add validation for paper object
             if paper is None:
                 logger.error("paper object is None")
-                return 0.0, {'input_tokens': 0, 'output_tokens': 0, 'cost': 0}
+                return 0.0, empty_usage()
             
             # Log the paper structure for debugging
             logger.debug(f"Processing paper structure: {paper}")
@@ -53,7 +64,14 @@ class EvidenceScorer:
             # Get metrics
             avg_h_index = self._get_author_h_index(paper.get('authors', []))
             citation_impact = self._calculate_citation_impact(paper)
-            venue_impact, usage = await self._calculate_venue_impact(paper.get('venue'), ai_service)
+            venue_impact, usage = await self._calculate_venue_impact(
+                paper_journal=paper.get('venue'),
+                ai_service=ai_service,
+                batch_id=batch_id,
+                claim_id=claim_id,
+                paper_id=paper_id or paper.get('corpusId'),
+                model_override=model_override,
+            )
             
             # Normalize scores
             normalized_h_index = min(avg_h_index / 50, 1.0)  # Adjusted threshold since we're using average
@@ -100,7 +118,7 @@ class EvidenceScorer:
 
         except Exception as e:
             logger.error(f"Error calculating paper weight: {str(e)}")
-            return 0.0, {'input_tokens': 0, 'output_tokens': 0, 'cost': 0}
+            return 0.0, empty_usage(is_estimated=True)
 
     def _get_author_h_index(self, authors: List[Dict]) -> float:
         """Get the average h-index among the paper's authors (first and last only)."""
@@ -134,11 +152,19 @@ class EvidenceScorer:
             logger.error(f"Error calculating citation impact: {str(e)}")
             return 0
 
-    async def _calculate_venue_impact(self, paper_journal, ai_service) -> float:
+    async def _calculate_venue_impact(
+        self,
+        paper_journal,
+        ai_service,
+        batch_id=None,
+        claim_id=None,
+        paper_id=None,
+        model_override=None,
+    ) -> float:
         """Calculate venue impact using GPT to estimate journal/conference quality."""
         if not paper_journal:
             # Return tuple of (score, usage) instead of just score
-            return 0.0, {'input_tokens': 0, 'output_tokens': 0, 'cost': 0}
+            return 0.0, empty_usage()
 
         try:
             system_prompt = """
@@ -164,7 +190,15 @@ class EvidenceScorer:
             9-10: Top venues in the field
             """
 
-            result = await ai_service.generate_json_async(prompt, system_prompt)
+            result = await ai_service.chat_json(
+                user_prompt=prompt,
+                system_prompt=system_prompt,
+                task=LLMTask.VENUE_SCORING,
+                batch_id=batch_id,
+                claim_id=claim_id,
+                paper_id=paper_id,
+                model_override=model_override,
+            )
             response = result['content']
             usage = result['usage']
             score = response.get('score', 0)
@@ -174,4 +208,4 @@ class EvidenceScorer:
         except Exception as e:
             logger.error(f"Error calculating venue impact for {paper_journal}: {str(e)}")
             # Return tuple of (score, usage) instead of just score
-            return 0.0, {'input_tokens': 0, 'output_tokens': 0, 'cost': 0}
+            return 0.0, empty_usage(is_estimated=True)

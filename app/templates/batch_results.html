@@ -100,7 +100,7 @@
                         claimRating: report.claimRating !== undefined && report.claimRating !== null ? report.claimRating : null,
                         supporting_papers_count: report.relevantPapers?.length || 0,
                         non_relevant_papers_count: report.nonRelevantPapers?.length || 0,
-                        price: report.usage_stats?.total_cost || 0,
+                        price: report.usage_summary?.cost_usd || report.usage_stats?.cost_usd || report.usage_stats?.total_cost || 0,
                         claim_id: claim.claim_id
                     };
                 }

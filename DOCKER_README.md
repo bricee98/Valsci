@@ -41,7 +41,7 @@ This guide explains how to run Valsci using Docker containers.
 - **Shared Volumes**:
   - `semantic_scholar_data`: Stores downloaded Semantic Scholar datasets
   - `queued_jobs`: Stores claims waiting to be processed
-  - `saved_jobs`: Stores processed claim results
+  - `saved_jobs`: Stores processed claim results, plus per-claim `traces/*.jsonl` and `issues/*.jsonl`
 
 ## Directory Structure in the Container
 
@@ -49,7 +49,7 @@ All application code is mounted in the `/valsci` directory inside the containers
 - `/valsci/app/`: Contains the Flask application code
 - `/valsci/semantic_scholar/`: Contains the Semantic Scholar utilities
 - `/valsci/queued_jobs/`: Directory for claims waiting to be processed
-- `/valsci/saved_jobs/`: Directory for processed claim results
+- `/valsci/saved_jobs/`: Directory for processed claim results and LLM debug traces/issues
 
 ## Downloading Semantic Scholar Datasets
 
@@ -108,7 +108,17 @@ The application is configured through `app/config/env_vars.json`. See the commen
 - `REQUIRE_PASSWORD`: Enable password protection
 - `ACCESS_PASSWORD`: Password for accessing the application
 - `ENABLE_EMAIL_NOTIFICATIONS`: Enable email notifications
+- `LOCAL_BACKEND`: `ollama`, `llamacpp`, `vllm`, or `generic_openai_compat` when `LLM_PROVIDER` is `local`
+- `LLM_ROUTING`: Task-to-model routing and fallback configuration
+- `TRACE_ENABLED` / `TRACE_EMBED_MODE`: Control trace persistence and report embedding behavior
 - And more...
+
+### Ollama from Docker
+
+If Ollama runs on your host machine instead of inside Compose:
+
+- macOS/Windows: set `LLM_BASE_URL` to `http://host.docker.internal:11434/v1`
+- Linux: use your Docker bridge gateway IP or run Ollama as another Compose service
 
 ## Persistent Data
 

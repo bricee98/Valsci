@@ -175,3 +175,7 @@ cookies/
 semantic_scholar/datasets
 
 venv/
+
+# Codebase dump
+codebase_dump.txt
+dump_project.py

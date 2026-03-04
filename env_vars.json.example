@@ -6,6 +6,9 @@
     "LLM_PROVIDER": "openai",
     "LLM_API_KEY": "your_api_key",
     "LLM_EVALUATION_MODEL": "gpt-4o",
+    "LLM_BASE_URL": "https://api.openai.com/v1",
+    "LOCAL_BACKEND": "",
+    "LOCAL_MODEL_CONTEXT_OVERRIDE": 0,
     
     "REQUIRE_PASSWORD": "true",
     "ACCESS_PASSWORD": "your_access_password",
@@ -19,5 +22,54 @@
     "EMAIL_APP_PASSWORD": "",
     "SMTP_SERVER": "smtp.gmail.com",
     "SMTP_PORT": "587",
-    "BASE_URL": "http://localhost:3000"
+    "BASE_URL": "http://localhost:3000",
+
+    "TRACE_ENABLED": true,
+    "TRACE_DIR": "saved_jobs",
+    "TRACE_EMBED_MODE": "capped",
+    "TRACE_EMBED_MAX_BYTES": 2000000,
+    "TRACE_STACKTRACE_MAX_BYTES": 4000,
+    "TRACE_ALWAYS_WRITE_FILES": true,
+    "TRACE_COMPRESS_ON_COMPLETE": false,
+
+    "LLM_CONTEXT_SAFETY_MARGIN_TOKENS": 256,
+    "LLM_MAX_CONCURRENCY": 5,
+    "LLM_REQUESTS_PER_MINUTE": 240,
+    "LLM_TOKENS_PER_MINUTE": 2000000,
+    "LLM_MAX_RETRIES": 3,
+    "LLM_BACKOFF_BASE_SECONDS": 1.0,
+    "LLM_BACKOFF_MAX_SECONDS": 30.0,
+    "LLM_BACKOFF_JITTER": 0.5,
+    "LLM_TIMEOUT_SECONDS": 180,
+
+    "LLM_ROUTING": {
+        "enabled": true,
+        "locked_models": false,
+        "tasks": {
+            "query_generation": {
+                "preferred_models": ["gpt-4o-mini"],
+                "fallback_models": ["gpt-4o"],
+                "max_output_tokens": 800
+            },
+            "paper_analysis": {
+                "preferred_models": ["gpt-4o"],
+                "fallback_models": ["gpt-5-mini"],
+                "max_output_tokens": 1200,
+                "min_context_tokens": 16000
+            },
+            "venue_scoring": {
+                "preferred_models": ["gpt-4o-mini"],
+                "fallback_models": ["gpt-4o"],
+                "max_output_tokens": 120
+            },
+            "final_report": {
+                "preferred_models": ["gpt-5"],
+                "fallback_models": ["gpt-4o"],
+                "max_output_tokens": 1800
+            }
+        }
+    },
+
+    "MODEL_REGISTRY_OVERRIDES": {},
+    "OLLAMA_SHOW_URL": ""
 }

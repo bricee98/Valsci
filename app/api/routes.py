@@ -28,6 +28,31 @@ logger = logging.getLogger(__name__)
 # Initialize EmailService at module level
 email_service = EmailService()
 
+
+def _trace_root_dir() -> str:
+    trace_dir = current_app.config.get('TRACE_DIR', SAVED_JOBS_DIR)
+    return trace_dir or SAVED_JOBS_DIR
+
+
+def _find_claim_artifact(batch_id: str, artifact_dir: str, claim_id: str, extension: str):
+    """Resolve trace/issue artifact path with TRACE_DIR support and saved_jobs fallback."""
+    candidates = [
+        os.path.join(_trace_root_dir(), batch_id, artifact_dir, f"{claim_id}.{extension}"),
+        os.path.join(_trace_root_dir(), batch_id, artifact_dir, f"{claim_id}.{extension}.gz"),
+    ]
+    # Backward compatibility fallback
+    candidates.extend(
+        [
+            os.path.join(SAVED_JOBS_DIR, batch_id, artifact_dir, f"{claim_id}.{extension}"),
+            os.path.join(SAVED_JOBS_DIR, batch_id, artifact_dir, f"{claim_id}.{extension}.gz"),
+        ]
+    )
+
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
+
 def save_claim_to_file(claim, batch_id, claim_id):
     claim_dir = os.path.join(QUEUED_JOBS_DIR, batch_id)
     os.makedirs(claim_dir, exist_ok=True)
@@ -44,6 +69,14 @@ def save_claim_to_file(claim, batch_id, claim_id):
             "claim_id": claim_id,
             "search_config": claim.search_config,
             "bibliometric_config": claim.bibliometric_config,
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "cost_usd": 0.0,
+                "is_estimated": False
+            },
+            "usage_by_stage": {},
             "additional_info": ""
         }, f, indent=2)
 
@@ -123,6 +156,24 @@ def get_claim_report(batch_id, claim_id):
             }), 200
     return jsonify({"error": "Claim not found"}), 404
 
+@api.route('/api/v1/claims/<batch_id>/<claim_id>/trace', methods=['GET'])
+@auth_required
+def download_claim_trace(batch_id, claim_id):
+    trace_file = _find_claim_artifact(batch_id, "traces", claim_id, "jsonl")
+    if not trace_file or not os.path.exists(trace_file):
+        return jsonify({"error": "Trace not found"}), 404
+    download_name = f"{claim_id}_trace.jsonl.gz" if trace_file.endswith(".gz") else f"{claim_id}_trace.jsonl"
+    return send_file(trace_file, as_attachment=True, download_name=download_name)
+
+@api.route('/api/v1/claims/<batch_id>/<claim_id>/issues', methods=['GET'])
+@auth_required
+def download_claim_issues(batch_id, claim_id):
+    issue_file = _find_claim_artifact(batch_id, "issues", claim_id, "jsonl")
+    if not issue_file or not os.path.exists(issue_file):
+        return jsonify({"error": "Issues not found"}), 404
+    download_name = f"{claim_id}_issues.jsonl.gz" if issue_file.endswith(".gz") else f"{claim_id}_issues.jsonl"
+    return send_file(issue_file, as_attachment=True, download_name=download_name)
+
 @api.route('/api/v1/batch', methods=['POST'])
 @auth_required
 def start_batch_job():
@@ -142,6 +193,14 @@ def start_batch_job():
         'citation_impact_weight': float(request.form.get('citationImpactWeight', 0.4)),
         'venue_impact_weight': float(request.form.get('venueImpactWeight', 0.2))
     }
+
+    model_overrides = {
+        "query_generation": request.form.get("model_query_generation", "").strip() or None,
+        "paper_analysis": request.form.get("model_paper_analysis", "").strip() or None,
+        "venue_scoring": request.form.get("model_venue_scoring", "").strip() or None,
+        "final_report": request.form.get("model_final_report", "").strip() or None,
+    }
+    model_overrides = {k: v for k, v in model_overrides.items() if v}
     
     # Get email notification settings
     notification_email = request.form.get('email')
@@ -191,6 +250,15 @@ def start_batch_job():
                     "claim_id": claim_id,
                     "search_config": claim.search_config,
                     "bibliometric_config": bibliometric_config,
+                    "model_overrides": model_overrides,
+                    "usage": {
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "total_tokens": 0,
+                        "cost_usd": 0.0,
+                        "is_estimated": False
+                    },
+                    "usage_by_stage": {},
                     "additional_info": ""
                 }, f, indent=2)
             
@@ -520,13 +588,22 @@ def browse_batches():
             "details": str(e)
         }), 500
 
+@api.route('/api/v1/delete/claim/<batch_id>/<claim_id>', methods=['DELETE'])
 @api.route('/api/v1/delete/claim/<claim_id>', methods=['DELETE'])
 @auth_required
-def delete_claim(claim_id):
+def delete_claim(claim_id, batch_id=None):
     try:
-        for root, dirs, files in os.walk(SAVED_JOBS_DIR):
-            if f"{claim_id}.txt" in files:
-                os.remove(os.path.join(root, f"{claim_id}.txt"))
+        candidate_files = []
+        if batch_id:
+            candidate_files.append(os.path.join(SAVED_JOBS_DIR, batch_id, f"{claim_id}.txt"))
+        else:
+            for root, dirs, files in os.walk(SAVED_JOBS_DIR):
+                if f"{claim_id}.txt" in files:
+                    candidate_files.append(os.path.join(root, f"{claim_id}.txt"))
+
+        for file_path in candidate_files:
+            if os.path.exists(file_path):
+                os.remove(file_path)
                 return jsonify({
                     "message": "Claim deleted successfully",
                     "claim_id": claim_id
@@ -570,26 +647,36 @@ def delete_batch(batch_id):
             "details": str(e)
         }), 500
 
+@api.route('/api/v1/claims/<batch_id>/<claim_id>/download_citations', methods=['GET'])
 @api.route('/api/v1/claims/<claim_id>/download_citations', methods=['GET'])
 @auth_required
-def download_citations(claim_id):
+def download_citations(claim_id, batch_id=None):
     try:
-        # Find and load the claim data
-        for root, dirs, files in os.walk(SAVED_JOBS_DIR):
-            if f"{claim_id}.txt" in files:
-                with open(os.path.join(root, f"{claim_id}.txt"), 'r') as f:
-                    claim_data = json.load(f)
-                    report = json.loads(claim_data.get('additional_info', '{}'))
-                    citations = []
-                    
-                    for paper in report.get('supportingPapers', []):
-                        for citation in paper.get('citations', []):
+        candidate_files = []
+        if batch_id:
+            candidate_files.append(os.path.join(SAVED_JOBS_DIR, batch_id, f"{claim_id}.txt"))
+        else:
+            for root, dirs, files in os.walk(SAVED_JOBS_DIR):
+                if f"{claim_id}.txt" in files:
+                    candidate_files.append(os.path.join(root, f"{claim_id}.txt"))
+
+        for claim_file in candidate_files:
+            if not os.path.exists(claim_file):
+                continue
+            with open(claim_file, 'r') as f:
+                claim_data = json.load(f)
+                report = claim_data.get('report', {})
+                citations = []
+
+                for paper in report.get('relevantPapers', []):
+                    for citation in paper.get('citations', []):
+                        if citation.get('citation'):
                             citations.append(citation['citation'])
-                    
-                    citation_file_path = os.path.join(SAVED_JOBS_DIR, f"{claim_id}_citations.ris")
-                    with open(citation_file_path, 'w') as citation_file:
-                        citation_file.write("\n\n".join(citations))
-                    return send_file(citation_file_path, as_attachment=True, download_name=f"{claim_id}_citations.ris")
+
+                citation_file_path = os.path.join(SAVED_JOBS_DIR, f"{claim_id}_citations.ris")
+                with open(citation_file_path, 'w') as citation_file:
+                    citation_file.write("\n\n".join(citations))
+                return send_file(citation_file_path, as_attachment=True, download_name=f"{claim_id}_citations.ris")
         
         return jsonify({"error": "Claim not found"}), 404
     finally:
@@ -659,13 +746,42 @@ def generate_markdown_report(claim_data):
             md_content.append(f"- {query}\n")
     
     # Add usage stats if available
-    if report.get('usage_stats'):
-        stats = report['usage_stats']
+    usage = report.get('usage_summary') or report.get('usage_stats')
+    if usage:
         md_content.append("\n## Usage Statistics\n")
-        md_content.append(f"- Prompt Tokens: {stats.get('prompt_tokens', 0)}\n")
-        md_content.append(f"- Completion Tokens: {stats.get('completion_tokens', 0)}\n")
-        md_content.append(f"- Total Tokens: {stats.get('total_tokens', 0)}\n")
-        md_content.append(f"- Estimated Cost: ${stats.get('total_cost', 0):.4f}\n")
+        md_content.append(f"- Input Tokens: {usage.get('input_tokens', 0)}\n")
+        md_content.append(f"- Output Tokens: {usage.get('output_tokens', 0)}\n")
+        md_content.append(f"- Total Tokens: {usage.get('total_tokens', 0)}\n")
+        md_content.append(f"- Estimated Cost: ${usage.get('cost_usd', 0):.4f}\n")
+        md_content.append(f"- Token Counts Estimated: {usage.get('is_estimated', False)}\n")
+
+    usage_by_stage = report.get('usage_by_stage')
+    if usage_by_stage:
+        md_content.append("\n## Usage By Stage\n")
+        for stage, stats in usage_by_stage.items():
+            md_content.append(
+                f"- {stage}: in={stats.get('input_tokens', 0)} out={stats.get('output_tokens', 0)} "
+                f"total={stats.get('total_tokens', 0)} cost=${stats.get('cost_usd', 0):.4f}\n"
+            )
+
+    if report.get('issues'):
+        md_content.append("\n## Issues\n")
+        for issue in report['issues']:
+            md_content.append(
+                f"- [{issue.get('severity', 'INFO')}] {issue.get('stage', 'system')}: {issue.get('message', '')}\n"
+            )
+
+    debug_trace = report.get('debug_trace')
+    if debug_trace:
+        summary = debug_trace.get('summary', {})
+        md_content.append("\n## Debug Trace Summary\n")
+        md_content.append(f"- LLM Calls: {summary.get('llm_calls', 0)}\n")
+        md_content.append(f"- Models Used: {', '.join(summary.get('models_used', []))}\n")
+        md_content.append(f"- Retries: {summary.get('retries', 0)}\n")
+        md_content.append(
+            f"- Context Overflow Prevented: {summary.get('context_overflow_prevented', 0)}\n"
+        )
+        md_content.append(f"- Trace File: {debug_trace.get('trace_file', '')}\n")
     
     # Add bibliometric configuration if available
     if bibliometric_config:

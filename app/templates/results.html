@@ -10,8 +10,11 @@
 <body>
     <div class="container">
         <h1>Claim Report</h1>
+        <div id="issuesBanner"></div>
         <div id="reportContent"></div>
         <div id="usageStats"></div>
+        <div id="usageByStage"></div>
+        <div id="debugTrace"></div>
         <div id="timingStats">
             <h3>Processing Time Breakdown:</h3>
             <div class="timing-breakdown" id="timingBreakdown">
@@ -19,6 +22,8 @@
             </div>
         </div>
         <button id="downloadReport">Download Report</button>
+        <button id="downloadTrace">Download Trace</button>
+        <button id="downloadIssues">Download Issues</button>
         <button id="downloadCitations">Download Citations</button>
         <button id="deleteClaimButton">Delete Claim</button>
     </div>
@@ -44,6 +49,26 @@
             border: 1px solid #ddd;
             border-radius: 4px;
         }
+        .issues-banner {
+            margin: 12px 0;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .issues-banner.error {
+            background: #f8d7da;
+            border: 1px solid #f1aeb5;
+        }
+        .issues-banner.warn {
+            background: #fff3cd;
+            border: 1px solid #ffe69c;
+        }
+        .trace-box {
+            margin: 14px 0;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: #fafafa;
+        }
     </style>
     <div id="bibliometricConfigContainer" class="result-section" style="display: none;">
         <h2>Bibliometric Configuration</h2>
@@ -53,6 +78,9 @@
         const urlParams = new URLSearchParams(window.location.search);
         const claimId = urlParams.get('claim_id');
         const reportContent = document.getElementById('reportContent');
+        const issuesBanner = document.getElementById('issuesBanner');
+        const usageByStageContainer = document.getElementById('usageByStage');
+        const debugTraceContainer = document.getElementById('debugTrace');
 
         function getRatingText(rating) {
             if (rating === null || rating === undefined) return 'No Rating';
@@ -76,9 +104,94 @@
             return '#6c757d'; // gray
         }
 
+        function renderIssues(issues) {
+            if (!Array.isArray(issues) || issues.length === 0) {
+                issuesBanner.innerHTML = '';
+                return;
+            }
+
+            const errorCount = issues.filter(i => i.severity === 'ERROR').length;
+            const warnCount = issues.filter(i => i.severity === 'WARN').length;
+            const cls = errorCount > 0 ? 'error' : 'warn';
+            const title = errorCount > 0
+                ? `${errorCount} error(s) and ${warnCount} warning(s) surfaced during processing`
+                : `${warnCount} warning(s) surfaced during processing`;
+
+            issuesBanner.innerHTML = `
+                <div class="issues-banner ${cls}">
+                    <strong>${title}</strong>
+                    <ul>
+                        ${issues.map(issue => `<li>[${issue.severity}] ${issue.stage}: ${issue.message}</li>`).join('')}
+                    </ul>
+                </div>
+            `;
+        }
+
+        function renderDebugTrace(debugTrace) {
+            if (!debugTrace || !debugTrace.summary) {
+                debugTraceContainer.innerHTML = '';
+                return;
+            }
+
+            const summary = debugTrace.summary;
+            debugTraceContainer.innerHTML = `
+                <div class="trace-box">
+                    <h3>Debug & Trace</h3>
+                    <p>LLM Calls: ${summary.llm_calls || 0}</p>
+                    <p>Models Used: ${(summary.models_used || []).join(', ')}</p>
+                    <p>Total Input Tokens: ${summary.total_input_tokens || 0}</p>
+                    <p>Total Output Tokens: ${summary.total_output_tokens || 0}</p>
+                    <p>Total Cost: $${(summary.total_cost_usd || 0).toFixed(4)}</p>
+                    <p>Retries: ${summary.retries || 0}</p>
+                    <p>Context Overflow Prevented: ${summary.context_overflow_prevented || 0}</p>
+                    <p>Intentional Truncations: ${summary.intentional_truncations || 0}</p>
+                    <p>Trace File: ${debugTrace.trace_file || ''}</p>
+                </div>
+            `;
+        }
+
+        function renderUsageByStage(usageByStage) {
+            if (!usageByStage || typeof usageByStage !== 'object' || Object.keys(usageByStage).length === 0) {
+                usageByStageContainer.innerHTML = '';
+                return;
+            }
+
+            const rows = Object.entries(usageByStage).map(([stage, stats]) => `
+                <tr>
+                    <td>${stage}</td>
+                    <td>${stats.input_tokens || 0}</td>
+                    <td>${stats.output_tokens || 0}</td>
+                    <td>${stats.total_tokens || 0}</td>
+                    <td>$${(stats.cost_usd || 0).toFixed(4)}</td>
+                    <td>${(stats.is_estimated || false) ? 'Yes' : 'No'}</td>
+                </tr>
+            `).join('');
+
+            usageByStageContainer.innerHTML = `
+                <div class="trace-box">
+                    <h3>Usage By Stage</h3>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Stage</th>
+                                <th>Input</th>
+                                <th>Output</th>
+                                <th>Total</th>
+                                <th>Cost</th>
+                                <th>Estimated</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>
+            `;
+        }
+
         function displayReport(data) {
             const ratingText = getRatingText(data.report?.claimRating);
             const ratingColor = getRatingColor(data.report?.claimRating);
+            renderIssues(data.report?.issues || []);
+            renderDebugTrace(data.report?.debug_trace || null);
             
             marked.setOptions({
                 sanitize: true,
@@ -218,14 +331,16 @@
                 </div>
             `;
 
-            if (data.report?.usage_stats) {
-                const stats = data.report.usage_stats;
+            const usage = data.report?.usage_summary || data.report?.usage_stats;
+            renderUsageByStage(data.report?.usage_by_stage || {});
+            if (usage) {
                 const usageStatsHtml = `
-                    <h3>OpenAI API Usage:</h3>
-                    <p>Prompt Tokens: ${stats.prompt_tokens || 0}</p>
-                    <p>Completion Tokens: ${stats.completion_tokens || 0}</p>
-                    <p>Total Tokens: ${stats.total_tokens || 0}</p>
-                    <p>Estimated Cost: $${(stats.total_cost || 0).toFixed(4)}</p>
+                    <h3>LLM Usage:</h3>
+                    <p>Input Tokens: ${usage.input_tokens || 0}</p>
+                    <p>Output Tokens: ${usage.output_tokens || 0}</p>
+                    <p>Total Tokens: ${usage.total_tokens || 0}</p>
+                    <p>Estimated Cost: $${(usage.cost_usd || 0).toFixed(4)}</p>
+                    <p>Token Counts Estimated: ${(usage.is_estimated || false) ? 'Yes' : 'No'}</p>
                 `;
                 document.getElementById('usageStats').innerHTML = usageStatsHtml;
             } else {
@@ -275,6 +390,20 @@
             const batchId = urlParams.get('batch_id');
             if (claimId && batchId) {
                 window.location.href = `/api/v1/claims/${batchId}/${claimId}/download_md`;
+            }
+        });
+
+        document.getElementById('downloadTrace').addEventListener('click', function() {
+            const batchId = urlParams.get('batch_id');
+            if (claimId && batchId) {
+                window.location.href = `/api/v1/claims/${batchId}/${claimId}/trace`;
+            }
+        });
+
+        document.getElementById('downloadIssues').addEventListener('click', function() {
+            const batchId = urlParams.get('batch_id');
+            if (claimId && batchId) {
+                window.location.href = `/api/v1/claims/${batchId}/${claimId}/issues`;
             }
         });
 

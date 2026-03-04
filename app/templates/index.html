@@ -110,6 +110,27 @@
                     <input type="number" id="resultsPerQuery" name="resultsPerQuery" min="1" max="10" value="5">
                 </div>
             </div>
+
+            <div class="config-panel">
+                <h3>Model Overrides (Optional)</h3>
+                <p class="subtext">Set task-specific models for this batch. Leave blank to use routing defaults.</p>
+                <div class="config-group">
+                    <label for="modelQueryGeneration">Query Generation Model:</label>
+                    <input type="text" id="modelQueryGeneration" placeholder="e.g. gpt-4o-mini">
+                </div>
+                <div class="config-group">
+                    <label for="modelPaperAnalysis">Paper Analysis Model:</label>
+                    <input type="text" id="modelPaperAnalysis" placeholder="e.g. gpt-4o">
+                </div>
+                <div class="config-group">
+                    <label for="modelVenueScoring">Venue Scoring Model:</label>
+                    <input type="text" id="modelVenueScoring" placeholder="e.g. gpt-4o-mini">
+                </div>
+                <div class="config-group">
+                    <label for="modelFinalReport">Final Report Model:</label>
+                    <input type="text" id="modelFinalReport" placeholder="e.g. gpt-5">
+                </div>
+            </div>
             
             <!-- Bibliometric Configuration -->
             <div class="config-panel">

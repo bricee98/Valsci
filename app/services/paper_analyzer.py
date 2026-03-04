@@ -1,6 +1,7 @@
 from typing import List, Tuple, Optional
 from app.models.claim import Claim
-from app.services.openai_service import OpenAIService
+from app.services.llm.gateway import LLMTask
+from app.services.llm.types import empty_usage
 from textwrap import dedent
 import logging
 import re
@@ -13,7 +14,11 @@ class PaperAnalyzer:
         self, 
         paper_content: str, 
         claim_text: str,
-        ai_service
+        ai_service,
+        batch_id: Optional[str] = None,
+        claim_id: Optional[str] = None,
+        paper_id: Optional[str] = None,
+        model_override: Optional[str] = None,
     ) -> Tuple[float, List[str], List[str], Optional[str], List[int]]:
         """
         Analyze paper content for relevance to the claim and extract supporting, contradicting, or generally relevant evidence.
@@ -26,9 +31,6 @@ class PaperAnalyzer:
         - list of page numbers for excerpts
         - usage stats
         """
-        
-        # Clean and format the content
-        cleaned_content = self._clean_content(paper_content)
         
         # Prepare the analysis prompt
         system_prompt = dedent("""
@@ -57,6 +59,29 @@ class PaperAnalyzer:
             }
         """).strip()
 
+        cleaned_content, truncation = self._clean_content_with_budget(
+            content=paper_content,
+            claim_text=claim_text,
+            system_prompt=system_prompt,
+            ai_service=ai_service,
+            model_hint=model_override,
+            reserved_output_tokens=1200,
+        )
+
+        if truncation.get("truncated"):
+            await ai_service.add_issue(
+                batch_id=batch_id,
+                claim_id=claim_id,
+                severity="WARN",
+                stage=LLMTask.PAPER_ANALYSIS,
+                message="Paper content truncation applied to fit context window.",
+                details={
+                    "paper_id": paper_id,
+                    "original_tokens": truncation.get("original_tokens"),
+                    "kept_tokens": truncation.get("kept_tokens"),
+                },
+            )
+
         user_prompt = dedent(f"""
             Analyze this paper content for both direct and mechanistic evidence related to the following claim:
 
@@ -84,7 +109,15 @@ class PaperAnalyzer:
 
         try:
             # Use the async version of generate_json
-            result = await ai_service.generate_json_async(user_prompt, system_prompt)
+            result = await ai_service.chat_json(
+                user_prompt=user_prompt,
+                system_prompt=system_prompt,
+                task=LLMTask.PAPER_ANALYSIS,
+                batch_id=batch_id,
+                claim_id=claim_id,
+                paper_id=paper_id,
+                model_override=model_override,
+            )
             response = result['content']
             usage = result['usage']
             
@@ -108,7 +141,7 @@ class PaperAnalyzer:
         except Exception as e:
             logger.error(f"Error analyzing paper content: {str(e)}")
             # Return empty usage stats in error case
-            return 0, [], [], "Error analyzing paper content", [], {'input_tokens': 0, 'output_tokens': 0, 'cost': 0}
+            return 0, [], [], "Error analyzing paper content", [], empty_usage(is_estimated=True)
 
     def _clean_content(self, content: str) -> str:
         """Clean and format paper content for analysis."""
@@ -129,13 +162,72 @@ class PaperAnalyzer:
             content = content.split('References')[0]
         elif 'REFERENCES' in content:
             content = content.split('REFERENCES')[0]
-            
-        # Truncate if too long (for API limits)
-        max_length = 12000  # Adjust based on your needs
-        if len(content) > max_length:
-            content = content[:max_length] + "...[truncated]"
         
         return content.strip()
+
+    def _clean_content_with_budget(
+        self,
+        *,
+        content: str,
+        claim_text: str,
+        system_prompt: str,
+        ai_service,
+        model_hint: Optional[str],
+        reserved_output_tokens: int,
+    ) -> Tuple[str, dict]:
+        cleaned = self._clean_content(content)
+        model_name = model_hint or getattr(ai_service, "default_model", "gpt-4o")
+        estimator = getattr(ai_service, "token_estimator", None)
+        if estimator is None:
+            return cleaned, {"truncated": False, "original_tokens": 0, "kept_tokens": 0}
+
+        base_prompt = dedent(f"""
+            Analyze this paper content for both direct and mechanistic evidence related to the following claim:
+
+            Claim: {claim_text}
+
+            Paper content:
+        """).strip()
+
+        base_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": base_prompt},
+        ]
+        base_tokens = estimator.estimate_chat_tokens(base_messages, model_name)
+
+        registry = getattr(ai_service, "model_registry", None)
+        context_window = 128000
+        if registry is not None:
+            context_window = registry.context_window(model_name)
+
+        safety_margin = int(getattr(ai_service, "context_safety_margin_tokens", 256))
+        available_for_content = max(0, context_window - base_tokens - reserved_output_tokens - safety_margin)
+
+        original_tokens = estimator.estimate_text_tokens(cleaned, model_name)
+        if original_tokens <= available_for_content:
+            return cleaned, {
+                "truncated": False,
+                "original_tokens": original_tokens,
+                "kept_tokens": original_tokens,
+            }
+
+        if available_for_content <= 0:
+            return "", {
+                "truncated": True,
+                "original_tokens": original_tokens,
+                "kept_tokens": 0,
+            }
+
+        # Approximate truncation by token ratio to avoid expensive iterative slicing.
+        ratio = available_for_content / max(1, original_tokens)
+        keep_chars = max(200, int(len(cleaned) * ratio))
+        truncated = cleaned[:keep_chars].rstrip() + "...[truncated]"
+        kept_tokens = estimator.estimate_text_tokens(truncated, model_name)
+        return truncated, {
+            "truncated": True,
+            "original_tokens": original_tokens,
+            "kept_tokens": kept_tokens,
+        }
 
     def extract_page_numbers(self, content: str, excerpt: str) -> Optional[int]:
         """
