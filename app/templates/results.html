@@ -22,6 +22,7 @@
             </div>
         </div>
         <button id="downloadReport">Download Report</button>
+        <button id="viewTracePage">View Full Trace</button>
         <button id="downloadTrace">Download Trace</button>
         <button id="downloadIssues">Download Issues</button>
         <button id="downloadCitations">Download Citations</button>
@@ -77,10 +78,33 @@
     <script>
         const urlParams = new URLSearchParams(window.location.search);
         const claimId = urlParams.get('claim_id');
+        const batchId = urlParams.get('batch_id');
         const reportContent = document.getElementById('reportContent');
         const issuesBanner = document.getElementById('issuesBanner');
         const usageByStageContainer = document.getElementById('usageByStage');
         const debugTraceContainer = document.getElementById('debugTrace');
+
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        function buildTraceViewerUrl(focusTraceId) {
+            if (!claimId || !batchId) {
+                return '#';
+            }
+            const base = `/claims/${encodeURIComponent(batchId)}/${encodeURIComponent(claimId)}/trace`;
+            if (!focusTraceId) {
+                return base;
+            }
+            const params = new URLSearchParams();
+            params.set('focus_trace_id', String(focusTraceId));
+            return `${base}?${params.toString()}`;
+        }
 
         function getRatingText(rating) {
             if (rating === null || rating === undefined) return 'No Rating';
@@ -117,11 +141,19 @@
                 ? `${errorCount} error(s) and ${warnCount} warning(s) surfaced during processing`
                 : `${warnCount} warning(s) surfaced during processing`;
 
+            const issueItems = issues.map(issue => {
+                const traceId = issue?.details?.trace_id ? String(issue.details.trace_id) : '';
+                const viewSectionLink = traceId
+                    ? ` <a href="${buildTraceViewerUrl(traceId)}">View trace section</a>`
+                    : '';
+                return `<li>[${escapeHtml(issue.severity)}] ${escapeHtml(issue.stage)}: ${escapeHtml(issue.message)}${viewSectionLink}</li>`;
+            }).join('');
+
             issuesBanner.innerHTML = `
                 <div class="issues-banner ${cls}">
                     <strong>${title}</strong>
                     <ul>
-                        ${issues.map(issue => `<li>[${issue.severity}] ${issue.stage}: ${issue.message}</li>`).join('')}
+                        ${issueItems}
                     </ul>
                 </div>
             `;
@@ -146,6 +178,7 @@
                     <p>Context Overflow Prevented: ${summary.context_overflow_prevented || 0}</p>
                     <p>Intentional Truncations: ${summary.intentional_truncations || 0}</p>
                     <p>Trace File: ${debugTrace.trace_file || ''}</p>
+                    <p><a href="${buildTraceViewerUrl()}">Open Full Trace Viewer</a></p>
                 </div>
             `;
         }
@@ -365,8 +398,6 @@
         }
 
         if (claimId) {
-            const batchId = urlParams.get('batch_id');
-            
             if (!batchId) {
                 reportContent.textContent = 'Error: Batch ID is required';
             } else {
@@ -387,35 +418,36 @@
         }
 
         document.getElementById('downloadReport').addEventListener('click', function() {
-            const batchId = urlParams.get('batch_id');
             if (claimId && batchId) {
                 window.location.href = `/api/v1/claims/${batchId}/${claimId}/download_md`;
             }
         });
 
+        document.getElementById('viewTracePage').addEventListener('click', function() {
+            if (claimId && batchId) {
+                window.location.href = buildTraceViewerUrl();
+            }
+        });
+
         document.getElementById('downloadTrace').addEventListener('click', function() {
-            const batchId = urlParams.get('batch_id');
             if (claimId && batchId) {
                 window.location.href = `/api/v1/claims/${batchId}/${claimId}/trace`;
             }
         });
 
         document.getElementById('downloadIssues').addEventListener('click', function() {
-            const batchId = urlParams.get('batch_id');
             if (claimId && batchId) {
                 window.location.href = `/api/v1/claims/${batchId}/${claimId}/issues`;
             }
         });
 
         document.getElementById('downloadCitations').addEventListener('click', function() {
-            const batchId = urlParams.get('batch_id');
             if (claimId && batchId) {
                 window.location.href = `/api/v1/claims/${batchId}/${claimId}/download_citations`;
             }
         });
 
         document.getElementById('deleteClaimButton').addEventListener('click', function() {
-            const batchId = urlParams.get('batch_id');
             if (!batchId) {
                 alert('Error: Batch ID is required');
                 return;

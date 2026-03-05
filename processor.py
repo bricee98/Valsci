@@ -63,6 +63,10 @@ class ValsciProcessor:
 
         self._active_locks = set()
 
+        # Per-claim retry counters for processor-level circuit breaker
+        self._claim_stage_retries: Dict[Tuple[str, str], int] = {}
+        self.max_stage_retries = 2  # Max processor-level retries before giving up
+
     def _ensure_claim_usage(self, claim_data: Dict) -> None:
         current = claim_data.get("usage")
         claim_data["usage"] = normalize_usage(current)
@@ -226,19 +230,67 @@ class ValsciProcessor:
             # Update in-memory claim data
             claim_data = self.claims_in_memory[(batch_id, claim_id)]
             claim_data['semantic_scholar_queries'] = queries
-            claim_data['status'] = 'ready_for_search'
             self._add_claim_usage(claim_data, LLMTask.QUERY_GENERATION, usage)
+
+            if not queries:
+                # Query generation returned empty results -- do not advance to search
+                claim_data['status'] = 'processed'
+                await self.ai_service.add_issue(
+                    batch_id=batch_id,
+                    claim_id=claim_id,
+                    severity="ERROR",
+                    stage=LLMTask.QUERY_GENERATION,
+                    message="Query generation produced zero queries. Skipping paper search.",
+                    details={"claim_text_length": len(claim_data.get('text', ''))},
+                )
+                report = {
+                    "relevantPapers": [],
+                    "explanation": "Search query generation produced no queries. The claim could not be evaluated.",
+                    "claimRating": 0,
+                    "timing_stats": {},
+                    "searchQueries": [],
+                    "claim_text": claim_data.get('text', ''),
+                }
+                claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
+                await self._save_processed_claim(claim_data, batch_id, claim_id)
+                return
+
+            claim_data['status'] = 'ready_for_search'
 
         except Exception as e:
             logger.error(f"Error generating search queries for claim {claim_id}: {str(e)}")
+
+            retry_key = (batch_id, claim_id)
+            self._claim_stage_retries[retry_key] = self._claim_stage_retries.get(retry_key, 0) + 1
+            retries_used = self._claim_stage_retries[retry_key]
+
             await self.ai_service.add_issue(
                 batch_id=batch_id,
                 claim_id=claim_id,
                 severity="ERROR",
                 stage=LLMTask.QUERY_GENERATION,
-                message="Search query generation failed.",
+                message=f"Search query generation failed (processor attempt {retries_used}/{self.max_stage_retries + 1}).",
                 details={"exception_message": str(e)},
             )
+
+            if retries_used > self.max_stage_retries:
+                # Exhausted processor-level retries -- produce terminal failure report
+                logger.error(f"Claim {claim_id}: query generation failed after {retries_used} processor attempts. Marking as processed.")
+                claim_data = self.claims_in_memory.get((batch_id, claim_id), claim_data)
+                claim_data['status'] = 'processed'
+                report = {
+                    "relevantPapers": [],
+                    "explanation": f"Search query generation failed after all retries: {str(e)}",
+                    "claimRating": 0,
+                    "timing_stats": {},
+                    "searchQueries": [],
+                    "claim_text": claim_data.get('text', ''),
+                }
+                claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
+                await self._save_processed_claim(claim_data, batch_id, claim_id)
+                self._claim_stage_retries.pop(retry_key, None)
+            # else: claim stays 'queued' and will be retried on next loop iteration
+
         finally:
             self.claims_query_generation_in_progress.discard(claim_id)
 
@@ -257,6 +309,30 @@ class ValsciProcessor:
             # Get in-memory claim data
             claim_data = self.claims_in_memory[(batch_id, claim_id)]
             queries = claim_data['semantic_scholar_queries']
+
+            # Guard: refuse to search with empty queries (upstream failure)
+            if not queries:
+                logger.warning(f"search_papers called with empty queries for claim {claim_id}")
+                await self.ai_service.add_issue(
+                    batch_id=batch_id,
+                    claim_id=claim_id,
+                    severity="ERROR",
+                    stage="paper_search",
+                    message="Paper search invoked with empty query list. Upstream query generation likely failed.",
+                    details={},
+                )
+                claim_data['status'] = 'processed'
+                report = {
+                    "relevantPapers": [],
+                    "explanation": "No search queries were available. The claim could not be evaluated.",
+                    "claimRating": 0,
+                    "timing_stats": {},
+                    "searchQueries": [],
+                    "claim_text": claim_data.get('text', ''),
+                }
+                claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
+                await self._save_processed_claim(claim_data, batch_id, claim_id)
+                return
 
             # Search papers
             raw_papers = await self.s2_searcher.search_papers_for_claim(

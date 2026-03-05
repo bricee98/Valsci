@@ -5,13 +5,14 @@ import uuid
 import shutil
 import threading
 import json
+import gzip
 from app.services.claim_processor import ClaimProcessor
 from app.models.claim import Claim
 from app.models.batch_job import BatchJob
 from app.models.paper import Paper
 from datetime import datetime
 import asyncio
-from typing import List
+from typing import List, Dict, Any, Tuple
 import math
 from app.services.email_service import EmailService
 import logging
@@ -52,6 +53,26 @@ def _find_claim_artifact(batch_id: str, artifact_dir: str, claim_id: str, extens
         if os.path.exists(path):
             return path
     return None
+
+
+def _read_jsonl_artifact(path: str) -> Tuple[List[Dict[str, Any]], int]:
+    records: List[Dict[str, Any]] = []
+    invalid_lines = 0
+    open_fn = gzip.open if path.endswith(".gz") else open
+    with open_fn(path, "rt", encoding="utf-8") as f:
+        for line in f:
+            raw = line.strip()
+            if not raw:
+                continue
+            try:
+                record = json.loads(raw)
+                if isinstance(record, dict):
+                    records.append(record)
+                else:
+                    invalid_lines += 1
+            except json.JSONDecodeError:
+                invalid_lines += 1
+    return records, invalid_lines
 
 def save_claim_to_file(claim, batch_id, claim_id):
     claim_dir = os.path.join(QUEUED_JOBS_DIR, batch_id)
@@ -164,6 +185,59 @@ def download_claim_trace(batch_id, claim_id):
         return jsonify({"error": "Trace not found"}), 404
     download_name = f"{claim_id}_trace.jsonl.gz" if trace_file.endswith(".gz") else f"{claim_id}_trace.jsonl"
     return send_file(trace_file, as_attachment=True, download_name=download_name)
+
+
+@api.route('/api/v1/claims/<batch_id>/<claim_id>/trace_records', methods=['GET'])
+@auth_required
+def get_claim_trace_records(batch_id, claim_id):
+    trace_file = _find_claim_artifact(batch_id, "traces", claim_id, "jsonl")
+    if not trace_file or not os.path.exists(trace_file):
+        return jsonify({"error": "Trace not found"}), 404
+
+    focus_trace_id = (request.args.get("focus_trace_id") or "").strip() or None
+    try:
+        records, invalid_lines = _read_jsonl_artifact(trace_file)
+    except Exception as exc:
+        logger.error(f"Error loading trace file for claim {claim_id}: {str(exc)}")
+        return jsonify({
+            "error": "Failed to load trace records",
+            "details": str(exc),
+        }), 500
+
+    error_like_indices = []
+    focused_index = None
+    for idx, record in enumerate(records):
+        status = str(record.get("status", "")).lower()
+        has_error = bool(
+            record.get("parse_error")
+            or record.get("error_message")
+            or record.get("error_type")
+            or status in {"error", "retrying"}
+        )
+        if has_error:
+            error_like_indices.append(idx)
+        if focus_trace_id and record.get("trace_id") == focus_trace_id:
+            focused_index = idx
+
+    if focused_index is not None:
+        highlighted_indices = [focused_index]
+    elif error_like_indices:
+        highlighted_indices = [error_like_indices[-1]]
+    else:
+        highlighted_indices = []
+
+    return jsonify({
+        "batch_id": batch_id,
+        "claim_id": claim_id,
+        "focus_trace_id": focus_trace_id,
+        "focused_index": focused_index,
+        "highlighted_indices": highlighted_indices,
+        "error_like_indices": error_like_indices,
+        "invalid_lines": invalid_lines,
+        "compressed": trace_file.endswith(".gz"),
+        "trace_file": f"traces/{claim_id}.jsonl" + (".gz" if trace_file.endswith(".gz") else ""),
+        "records": records,
+    }), 200
 
 @api.route('/api/v1/claims/<batch_id>/<claim_id>/issues', methods=['GET'])
 @auth_required
@@ -317,6 +391,18 @@ def index():
 @auth_required
 def results():
     return render_template('results.html')
+
+
+@api.route('/claims/<batch_id>/<claim_id>/trace', methods=['GET'])
+@auth_required
+def trace_view(batch_id, claim_id):
+    focus_trace_id = (request.args.get("focus_trace_id") or "").strip()
+    return render_template(
+        'trace_view.html',
+        batch_id=batch_id,
+        claim_id=claim_id,
+        focus_trace_id=focus_trace_id,
+    )
 
 @api.route('/progress', methods=['GET'])
 @auth_required

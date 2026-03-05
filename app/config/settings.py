@@ -115,6 +115,10 @@ class Config:
     LLM_BACKOFF_MAX_SECONDS = _as_float(env_vars.get("LLM_BACKOFF_MAX_SECONDS", 30.0), default=30.0)
     LLM_BACKOFF_JITTER = _as_float(env_vars.get("LLM_BACKOFF_JITTER", 0.5), default=0.5)
     LLM_TIMEOUT_SECONDS = _as_int(env_vars.get("LLM_TIMEOUT_SECONDS", 180), default=180)
+    LLM_TIMEOUT_SECONDS_LOCAL = _as_int(
+        env_vars.get("LLM_TIMEOUT_SECONDS_LOCAL", 600 if local_defaults else None),
+        default=None,
+    )
     OLLAMA_SHOW_URL = env_vars.get("OLLAMA_SHOW_URL")
 
     @classmethod

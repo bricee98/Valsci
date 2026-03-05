@@ -109,6 +109,8 @@ class TraceRecord:
     status: str
     finish_reason: Optional[str]
     retries: int
+    timeout_configured_s: Optional[int]
+    backoff_waited_s: Optional[float]
     http_status: Optional[int]
     error_type: Optional[str]
     error_message: Optional[str]

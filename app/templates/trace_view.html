@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trace Viewer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <style>
+        .trace-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+        .trace-toolbar a,
+        .trace-toolbar button {
+            border: 1px solid #ccc;
+            background: #f7f7f7;
+            color: #222;
+            padding: 8px 12px;
+            border-radius: 6px;
+            text-decoration: none;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .trace-toolbar button:hover,
+        .trace-toolbar a:hover {
+            background: #ececec;
+        }
+        .trace-summary {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 12px;
+            background: #fafafa;
+            margin-bottom: 16px;
+        }
+        .trace-list {
+            display: grid;
+            gap: 12px;
+        }
+        .trace-row {
+            border: 1px solid #ddd;
+            border-left: 6px solid #bbb;
+            border-radius: 8px;
+            padding: 12px;
+            background: #fff;
+        }
+        .trace-row.success {
+            border-left-color: #2e8540;
+        }
+        .trace-row.retrying {
+            border-left-color: #b38600;
+        }
+        .trace-row.error {
+            border-left-color: #b22222;
+        }
+        .trace-row.highlight {
+            border-color: #0f62fe;
+            box-shadow: 0 0 0 2px rgba(15, 98, 254, 0.2);
+            background: #f4f8ff;
+        }
+        .trace-row.error-like {
+            background: #fff9f9;
+        }
+        .trace-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 10px;
+        }
+        .trace-meta {
+            margin: 8px 0 0 0;
+            line-height: 1.5;
+        }
+        .trace-badge {
+            display: inline-block;
+            font-size: 12px;
+            border-radius: 10px;
+            padding: 2px 8px;
+            border: 1px solid #ccc;
+            background: #f2f2f2;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+        }
+        .trace-row.success .trace-badge {
+            border-color: #2e8540;
+            color: #2e8540;
+            background: #effaf1;
+        }
+        .trace-row.retrying .trace-badge {
+            border-color: #b38600;
+            color: #7d5f00;
+            background: #fff8e6;
+        }
+        .trace-row.error .trace-badge {
+            border-color: #b22222;
+            color: #8f1b1b;
+            background: #fff1f1;
+        }
+        .trace-error {
+            margin-top: 10px;
+            padding: 10px;
+            border: 1px solid #f5c2c7;
+            background: #fff0f2;
+            border-radius: 6px;
+        }
+        details {
+            margin-top: 8px;
+            border: 1px solid #e6e6e6;
+            border-radius: 6px;
+            padding: 6px 10px;
+            background: #fcfcfc;
+        }
+        summary {
+            cursor: pointer;
+            font-weight: 600;
+        }
+        pre {
+            margin: 8px 0 0 0;
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 320px;
+            overflow: auto;
+            background: #111827;
+            color: #e5e7eb;
+            padding: 10px;
+            border-radius: 6px;
+        }
+        .status-message {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 6px;
+        }
+        .status-message.error {
+            border: 1px solid #f5c2c7;
+            background: #fff0f2;
+        }
+        .status-message.info {
+            border: 1px solid #bee3f8;
+            background: #ebf8ff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Trace Viewer</h1>
+        <p><strong>Batch:</strong> <span id="batchLabel"></span> | <strong>Claim:</strong> <span id="claimLabel"></span></p>
+
+        <div class="trace-toolbar">
+            <a id="backToReport" href="#">Back to Report</a>
+            <a id="downloadTrace" href="#">Download Trace File</a>
+            <a id="downloadIssues" href="#">Download Issues File</a>
+            <button id="jumpToHighlight" type="button">Jump to Highlight</button>
+        </div>
+
+        <div id="statusMessage"></div>
+        <div id="traceSummary" class="trace-summary"></div>
+        <div id="traceList" class="trace-list"></div>
+    </div>
+
+    <script>
+        const batchId = {{ batch_id | tojson }};
+        const claimId = {{ claim_id | tojson }};
+        const initialFocusTraceId = {{ focus_trace_id | tojson }};
+
+        const statusMessage = document.getElementById('statusMessage');
+        const traceSummary = document.getElementById('traceSummary');
+        const traceList = document.getElementById('traceList');
+        const batchLabel = document.getElementById('batchLabel');
+        const claimLabel = document.getElementById('claimLabel');
+
+        let currentHighlightedIndices = [];
+
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        function prettyJson(value) {
+            try {
+                return JSON.stringify(value, null, 2);
+            } catch (error) {
+                return String(value ?? '');
+            }
+        }
+
+        function renderStatus(message, cls) {
+            statusMessage.innerHTML = `<div class="status-message ${cls}">${escapeHtml(message)}</div>`;
+        }
+
+        function buildQuery(params) {
+            const filtered = Object.entries(params)
+                .filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '');
+            if (filtered.length === 0) {
+                return '';
+            }
+            const query = new URLSearchParams();
+            filtered.forEach(([key, value]) => query.set(key, value));
+            return `?${query.toString()}`;
+        }
+
+        function scrollToHighlight() {
+            if (!Array.isArray(currentHighlightedIndices) || currentHighlightedIndices.length === 0) {
+                return;
+            }
+            const first = currentHighlightedIndices[0];
+            const row = document.getElementById(`trace-record-${first}`);
+            if (row) {
+                row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }
+
+        function renderSummary(records, errorLikeIndices, highlightedIndices, focusedIndex, invalidLines, traceFile) {
+            const successCount = records.filter(r => (r.status || '').toLowerCase() === 'success').length;
+            const retryCount = records.filter(r => (r.status || '').toLowerCase() === 'retrying').length;
+            const errorCount = records.filter(r => (r.status || '').toLowerCase() === 'error').length;
+
+            const focusText = focusedIndex !== null && focusedIndex !== undefined
+                ? `Focused trace index: ${focusedIndex + 1}`
+                : highlightedIndices.length > 0
+                    ? `Auto-highlighted trace index: ${highlightedIndices[0] + 1}`
+                    : 'No highlighted trace';
+
+            traceSummary.innerHTML = `
+                <h3>Summary</h3>
+                <p>Total calls: ${records.length}</p>
+                <p>Success: ${successCount} | Retrying: ${retryCount} | Error: ${errorCount}</p>
+                <p>Error-like entries: ${errorLikeIndices.length}</p>
+                <p>${escapeHtml(focusText)}</p>
+                <p>Invalid trace lines skipped: ${invalidLines}</p>
+                <p>Trace file: ${escapeHtml(traceFile || '')}</p>
+            `;
+        }
+
+        function renderTraceRows(records, highlightedIndices, errorLikeIndices) {
+            const highlightedSet = new Set(highlightedIndices || []);
+            const errorLikeSet = new Set(errorLikeIndices || []);
+
+            traceList.innerHTML = records.map((record, idx) => {
+                const status = String(record.status || 'unknown').toLowerCase();
+                const stage = record.stage || 'unknown_stage';
+                const traceId = record.trace_id || '';
+                const isHighlighted = highlightedSet.has(idx);
+                const isErrorLike = errorLikeSet.has(idx);
+                const openAttr = isHighlighted ? 'open' : '';
+                const klass = `trace-row ${escapeHtml(status)}${isHighlighted ? ' highlight' : ''}${isErrorLike ? ' error-like' : ''}`;
+                const permalink = traceId
+                    ? `/claims/${encodeURIComponent(batchId)}/${encodeURIComponent(claimId)}/trace${buildQuery({ focus_trace_id: traceId })}`
+                    : '';
+
+                return `
+                    <article id="trace-record-${idx}" class="${klass}">
+                        <div class="trace-head">
+                            <div>
+                                <h3>${idx + 1}. ${escapeHtml(stage)}</h3>
+                                <div class="trace-meta">
+                                    <div><strong>Trace ID:</strong> ${escapeHtml(traceId || 'n/a')}</div>
+                                    <div><strong>Model:</strong> ${escapeHtml(record.model_used || record.model_requested || 'n/a')}</div>
+                                    <div><strong>Latency:</strong> ${escapeHtml(record.latency_ms ?? 'n/a')} ms</div>
+                                    <div><strong>Time:</strong> ${escapeHtml(record.timestamp_start || 'n/a')} - ${escapeHtml(record.timestamp_end || 'n/a')}</div>
+                                </div>
+                            </div>
+                            <div>
+                                <span class="trace-badge">${escapeHtml(status)}</span>
+                                ${permalink ? `<div style="margin-top:8px;"><a href="${permalink}">Permalink</a></div>` : ''}
+                            </div>
+                        </div>
+
+                        ${(record.parse_error || record.error_message || record.error_type) ? `
+                            <div class="trace-error">
+                                ${record.error_type ? `<div><strong>Error Type:</strong> ${escapeHtml(record.error_type)}</div>` : ''}
+                                ${record.error_message ? `<div><strong>Error Message:</strong> ${escapeHtml(record.error_message)}</div>` : ''}
+                                ${record.parse_error ? `<div><strong>Parse Error:</strong> ${escapeHtml(record.parse_error)}</div>` : ''}
+                            </div>
+                        ` : ''}
+
+                        <details ${openAttr}>
+                            <summary>Usage + Routing</summary>
+                            <pre>${escapeHtml(prettyJson({
+                                usage: record.usage,
+                                retries: record.retries,
+                                finish_reason: record.finish_reason,
+                                timeout_configured_s: record.timeout_configured_s,
+                                backoff_waited_s: record.backoff_waited_s,
+                                http_status: record.http_status,
+                                routing: record.routing
+                            }))}</pre>
+                        </details>
+
+                        <details>
+                            <summary>Messages</summary>
+                            <pre>${escapeHtml(prettyJson(record.messages || []))}</pre>
+                        </details>
+
+                        <details>
+                            <summary>Parsed JSON</summary>
+                            <pre>${escapeHtml(prettyJson(record.parsed_json || null))}</pre>
+                        </details>
+
+                        <details>
+                            <summary>Raw Output</summary>
+                            <pre>${escapeHtml(record.raw_output || '')}</pre>
+                        </details>
+
+                        <details>
+                            <summary>Raw Response</summary>
+                            <pre>${escapeHtml(prettyJson(record.raw_response || null))}</pre>
+                        </details>
+
+                        <details>
+                            <summary>Stacktrace</summary>
+                            <pre>${escapeHtml(record.stacktrace || '')}</pre>
+                        </details>
+                    </article>
+                `;
+            }).join('');
+        }
+
+        async function loadTrace() {
+            const query = buildQuery({ focus_trace_id: initialFocusTraceId });
+            const url = `/api/v1/claims/${encodeURIComponent(batchId)}/${encodeURIComponent(claimId)}/trace_records${query}`;
+
+            try {
+                const response = await fetch(url);
+                const payload = await response.json();
+                if (!response.ok) {
+                    renderStatus(payload.error || 'Failed to load trace records.', 'error');
+                    traceSummary.innerHTML = '';
+                    traceList.innerHTML = '';
+                    return;
+                }
+
+                const records = Array.isArray(payload.records) ? payload.records : [];
+                const highlighted = Array.isArray(payload.highlighted_indices) ? payload.highlighted_indices : [];
+                const errorLike = Array.isArray(payload.error_like_indices) ? payload.error_like_indices : [];
+                currentHighlightedIndices = highlighted;
+
+                if (records.length === 0) {
+                    renderStatus('Trace file loaded, but no records were found.', 'info');
+                } else if (highlighted.length > 0) {
+                    renderStatus('Trace loaded. A relevant section is highlighted below.', 'info');
+                } else {
+                    renderStatus('Trace loaded. No specific call was highlighted.', 'info');
+                }
+
+                renderSummary(
+                    records,
+                    errorLike,
+                    highlighted,
+                    payload.focused_index,
+                    payload.invalid_lines || 0,
+                    payload.trace_file || ''
+                );
+                renderTraceRows(records, highlighted, errorLike);
+                scrollToHighlight();
+            } catch (error) {
+                console.error('Error loading trace records:', error);
+                renderStatus('Error loading trace records.', 'error');
+                traceSummary.innerHTML = '';
+                traceList.innerHTML = '';
+            }
+        }
+
+        batchLabel.textContent = batchId;
+        claimLabel.textContent = claimId;
+
+        document.getElementById('backToReport').href =
+            `/results?batch_id=${encodeURIComponent(batchId)}&claim_id=${encodeURIComponent(claimId)}`;
+        document.getElementById('downloadTrace').href =
+            `/api/v1/claims/${encodeURIComponent(batchId)}/${encodeURIComponent(claimId)}/trace`;
+        document.getElementById('downloadIssues').href =
+            `/api/v1/claims/${encodeURIComponent(batchId)}/${encodeURIComponent(claimId)}/issues`;
+
+        document.getElementById('jumpToHighlight').addEventListener('click', () => {
+            scrollToHighlight();
+        });
+
+        loadTrace();
+    </script>
+</body>
+</html>

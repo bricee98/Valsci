@@ -179,3 +179,4 @@ venv/
 # Codebase dump
 codebase_dump.txt
 dump_project.py
+.claude/settings.local.json

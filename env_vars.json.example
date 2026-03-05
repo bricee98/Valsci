@@ -41,6 +41,7 @@
     "LLM_BACKOFF_MAX_SECONDS": 30.0,
     "LLM_BACKOFF_JITTER": 0.5,
     "LLM_TIMEOUT_SECONDS": 180,
+    "LLM_TIMEOUT_SECONDS_LOCAL": 600,
 
     "LLM_ROUTING": {
         "enabled": true,
@@ -49,7 +50,8 @@
             "query_generation": {
                 "preferred_models": ["gpt-4o-mini"],
                 "fallback_models": ["gpt-4o"],
-                "max_output_tokens": 800
+                "max_output_tokens": 800,
+                "timeout_seconds": 300
             },
             "paper_analysis": {
                 "preferred_models": ["gpt-4o"],

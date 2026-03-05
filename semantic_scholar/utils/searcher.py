@@ -11,7 +11,6 @@ import mmap
 import logging
 from textwrap import dedent
 from app.services.llm.gateway import LLMTask
-from app.services.llm.types import empty_usage
 
 logging.basicConfig(
     level=logging.INFO,
@@ -179,8 +178,7 @@ class S2Searcher:
 
         except Exception as e:
             logger.error(f"Error generating search queries: {str(e)}")
-            # Return empty queries and usage stats in error case
-            return [], empty_usage(is_estimated=True)
+            raise
 
     async def search_papers_for_claim(self, queries: List[str], results_per_query: int = 5) -> List[Dict]:
         """Search papers relevant to a claim."""

@@ -1,0 +1,8 @@
+# Sample claims for query generation benchmarking
+# One claim per line. Lines starting with # are ignored.
+
+Vitamin D supplementation reduces the risk of respiratory infections.
+CRISPR-Cas9 gene editing can effectively treat sickle cell disease.
+Regular exercise reduces the risk of Alzheimer's disease by 30%.
+Intermittent fasting improves insulin sensitivity in type 2 diabetes patients.
+Microplastics in drinking water pose significant health risks to humans.
