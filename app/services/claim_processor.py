@@ -8,10 +8,11 @@ from app.services.paper_analyzer import PaperAnalyzer
 from app.services.evidence_scorer import EvidenceScorer
 from app.services.llm.gateway import LLMTask
 from app.services.llm.types import empty_usage
+from app.services.llm.validators import validate_final_report_payload
+from app.services.prompt_store import load_prompt, render_prompt
 import os
 import json
 from time import time
-from textwrap import dedent
 from typing import Dict
 from datetime import datetime
 import logging
@@ -54,7 +55,9 @@ class ClaimProcessor:
                     for author in paper.get('authors', [])
                 ],
                 "link": paper.get('url'),
-                "reason": "Paper content not accessible"
+                "reason": paper.get('access_reason', 'Paper content not accessible'),
+                "reason_code": paper.get('access_reason_code', 'unknown'),
+                "access_details": paper.get('access_details', {}),
             } for paper in (papers or [])]
         except Exception as e:
             logger.error(f"Error formatting inaccessible papers: {str(e)}")
@@ -116,51 +119,8 @@ class ClaimProcessor:
             paper_summaries_text = "\n".join(paper_summaries)
 
             # Prepare input for the LLM
-            prompt_template = dedent(f"""
-            Evaluate the following claim based on the provided evidence and counter-evidence from scientific papers:
-
-            Claim: {claim_text}
-
-            Evidence:
-            """).strip()
-
-            system_prompt = dedent("""
-            You are an expert scientific reviewer specializing in evaluating the plausibility of scientific claims based on evidence from academic papers and your expert knowledge. Your task is to synthesize a detailed evaluation of the claim and assign a final plausibility rating based on both your scientific knowledge and the evidence provided in the paper excerpts you receive.
-
-            The final rating you assign should be one of the following:
-            - Contradicted: Strong evidence refutes the claim.
-            - Likely False: Evidence suggests the claim is unlikely but not definitively refuted.
-            - Mixed Evidence: It is not clear whether the supporting or contradicting evidence is stronger.
-            - Likely True: The claim is supported by reasonable evidence, though it may not be definitive.
-            - Highly Supported: The claim is strongly supported by compelling and consistent evidence.
-            - No Evidence: There is no evidence to support or refute the claim in the provided papers.
-            
-            When formulating your evaluation, consider the following aspects:
-            - Supporting Evidence: Summarize the most robust evidence that supports the claim. Be specific, referencing the findings of relevant papers and their implications.
-            - Caveats or Contradictions: Identify any limitations, contradictory findings, or alternative interpretations that might challenge the claim.
-            - Analysis: Based on your expertise, analyze the systems and structures relevant to the claim for any deeper relationships, mechanisms, or second-order implications that might be relevant.
-            - Assessment: Assess the balance of evidence, explaining which side is more compelling and why. Contextualize caveats but avoid undue hedging; consider the overall weight of the evidence like an expert would.
-            - Rating Assignment: Choose a single category from the list above that best reflects the overall strength of evidence for the claim. Assign this rating based on the preponderance of evidence, contextualizing caveats without allowing minor exceptions to overshadow the dominant trend.         
-                                   
-            Use the following process to review the claim and evidence and conduct your analysis:
-                                   
-            First, under the explanationEssay attribute, write your thoughts as an essay with distinct paragraphs for:
-            - Supporting evidence.
-            - Caveats or contradictory evidence.
-            - Analysis of potential underlying mechanisms, deeper relationships, or second-order implications.
-            - An explanation of which rating seems most appropriate based on the relative strength of the evidence.
-                                   
-            Once you've written the essay, read over it and analyze your logic one more time for any flaws or inconsistencies. If you find any, revise your rating and explanation accordingly in the finalReasoning attribute. Otherwise, you can reaffirm your rating and explanation in the finalReasoning attribute. This string can be as long as you need to conduct a rigorous final analysis.
-                                   
-            Lastly, assign the final rating from the list above in the claimRating attribute.
-            
-            You will receive the text of the claim and excerpts from academic papers that could support or refute the claim. Craft your evaluation, then provide a JSON response in the following format:
-            {
-                "explanationEssay": "<plain text detailed essay explanation>",
-                "finalReasoning": "<plain text additional reasoning for the rating>",
-                "claimRating": "<rating, one of the following: Contradicted, Likely False, Mixed Evidence, Likely True, Highly Supported, No Evidence>"
-            }
-            """).strip()
+            prompt_template = render_prompt("final_report_user", claim_text=claim_text)
+            system_prompt = load_prompt("final_report_system")
 
             model_name = model_override or getattr(ai_service, "default_model", None)
             prompt = await self._build_final_prompt_with_budget(
@@ -182,7 +142,7 @@ class ClaimProcessor:
                 claim_id=claim_id,
                 model_override=model_override,
             )
-            response = result['content']
+            response = validate_final_report_payload(result['content'])
             usage = result['usage']
             logger.info("Generated final report")
 
@@ -257,6 +217,15 @@ class ClaimProcessor:
 
         except Exception as e:
             logger.error(f"Error in generate_final_report: {str(e)}")
+            if batch_id and claim_id and hasattr(ai_service, "add_issue"):
+                await ai_service.add_issue(
+                    batch_id=batch_id,
+                    claim_id=claim_id,
+                    severity="ERROR",
+                    stage=LLMTask.FINAL_REPORT,
+                    message="Final report output failed validation or generation.",
+                    details={"error": str(e)},
+                )
             # Return a safe fallback response with usage stats
             return {
                 "relevantPapers": [],

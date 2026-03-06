@@ -1,7 +1,7 @@
 import json
 import requests
 from pathlib import Path
-from typing import List, Dict, Optional, Generator
+from typing import Any, List, Dict, Optional, Generator
 import time
 from rich.console import Console
 import ijson
@@ -9,8 +9,9 @@ from openai import OpenAI
 import asyncio
 import mmap
 import logging
-from textwrap import dedent
 from app.services.llm.gateway import LLMTask
+from app.services.prompt_store import load_prompt, render_prompt
+from app.services.llm.validators import OutputValidationError, validate_query_generation_payload
 
 logging.basicConfig(
     level=logging.INFO,
@@ -99,60 +100,12 @@ class S2Searcher:
         model_override: Optional[str] = None,
     ) -> List[str]:
         """Generate search queries for a claim using GPT."""
-        system_prompt = dedent("""
-            You are an expert at converting scientific claims into strategic literature search queries. Specifically, your queries will be used to search the Semantic Scholar database. Your goal is to generate queries that will comprehensively evaluate both supporting and contradicting evidence for a given claim.
-
-            Guidelines for Query Generation:
-            1. Identify core concepts and their relationships in the claim
-            2. Include field-specific terminology, common synonyms, and alternative phrasings
-            3. Decompose complex claims into testable components
-            4. Use only plain text search queries, no boolean operators or special syntax
-            5. Break hyphenated terms into separate words (e.g. "drug-resistant" -> "drug resistant")
-            6. Balance specificity with recall - avoid overly narrow or broad queries
-            7. Consider both direct evidence and mechanistic studies
-            8. Account for competing hypotheses and alternative explanations
-
-            Search Strategy:
-            - Generate queries for direct evidence testing the claim
-            - Include queries for underlying mechanisms and pathways
-            - Consider related phenomena that could provide indirect evidence
-            - Look for potential confounding factors or methodological challenges
-            - Search for systematic reviews and meta-analyses when applicable
-            - The queries should be sufficiently diverse to capture as much relevant information as possible and avoid overlap
-
-            Example Approach:
-            For "Metformin increases lifespan", you could consider:
-            - Direct evidence: clinical studies, epidemiological data
-            - Mechanisms: AMPK pathway, insulin sensitivity, mitochondrial function
-            - Related outcomes: mortality, age-related diseases, biomarkers of aging
-            - Potential confounds: diabetes status, age, concurrent medications
-            when generating your queries.
-
-            Output Format:
-            {
-                "explanations": [
-                    "string explaining the rationale and strategy behind each query"
-                ],
-                "queries": [
-                    "search query strings formatted for academic databases"
-                ]
-            }
-            """)
-
-        user_prompt = dedent(f"""
-            Generate {num_queries} strategic search queries to evaluate this scientific claim:
-            "{claim_text}"
-
-            Requirements:
-            - Each query should be precisely formulated for Semantic Scholar database searching
-            - Include a mix of specific and broader search strategies
-            - Consider both direct evidence and mechanistic studies
-            - Account for different research methodologies and study types
-            - Use only plain text search queries, no boolean operators or special syntax
-            - Break hyphenated terms into separate words (e.g. "drug-resistant" -> "drug resistant")
-
-            Return results as a JSON object with 'explanations' and 'queries' arrays.
-            """)
+        system_prompt = load_prompt("query_generation_system")
+        user_prompt = render_prompt(
+            "query_generation_user",
+            num_queries=num_queries,
+            claim_text=claim_text,
+        )
         
         try:
             print("About to generate queries")
@@ -165,7 +118,10 @@ class S2Searcher:
                 claim_id=claim_id,
                 model_override=model_override,
             )
-            response = result['content']
+            response = validate_query_generation_payload(
+                result['content'],
+                expected_query_count=num_queries,
+            )
             usage = result['usage']
             queries = response.get('queries', [])
             
@@ -176,6 +132,18 @@ class S2Searcher:
                 
             return queries, usage
 
+        except OutputValidationError as e:
+            logger.error(f"Query generation output validation failed: {str(e)}")
+            if ai_service and hasattr(ai_service, "add_issue"):
+                await ai_service.add_issue(
+                    batch_id=batch_id,
+                    claim_id=claim_id,
+                    severity="ERROR",
+                    stage=LLMTask.QUERY_GENERATION,
+                    message="Query generation output failed schema validation.",
+                    details={"error": str(e)},
+                )
+            raise
         except Exception as e:
             logger.error(f"Error generating search queries: {str(e)}")
             raise
@@ -302,15 +270,55 @@ class S2Searcher:
             enriched_authors.append(author)
         return enriched_authors
 
-    def get_paper_content(self, corpus_id: str) -> Optional[Dict]:
+    def _build_inaccessible_result(
+        self,
+        *,
+        corpus_id: str,
+        reason_code: str,
+        reason: str,
+        attempts: List[Dict[str, Any]],
+        error: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        result = {
+            'text': None,
+            'source': None,
+            'pdf_hash': None,
+            'status': 'inaccessible',
+            'reason_code': reason_code,
+            'reason': reason,
+            'lookup_details': {
+                'corpus_id': str(corpus_id),
+                'release_id': self.current_release,
+                'has_local_data': bool(self.has_local_data),
+                'attempts': attempts,
+            },
+        }
+        if error:
+            result['lookup_details']['error'] = error
+        return result
+
+    @staticmethod
+    def _attempt_result(dataset: str, status: str, detail: Optional[str] = None) -> Dict[str, str]:
+        result = {'dataset': dataset, 'status': status}
+        if detail:
+            result['detail'] = detail
+        return result
+
+    def get_paper_content(self, corpus_id: str) -> Dict[str, Any]:
         """Get full paper content from S2ORC or abstract data, using the BinaryIndexer."""
         logger.info(f"Attempting to get content for corpus ID: {corpus_id}")
         logger.info(f"Current release: {self.current_release}")
         logger.info(f"Has local data: {self.has_local_data}")
-        
+        attempts: List[Dict[str, Any]] = []
+
         if not self.current_release:
             logger.warning("No release ID available")
-            return None
+            return self._build_inaccessible_result(
+                corpus_id=str(corpus_id),
+                reason_code='missing_release',
+                reason='No local dataset release is available for content lookup.',
+                attempts=attempts,
+            )
         
         try:
             # Try S2ORC first for full text
@@ -333,10 +341,20 @@ class S2Searcher:
                     return {
                         'text': full_text,
                         'source': 's2orc',
-                        'pdf_hash': s2orc_record.get('pdf_parse', {}).get('pdf_hash')
+                        'pdf_hash': s2orc_record.get('pdf_parse', {}).get('pdf_hash'),
+                        'status': 'ok',
+                        'lookup_details': {
+                            'corpus_id': str(corpus_id),
+                            'release_id': self.current_release,
+                            'has_local_data': bool(self.has_local_data),
+                            'attempts': attempts + [self._attempt_result('s2orc', 'found_text')],
+                        },
                     }
                 else:
                     logger.info("S2ORC record found but no body text available")
+                    attempts.append(self._attempt_result('s2orc', 'record_without_text', 'pdf_parse.body_text missing'))
+            else:
+                attempts.append(self._attempt_result('s2orc', 'missing_record'))
 
 
             # Fallback to abstracts dataset
@@ -354,10 +372,20 @@ class S2Searcher:
                     return {
                         'text': abstract_record['abstract'],
                         'source': 'abstract',
-                        'pdf_hash': None
+                        'pdf_hash': None,
+                        'status': 'ok',
+                        'lookup_details': {
+                            'corpus_id': str(corpus_id),
+                            'release_id': self.current_release,
+                            'has_local_data': bool(self.has_local_data),
+                            'attempts': attempts + [self._attempt_result('abstracts', 'found_text')],
+                        },
                     }
                 else:
                     logger.info("Abstract record found but no abstract text available")
+                    attempts.append(self._attempt_result('abstracts', 'record_without_text', 'abstract missing'))
+            else:
+                attempts.append(self._attempt_result('abstracts', 'missing_record'))
 
 
             # Try TLDR dataset
@@ -375,19 +403,41 @@ class S2Searcher:
                     return {
                         'text': tldr_record['text'],
                         'source': 'tldr',
-                        'pdf_hash': None
+                        'pdf_hash': None,
+                        'status': 'ok',
+                        'lookup_details': {
+                            'corpus_id': str(corpus_id),
+                            'release_id': self.current_release,
+                            'has_local_data': bool(self.has_local_data),
+                            'attempts': attempts + [self._attempt_result('tldrs', 'found_text')],
+                        },
                     }
                 else:
                     logger.info("TLDR record found but no text available")
+                    attempts.append(self._attempt_result('tldrs', 'record_without_text', 'text missing'))
+            else:
+                attempts.append(self._attempt_result('tldrs', 'missing_record'))
 
 
             # If no content found in any dataset
             logger.warning(f"No content found for corpus ID: {corpus_id}")
-            return None
+            return self._build_inaccessible_result(
+                corpus_id=str(corpus_id),
+                reason_code='no_accessible_content',
+                reason='No accessible text was found in S2ORC, abstracts, or TLDR datasets.',
+                attempts=attempts,
+            )
 
         except Exception as e:
             logger.error(f"Error getting paper content for {corpus_id}: {str(e)}", exc_info=True)
-            return None
+            attempts.append(self._attempt_result('lookup', 'exception', str(e)))
+            return self._build_inaccessible_result(
+                corpus_id=str(corpus_id),
+                reason_code='lookup_exception',
+                reason='An exception occurred while retrieving paper content.',
+                attempts=attempts,
+                error=str(e),
+            )
 
 class RateLimiter:
     def __init__(self, requests_per_second: float = 1.0):

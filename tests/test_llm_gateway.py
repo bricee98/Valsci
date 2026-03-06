@@ -45,6 +45,13 @@ class FakeProvider:
             )
         if self.mode == "bad_request":
             raise FakeStatusError(400, "bad request")
+        if self.mode == "fenced_json":
+            return ProviderResponse(
+                raw_text='```json\n{"ok": true}\n```',
+                model_used=request.model,
+                finish_reason="stop",
+                usage={"input_tokens": 30, "output_tokens": 8, "total_tokens": 38, "is_estimated": False},
+            )
         return ProviderResponse(
             raw_text='{"ok": true}',
             model_used=request.model,
@@ -234,5 +241,26 @@ def test_bad_request_is_not_retried(monkeypatch, tmp_path):
         traces = await gateway.get_claim_traces("b5", "c5")
         assert len(traces) == 1
         assert traces[0]["status"] == "error"
+
+    asyncio.run(run())
+
+
+def test_fenced_json_is_recovered_without_retry(monkeypatch, tmp_path):
+    gateway = build_gateway(monkeypatch, tmp_path, provider=FakeProvider("fenced_json"))
+
+    async def run():
+        result = await gateway.chat_json(
+            user_prompt="Return json",
+            system_prompt="Return valid JSON only",
+            task=LLMTask.GENERIC,
+            batch_id="b6",
+            claim_id="c6",
+        )
+        assert result["content"]["ok"] is True
+        traces = await gateway.get_claim_traces("b6", "c6")
+        assert len(traces) == 1
+        assert traces[0]["status"] == "success"
+        issues = await gateway.get_claim_issues("b6", "c6")
+        assert any("Recovered JSON object" in issue["message"] for issue in issues)
 
     asyncio.run(run())

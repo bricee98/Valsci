@@ -33,6 +33,7 @@ from app.services.llm.retry_policy import RetryPolicy
 from app.services.llm.token_estimator import TokenEstimator
 from app.services.llm.trace_store import TraceStore
 from app.services.llm.types import ProviderRequest, TraceRecord, empty_usage, merge_usage, normalize_usage, utc_now_iso
+from app.services.prompt_store import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -333,9 +334,9 @@ class LLMGateway:
             {
                 "role": "system",
                 "content": system_prompt or (
-                    "You are a helpful assistant. Return valid JSON."
+                    load_prompt("gateway_default_json_system")
                     if expects_json
-                    else "You are a helpful assistant."
+                    else load_prompt("gateway_default_text_system")
                 ),
             },
             {"role": "user", "content": user_prompt},
@@ -414,10 +415,8 @@ class LLMGateway:
 
                 parsed_json = None
                 if expects_json:
-                    try:
-                        parsed_json = json.loads(raw_output)
-                    except Exception as exc:
-                        parse_error = str(exc)
+                    parsed_json, parse_error, recovered_json = self._parse_json_object_response(raw_output)
+                    if parsed_json is None:
                         await self.add_issue(
                             batch_id=batch_id,
                             claim_id=claim_id,
@@ -465,11 +464,24 @@ class LLMGateway:
                             current_messages = current_messages + [
                                 {
                                     "role": "user",
-                                    "content": "You returned invalid JSON. Return valid JSON only.",
+                                    "content": load_prompt("gateway_invalid_json_retry_user"),
                                 }
                             ]
                             continue
                         raise InvalidJSONResponseError("Model returned invalid JSON after recovery attempt.")
+                    if recovered_json:
+                        await self.add_issue(
+                            batch_id=batch_id,
+                            claim_id=claim_id,
+                            severity="WARN",
+                            stage=stage,
+                            message="Recovered JSON object from wrapped/non-compliant model output.",
+                            details={
+                                "trace_id": trace_id,
+                                "provider": self.provider_name,
+                                "model": preflight.model,
+                            },
+                        )
 
                 await self.rate_limiter.adjust_usage(
                     estimated_tokens=preflight.estimated_total_tokens, actual_tokens=usage["total_tokens"]
@@ -1047,6 +1059,80 @@ class LLMGateway:
         if len(text) <= max_chars:
             return text
         return text[:max_chars] + "...[truncated]"
+
+    def _parse_json_object_response(self, raw_output: str) -> Tuple[Optional[Dict[str, Any]], Optional[str], bool]:
+        strict_error = None
+        try:
+            parsed = json.loads(raw_output)
+            if isinstance(parsed, dict):
+                return parsed, None, False
+            return None, f"Expected JSON object, got {type(parsed).__name__}.", False
+        except Exception as exc:
+            strict_error = str(exc)
+
+        for candidate in self._json_object_candidates(raw_output):
+            try:
+                parsed = json.loads(candidate)
+            except Exception:
+                continue
+            if isinstance(parsed, dict):
+                return parsed, None, True
+
+        return None, strict_error or "Invalid JSON response.", False
+
+    @classmethod
+    def _json_object_candidates(cls, text: str) -> List[str]:
+        candidates: List[str] = []
+
+        fenced_matches = re.findall(r"```(?:json|JSON)?\s*(.*?)\s*```", text, flags=re.DOTALL)
+        for match in fenced_matches:
+            if isinstance(match, str) and match.strip():
+                candidates.append(match.strip())
+
+        first_object = cls._extract_first_balanced_object(text)
+        if first_object:
+            candidates.append(first_object)
+
+        # Preserve order while removing duplicates.
+        seen = set()
+        deduped = []
+        for item in candidates:
+            if item in seen:
+                continue
+            seen.add(item)
+            deduped.append(item)
+        return deduped
+
+    @staticmethod
+    def _extract_first_balanced_object(text: str) -> Optional[str]:
+        start = text.find("{")
+        if start < 0:
+            return None
+
+        depth = 0
+        in_string = False
+        escaped = False
+        for index in range(start, len(text)):
+            ch = text[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+                continue
+
+            if ch == '"':
+                in_string = True
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : index + 1]
+        return None
 
     @staticmethod
     def _iso_to_epoch(value: str) -> float:

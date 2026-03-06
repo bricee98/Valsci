@@ -1,10 +1,24 @@
 import asyncio
 import json
+import sys
+import types
+import pytest
 
+from app.config.settings import Config
 from app.services.llm.rate_limiter import GatewayRateLimiter
 from app.services.llm.retry_policy import RetryPolicy
 from app.services.llm.token_estimator import TokenEstimator
 from app.services.llm.trace_store import TraceStore
+
+
+def _load_searcher_class():
+    sys.modules.setdefault("ijson", types.ModuleType("ijson"))
+    openai_stub = types.ModuleType("openai")
+    openai_stub.OpenAI = object
+    sys.modules.setdefault("openai", openai_stub)
+    from semantic_scholar.utils.searcher import S2Searcher
+
+    return S2Searcher
 
 
 def test_token_estimator_produces_non_zero_counts():
@@ -53,3 +67,60 @@ def test_rate_limiter_basic_reservation():
             return True
 
     assert asyncio.run(run()) is True
+
+
+def test_validate_config_rejects_invalid_backoff(monkeypatch):
+    monkeypatch.setattr(Config, "LLM_PROVIDER", "openai", raising=False)
+    monkeypatch.setattr(Config, "LLM_API_KEY", "test", raising=False)
+    monkeypatch.setattr(Config, "SECRET_KEY", "secret", raising=False)
+    monkeypatch.setattr(Config, "USER_EMAIL", "user@example.com", raising=False)
+    monkeypatch.setattr(Config, "SEMANTIC_SCHOLAR_API_KEY", "test", raising=False)
+    monkeypatch.setattr(Config, "REQUIRE_PASSWORD", False, raising=False)
+    monkeypatch.setattr(Config, "LLM_BACKOFF_BASE_SECONDS", 10.0, raising=False)
+    monkeypatch.setattr(Config, "LLM_BACKOFF_MAX_SECONDS", 1.0, raising=False)
+
+    with pytest.raises(ValueError):
+        Config.validate_config()
+
+
+def test_get_paper_content_reports_missing_release():
+    S2Searcher = _load_searcher_class()
+    searcher = S2Searcher.__new__(S2Searcher)
+    searcher.current_release = None
+    searcher.has_local_data = False
+
+    result = searcher.get_paper_content("123")
+
+    assert result["status"] == "inaccessible"
+    assert result["reason_code"] == "missing_release"
+    assert result["lookup_details"]["attempts"] == []
+
+
+def test_get_paper_content_reports_dataset_attempts_when_no_text():
+    S2Searcher = _load_searcher_class()
+
+    class FakeIndexer:
+        def lookup(self, release_id, dataset, id_type, search_id):
+            if dataset == "s2orc":
+                return {"pdf_parse": {}}
+            if dataset == "abstracts":
+                return {"abstract": ""}
+            if dataset == "tldrs":
+                return {"text": ""}
+            return None
+
+    searcher = S2Searcher.__new__(S2Searcher)
+    searcher.current_release = "2025-01-01"
+    searcher.has_local_data = True
+    searcher.indexer = FakeIndexer()
+
+    result = searcher.get_paper_content("456")
+
+    assert result["status"] == "inaccessible"
+    assert result["reason_code"] == "no_accessible_content"
+    attempts = result["lookup_details"]["attempts"]
+    assert attempts == [
+        {"dataset": "s2orc", "status": "record_without_text", "detail": "pdf_parse.body_text missing"},
+        {"dataset": "abstracts", "status": "record_without_text", "detail": "abstract missing"},
+        {"dataset": "tldrs", "status": "record_without_text", "detail": "text missing"},
+    ]

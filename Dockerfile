@@ -19,6 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY app/ app/
 COPY semantic_scholar/ semantic_scholar/
+COPY prompts/ prompts/
 COPY run.py processor.py ./
 
 # Create directories for jobs

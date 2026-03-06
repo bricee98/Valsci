@@ -9,6 +9,7 @@ from asyncio import timeout
 from azure.ai.inference import ChatCompletionsClient
 from azure.core.credentials import AzureKeyCredential
 import httpx
+from app.services.prompt_store import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,11 @@ class OpenAIService:
             return json.loads('{"error": "Prompt is too long"}')
 
         messages = [
-            {"role": "system", "content": system_prompt or "You are a helpful assistant. Please provide your response in valid JSON format."},
+            {
+                "role": "system",
+                "content": system_prompt
+                or load_prompt("gateway_default_json_system"),
+            },
             {"role": "user", "content": prompt}
         ]
 
@@ -89,7 +94,10 @@ class OpenAIService:
                 async with asyncio.timeout(180):  # 180 seconds = 3 minutes
                     # Create proper message formats for Azure AI Inference
                     ai_messages = [
-                        SystemMessage(content=system_prompt or "You are a helpful assistant. Please provide your response in valid JSON format."),
+                        SystemMessage(
+                            content=system_prompt
+                            or load_prompt("gateway_default_json_system")
+                        ),
                         UserMessage(content=prompt)
                     ]
                     
@@ -171,7 +179,11 @@ class OpenAIService:
             return "Error: Prompt is too long"
 
         messages = [
-            {"role": "system", "content": system_prompt or "You are a helpful assistant."},
+            {
+                "role": "system",
+                "content": system_prompt
+                or load_prompt("gateway_default_text_system"),
+            },
             {"role": "user", "content": prompt}
         ]
 
@@ -187,7 +199,10 @@ class OpenAIService:
                 async with asyncio.timeout(180):  # 180 seconds = 3 minutes
                     # Create proper message formats for Azure AI Inference
                     ai_messages = [
-                        SystemMessage(content=system_prompt or "You are a helpful assistant."),
+                        SystemMessage(
+                            content=system_prompt
+                            or load_prompt("gateway_default_text_system")
+                        ),
                         UserMessage(content=prompt)
                     ]
                     

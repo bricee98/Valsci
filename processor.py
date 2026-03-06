@@ -11,6 +11,7 @@ from app.models.paper import Paper
 from app.services.email_service import EmailService
 from app.services.llm.gateway import LLMGateway, LLMTask
 from app.services.llm.types import empty_usage, merge_usage, normalize_usage
+from app.services.llm.validators import OutputValidationError, validate_query_list
 from app.services.paper_analyzer import PaperAnalyzer
 from app.services.evidence_scorer import EvidenceScorer
 import time
@@ -308,7 +309,45 @@ class ValsciProcessor:
 
             # Get in-memory claim data
             claim_data = self.claims_in_memory[(batch_id, claim_id)]
-            queries = claim_data['semantic_scholar_queries']
+            raw_queries = claim_data['semantic_scholar_queries']
+
+            try:
+                queries = validate_query_list(raw_queries, min_count=1)
+            except OutputValidationError as exc:
+                await self.ai_service.add_issue(
+                    batch_id=batch_id,
+                    claim_id=claim_id,
+                    severity="ERROR",
+                    stage="paper_search",
+                    message="Paper search blocked: query list failed validation.",
+                    details={"error": str(exc)},
+                )
+                claim_data['status'] = 'processed'
+                report = {
+                    "relevantPapers": [],
+                    "explanation": "Query validation failed before paper search. The claim could not be evaluated.",
+                    "claimRating": 0,
+                    "timing_stats": {},
+                    "searchQueries": [],
+                    "claim_text": claim_data.get('text', ''),
+                }
+                claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
+                await self._save_processed_claim(claim_data, batch_id, claim_id)
+                return
+
+            if queries != raw_queries:
+                await self.ai_service.add_issue(
+                    batch_id=batch_id,
+                    claim_id=claim_id,
+                    severity="WARN",
+                    stage="paper_search",
+                    message="Query list was sanitized before search execution.",
+                    details={
+                        "original_count": len(raw_queries) if isinstance(raw_queries, list) else 0,
+                        "sanitized_count": len(queries),
+                    },
+                )
+                claim_data['semantic_scholar_queries'] = queries
 
             # Guard: refuse to search with empty queries (upstream failure)
             if not queries:
@@ -467,15 +506,42 @@ class ValsciProcessor:
                     content_dict = self.s2_searcher.get_paper_content(corpus_id)
 
                     if content_dict is None or content_dict.get('text') is None:
+                        inaccessible_paper = dict(raw_paper)
+                        inaccessible_paper['access_status'] = (
+                            content_dict.get('status', 'inaccessible')
+                            if isinstance(content_dict, dict)
+                            else 'inaccessible'
+                        )
+                        inaccessible_paper['access_reason_code'] = (
+                            content_dict.get('reason_code', 'unknown')
+                            if isinstance(content_dict, dict)
+                            else 'unknown'
+                        )
+                        inaccessible_paper['access_reason'] = (
+                            content_dict.get('reason', 'Paper content not accessible')
+                            if isinstance(content_dict, dict)
+                            else 'Paper content not accessible'
+                        )
+                        inaccessible_paper['access_details'] = (
+                            content_dict.get('lookup_details', {})
+                            if isinstance(content_dict, dict)
+                            else {}
+                        )
+
                         # Add to inaccessible papers
-                        claim_data['inaccessible_papers'].append(raw_paper)
+                        claim_data['inaccessible_papers'].append(inaccessible_paper)
                         await self.ai_service.add_issue(
                             batch_id=batch_id,
                             claim_id=claim_id,
                             severity="WARN",
                             stage="paper_fetch",
                             message="Paper content was not accessible.",
-                            details={"paper_id": str(corpus_id)},
+                            details={
+                                "paper_id": str(corpus_id),
+                                "reason_code": inaccessible_paper['access_reason_code'],
+                                "reason": inaccessible_paper['access_reason'],
+                                "lookup_details": inaccessible_paper['access_details'],
+                            },
                         )
                         continue
 

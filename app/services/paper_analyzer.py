@@ -5,6 +5,8 @@ from app.services.llm.types import empty_usage
 from textwrap import dedent
 import logging
 import re
+from app.services.llm.validators import validate_paper_analysis_payload
+from app.services.prompt_store import load_prompt, render_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -33,31 +35,7 @@ class PaperAnalyzer:
         """
         
         # Prepare the analysis prompt
-        system_prompt = dedent("""
-            You are an expert at analyzing scientific papers and evaluating their relevance to specific claims through both direct evidence and mechanistic pathways.
-
-            Guidelines for Analysis:
-            1. Evaluate direct evidence that supports or refutes the claim
-            2. Identify mechanistic evidence that strengthens or weakens the claim's plausibility
-            3. Examine methodology, results, and conclusions with careful attention to detail
-            4. Extract verbatim quotes with complete scientific context in which they are found
-            5. Consider study limitations and their impact on evidence quality
-            6. Assess both statistical and practical significance of findings
-            7. Note experimental conditions that may affect generalizability
-
-            Guidelines for Quote Extraction:
-            1. Include complete sentences or paragraphs that capture full context
-            2. Maintain exact spelling, punctuation, and formatting
-
-            Return a JSON object with:
-            {
-                "relevance": float (0-1),
-                "excerpts": list of relevant verbatim sentences or paragraphs (a list of strings),
-                "explanations": list of explanations (a list of strings), one for each excerpt, addressing how the excerpt relates to the claim (direct or mechanistic) and the strength and limitations of the evidence
-                "non_relevant_explanation": string (only if relevance < 0.1),
-                "excerpt_pages": list of page numbers (or null if not available)
-            }
-        """).strip()
+        system_prompt = load_prompt("paper_analysis_system")
 
         cleaned_content, truncation = self._clean_content_with_budget(
             content=paper_content,
@@ -82,30 +60,11 @@ class PaperAnalyzer:
                 },
             )
 
-        user_prompt = dedent(f"""
-            Analyze this paper content for both direct and mechanistic evidence related to the following claim:
-
-            Claim: {claim_text}
-
-            Paper content:
-            {cleaned_content}
-
-            Tasks:
-            1. Determine if this paper provides relevant evidence for or against the claim
-            2. Extract complete, verbatim sentences or paragraphs that:
-            - Support or refute the claim
-            - Describe relevant mechanisms
-            - Provide essential context for understanding the evidence
-            3. For each sentence or paragraph:
-            - Explain how it relates to the claim
-            - Note whether it's direct evidence or mechanistic
-            - Include any limitations or caveats
-            4. If relevance < 0.1, provide a detailed explanation why
-
-            Remember:
-            - Include complete sentences and surrounding context
-            - Maintain exact wording, including statistical details
-        """).strip()
+        user_prompt = render_prompt(
+            "paper_analysis_user",
+            claim_text=claim_text,
+            cleaned_content=cleaned_content,
+        )
 
         try:
             # Use the async version of generate_json
@@ -118,7 +77,7 @@ class PaperAnalyzer:
                 paper_id=paper_id,
                 model_override=model_override,
             )
-            response = result['content']
+            response = validate_paper_analysis_payload(result['content'])
             usage = result['usage']
             
             # Log the analysis results

@@ -5,6 +5,8 @@ from textwrap import dedent
 from app.config.settings import Config
 from app.services.llm.gateway import LLMTask
 from app.services.llm.types import empty_usage
+from app.services.llm.validators import validate_venue_score_payload
+from app.services.prompt_store import load_prompt, render_prompt
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -167,28 +169,8 @@ class EvidenceScorer:
             return 0.0, empty_usage()
 
         try:
-            system_prompt = """
-            You are an expert in academic publishing and research venues. 
-            Estimate the impact/prestige of an academic venue on a scale of 0-10.
-            Consider factors like:
-            - Venue reputation in the field
-            - Publication standards and peer review
-            - Typical citation rates
-            - Publisher reputation
-            
-            Return only json object with a single key "score" and a number between 0 and 10.
-            """
-
-            prompt = f"""
-            Rate the academic impact and prestige of this venue:
-            Venue: {paper_journal}
-            
-            Return only json object with a single key "score" and a number between 0 and 10, where:
-            0-2: Low impact or predatory venues
-            3-5: Legitimate but lower impact venues
-            6-8: Well-respected, mainstream venues
-            9-10: Top venues in the field
-            """
+            system_prompt = load_prompt("venue_scoring_system")
+            prompt = render_prompt("venue_scoring_user", paper_journal=paper_journal)
 
             result = await ai_service.chat_json(
                 user_prompt=prompt,
@@ -199,9 +181,9 @@ class EvidenceScorer:
                 paper_id=paper_id,
                 model_override=model_override,
             )
-            response = result['content']
+            response = validate_venue_score_payload(result['content'])
             usage = result['usage']
-            score = response.get('score', 0)
+            score = response["score"]
 
             return float(score), usage
 
