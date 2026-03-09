@@ -10,7 +10,7 @@ from app.services.claim_processor import ClaimProcessor
 from app.models.claim import Claim
 from app.models.batch_job import BatchJob
 from app.models.paper import Paper
-from datetime import datetime
+from datetime import datetime, timezone
 import asyncio
 from typing import List, Dict, Any, Tuple
 import math
@@ -18,6 +18,8 @@ from app.services.email_service import EmailService
 import logging
 import traceback
 from functools import wraps
+from pathlib import Path
+from app.services.batch_export import build_export_document
 
 api = Blueprint('api', __name__)
 
@@ -673,6 +675,68 @@ def browse_batches():
             "code": "BROWSE_ERROR",
             "details": str(e)
         }), 500
+
+
+@api.route('/api/v1/batches/export', methods=['POST'])
+@auth_required
+def export_batches():
+    payload = request.get_json(silent=True) or {}
+    raw_batch_ids = payload.get("batch_ids")
+    if not isinstance(raw_batch_ids, list):
+        return jsonify({
+            "error": "batch_ids must be provided as a list",
+            "code": "INVALID_BATCH_IDS",
+        }), 400
+
+    batch_ids = []
+    seen = set()
+    for value in raw_batch_ids:
+        if not isinstance(value, str):
+            continue
+        batch_id = value.strip()
+        if not batch_id or batch_id in seen:
+            continue
+        seen.add(batch_id)
+        batch_ids.append(batch_id)
+
+    if not batch_ids:
+        return jsonify({
+            "error": "At least one batch ID must be selected",
+            "code": "NO_BATCH_IDS",
+        }), 400
+
+    include_artifacts = payload.get("include_artifacts", True)
+    include_traces = bool(include_artifacts or payload.get("include_traces", False))
+    include_issues = bool(include_artifacts or payload.get("include_issues", False))
+
+    export_data = build_export_document(
+        batch_ids=batch_ids,
+        saved_jobs_root=Path(SAVED_JOBS_DIR),
+        trace_root=Path(_trace_root_dir()),
+        include_traces=include_traces,
+        include_issues=include_issues,
+    )
+
+    if not export_data["batches"]:
+        return jsonify({
+            "error": "No requested batches were found",
+            "code": "BATCHES_NOT_FOUND",
+            "missing_batches": export_data["missing_batches"],
+        }), 404
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    batch_label = "_".join(batch_ids[:3])
+    if len(batch_ids) > 3:
+        batch_label = f"{batch_label}_plus{len(batch_ids) - 3}"
+    filename = f"valsci_batch_export_{batch_label}_{timestamp}.json"
+
+    return Response(
+        json.dumps(export_data, indent=2, ensure_ascii=True) + "\n",
+        mimetype="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )
 
 @api.route('/api/v1/delete/claim/<batch_id>/<claim_id>', methods=['DELETE'])
 @api.route('/api/v1/delete/claim/<claim_id>', methods=['DELETE'])

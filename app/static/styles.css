@@ -1612,6 +1612,71 @@ textarea#newClaimText {
     color: #666;
 }
 
+.browse-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    background-color: white;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.08);
+    padding: 16px 18px;
+    margin-bottom: 16px;
+}
+
+.selection-summary {
+    color: var(--accent-color);
+    font-weight: 600;
+}
+
+.selection-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.selection-actions button,
+.search-container button,
+.batch-actions button,
+.batch-actions .primary-button {
+    margin-top: 0;
+}
+
+.secondary-button {
+    background-color: var(--secondary-color);
+}
+
+.secondary-button:hover {
+    background-color: var(--primary-color);
+}
+
+.batch-header-row {
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.batch-header-row .batch-meta {
+    flex-direction: row;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.batch-selector-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font-weight: 600;
+    color: var(--accent-color);
+}
+
+.batch-selector-label input[type="checkbox"] {
+    width: auto;
+    height: auto;
+    margin: 0;
+}
+
 .table-container {
     overflow-x: auto;
     margin: 15px 0;
@@ -1631,6 +1696,13 @@ textarea#newClaimText {
     display: flex;
     gap: 10px;
     margin-top: 20px;
+    flex-wrap: wrap;
+}
+
+.batch-preview.selected {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px rgba(44, 120, 115, 0.14);
+    background-color: #f4fbf8;
 }
 
 .danger-button {
@@ -1823,6 +1895,10 @@ textarea#newClaimText {
     margin-top: 10px;
 }
 
+.helper-text.error {
+    color: #c82333;
+}
+
 .login-container {
     background-color: white;
     padding: 30px;
@@ -1918,4 +1994,23 @@ header {
 .auth-nav {
     display: flex;
     justify-content: flex-end;
+}
+
+@media (max-width: 700px) {
+    .browse-toolbar,
+    .selection-actions,
+    .batch-header-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .batch-header-row .batch-meta {
+        flex-direction: column;
+        gap: 6px;
+    }
+
+    .selection-actions button,
+    .search-container button {
+        width: 100%;
+    }
 }

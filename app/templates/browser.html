@@ -17,6 +17,17 @@
                 {% endif %}
             </div>
         </header>
+        <div class="browse-toolbar">
+            <div class="selection-summary">
+                <strong id="selectedCount">0</strong> batch(es) selected
+            </div>
+            <div class="selection-actions">
+                <button id="selectVisibleButton" type="button" class="secondary-button">Select Visible</button>
+                <button id="clearSelectionButton" type="button" class="secondary-button">Clear Selection</button>
+                <button id="exportSelectedButton" type="button" class="primary-button" disabled>Export Selected JSON</button>
+            </div>
+        </div>
+        <div id="exportStatus" class="helper-text"></div>
         <div class="search-container">
             <input type="text" id="searchInput" placeholder="Search batches or claims...">
             <button id="searchButton">Search</button>
@@ -27,6 +38,22 @@
         const searchInput = document.getElementById('searchInput');
         const searchButton = document.getElementById('searchButton');
         const batchesContainer = document.getElementById('batchesContainer');
+        const selectedCount = document.getElementById('selectedCount');
+        const selectVisibleButton = document.getElementById('selectVisibleButton');
+        const clearSelectionButton = document.getElementById('clearSelectionButton');
+        const exportSelectedButton = document.getElementById('exportSelectedButton');
+        const exportStatus = document.getElementById('exportStatus');
+        const selectedBatchIds = new Set();
+        let visibleBatchIds = [];
+
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
 
         function formatTimestamp(timestamp) {
             if (!timestamp || timestamp === '1970-01-01T00:00:00') return 'Unknown date';
@@ -60,8 +87,38 @@
             }
         }
 
+        function setExportStatus(message, isError = false) {
+            exportStatus.textContent = message;
+            exportStatus.classList.toggle('error', isError);
+        }
+
+        function updateSelectionUI() {
+            selectedCount.textContent = selectedBatchIds.size;
+            exportSelectedButton.disabled = selectedBatchIds.size === 0;
+        }
+
+        function syncVisibleSelectionState() {
+            document.querySelectorAll('.batch-selector').forEach(checkbox => {
+                const { batchId } = checkbox.dataset;
+                const isSelected = selectedBatchIds.has(batchId);
+                checkbox.checked = isSelected;
+                const batchCard = checkbox.closest('.batch-preview');
+                if (batchCard) {
+                    batchCard.classList.toggle('selected', isSelected);
+                }
+            });
+            updateSelectionUI();
+        }
+
+        function getFilenameFromDisposition(disposition) {
+            if (!disposition) return null;
+            const match = disposition.match(/filename="?([^"]+)"?/i);
+            return match ? match[1] : null;
+        }
+
         function loadBatches(searchTerm = '') {
             batchesContainer.innerHTML = '<div class="loading">Loading batches...</div>';
+            visibleBatchIds = [];
             
             fetchWithAuth(`/api/v1/browse?search=${encodeURIComponent(searchTerm)}`)
                 .then(response => {
@@ -75,17 +132,22 @@
                     
                     if (data.error) {
                         batchesContainer.innerHTML = `<div class="error-message">${data.error}</div>`;
+                        updateSelectionUI();
                         return;
                     }
                     
                     if (!data.batches || data.batches.length === 0) {
                         batchesContainer.innerHTML = '<div class="no-results">No batches found</div>';
+                        updateSelectionUI();
                         return;
                     }
 
+                    visibleBatchIds = data.batches.map(batch => batch.batch_id);
                     data.batches.forEach(batch => {
+                        const batchId = String(batch.batch_id || '');
+                        const isSelected = selectedBatchIds.has(batchId);
                         const batchElement = document.createElement('div');
-                        batchElement.className = 'batch-preview';
+                        batchElement.className = `batch-preview${isSelected ? ' selected' : ''}`;
                         
                         const claimsTable = batch.preview_claims.length > 0 ? `
                             <h3>Preview Claims:</h3>
@@ -102,11 +164,11 @@
                                     <tbody>
                                         ${batch.preview_claims.map(claim => `
                                             <tr>
-                                                <td>${claim.text}</td>
-                                                <td>${claim.status}</td>
+                                                <td>${escapeHtml(claim.text)}</td>
+                                                <td>${escapeHtml(claim.status)}</td>
                                                 <td>${formatRating(claim.rating)}</td>
                                                 <td>
-                                                    <a href="/progress?batch_id=${batch.batch_id}&claim_id=${claim.claim_id}" 
+                                                    <a href="/progress?batch_id=${encodeURIComponent(batchId)}&claim_id=${encodeURIComponent(claim.claim_id)}" 
                                                        class="view-link">View Report</a>
                                                 </td>
                                             </tr>
@@ -117,28 +179,111 @@
                         ` : '<p>No claims available for preview</p>';
 
                         batchElement.innerHTML = `
-                            <div class="batch-header">
-                                <h2>Batch ID: ${batch.batch_id}</h2>
-                                <div class="batch-meta">
-                                    <span>Created: ${formatTimestamp(batch.timestamp)}</span>
-                                    <span>Total Claims: ${batch.total_claims}</span>
+                            <div class="batch-header batch-header-row">
+                                <div>
+                                    <h2>Batch ID: ${escapeHtml(batchId)}</h2>
+                                    <div class="batch-meta">
+                                        <span>Created: ${formatTimestamp(batch.timestamp)}</span>
+                                        <span>Total Claims: ${batch.total_claims}</span>
+                                    </div>
                                 </div>
+                                <label class="batch-selector-label">
+                                    <input
+                                        type="checkbox"
+                                        class="batch-selector"
+                                        data-batch-id="${escapeHtml(batchId)}"
+                                        ${isSelected ? 'checked' : ''}
+                                    >
+                                    Select batch
+                                </label>
                             </div>
                             ${claimsTable}
                             <div class="batch-actions">
-                                <a href="/batch_results?batch_id=${batch.batch_id}" 
+                                <a href="/batch_results?batch_id=${encodeURIComponent(batchId)}" 
                                    class="primary-button">View Full Batch</a>
-                                <button onclick="deleteBatch('${batch.batch_id}')" 
+                                <button data-delete-batch-id="${escapeHtml(batchId)}" 
                                         class="danger-button">Delete Batch</button>
                             </div>
                         `;
+                        const selector = batchElement.querySelector('.batch-selector');
+                        selector.addEventListener('change', (event) => {
+                            if (event.target.checked) {
+                                selectedBatchIds.add(batchId);
+                            } else {
+                                selectedBatchIds.delete(batchId);
+                            }
+                            syncVisibleSelectionState();
+                        });
+                        const deleteButton = batchElement.querySelector('[data-delete-batch-id]');
+                        deleteButton.addEventListener('click', () => deleteBatch(batchId));
                         batchesContainer.appendChild(batchElement);
                     });
+                    syncVisibleSelectionState();
                 })
                 .catch(error => {
                     console.error('Error fetching batches:', error);
                     batchesContainer.innerHTML = '<div class="error-message">Error fetching batches. Please try again later.</div>';
+                    updateSelectionUI();
                 });
+        }
+
+        async function exportSelectedBatches() {
+            const batchIds = Array.from(selectedBatchIds);
+            if (batchIds.length === 0) {
+                alert('Select at least one batch to export.');
+                return;
+            }
+
+            exportSelectedButton.disabled = true;
+            exportSelectedButton.textContent = 'Exporting...';
+            setExportStatus(`Preparing export for ${batchIds.length} batch(es)...`);
+
+            try {
+                const response = await fetchWithAuth('/api/v1/batches/export', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        batch_ids: batchIds,
+                        include_artifacts: true
+                    })
+                });
+
+                if (!response) return;
+
+                if (!response.ok) {
+                    let errorMessage = 'Failed to export batches';
+                    try {
+                        const errorData = await response.json();
+                        errorMessage = errorData.error || errorMessage;
+                    } catch (error) {
+                        console.error('Error parsing export error response:', error);
+                    }
+                    throw new Error(errorMessage);
+                }
+
+                const blob = await response.blob();
+                const filename =
+                    getFilenameFromDisposition(response.headers.get('Content-Disposition')) ||
+                    'valsci_batch_export.json';
+                const downloadUrl = URL.createObjectURL(blob);
+                const downloadLink = document.createElement('a');
+                downloadLink.href = downloadUrl;
+                downloadLink.download = filename;
+                document.body.appendChild(downloadLink);
+                downloadLink.click();
+                downloadLink.remove();
+                URL.revokeObjectURL(downloadUrl);
+                setExportStatus(`Downloaded ${filename}`);
+            } catch (error) {
+                console.error('Error exporting batches:', error);
+                setExportStatus(error.message || 'Failed to export batches', true);
+                alert(error.message || 'Failed to export batches');
+            } finally {
+                exportSelectedButton.textContent = 'Export Selected JSON';
+                updateSelectionUI();
+            }
         }
 
         async function deleteBatch(batchId) {
@@ -147,7 +292,7 @@
             }
 
             try {
-                const response = await fetchWithAuth(`/api/v1/delete/batch/${batchId}`, {
+                const response = await fetchWithAuth(`/api/v1/delete/batch/${encodeURIComponent(batchId)}`, {
                     method: 'DELETE'
                 });
                 
@@ -156,6 +301,8 @@
                 const data = await response.json();
                 
                 if (response.ok) {
+                    selectedBatchIds.delete(batchId);
+                    setExportStatus('');
                     loadBatches(searchInput.value);
                 } else {
                     alert(data.error || 'Failed to delete batch');
@@ -165,6 +312,20 @@
                 alert('Error deleting batch. Please try again.');
             }
         }
+
+        selectVisibleButton.addEventListener('click', () => {
+            visibleBatchIds.forEach(batchId => selectedBatchIds.add(batchId));
+            syncVisibleSelectionState();
+            setExportStatus(`${visibleBatchIds.length} visible batch(es) selected`);
+        });
+
+        clearSelectionButton.addEventListener('click', () => {
+            selectedBatchIds.clear();
+            syncVisibleSelectionState();
+            setExportStatus('Selection cleared');
+        });
+
+        exportSelectedButton.addEventListener('click', exportSelectedBatches);
 
         searchButton.addEventListener('click', () => {
             loadBatches(searchInput.value);
