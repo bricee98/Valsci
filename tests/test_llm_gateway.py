@@ -20,6 +20,8 @@ class FakeProvider:
 
     async def chat(self, request):
         self.calls += 1
+        if self.mode == "async_timeout":
+            raise asyncio.TimeoutError("gateway timeout")
         if self.mode == "retry_then_success":
             if self.calls <= 2:
                 raise FakeStatusError(429, "rate limited")
@@ -60,14 +62,28 @@ class FakeProvider:
         )
 
 
-def build_gateway(monkeypatch, tmp_path, provider, routing=None, model_registry_overrides=None):
+def build_gateway(
+    monkeypatch,
+    tmp_path,
+    provider,
+    routing=None,
+    model_registry_overrides=None,
+    *,
+    provider_name="openai",
+    base_url="https://api.openai.com/v1",
+    local_backend="",
+    timeout_seconds=5,
+    timeout_seconds_local=None,
+):
     monkeypatch.setattr(Config, "TRACE_DIR", str(tmp_path), raising=False)
     monkeypatch.setattr(Config, "TRACE_ENABLED", True, raising=False)
     monkeypatch.setattr(Config, "TRACE_EMBED_MODE", "full", raising=False)
     monkeypatch.setattr(Config, "TRACE_EMBED_MAX_BYTES", 1_000_000, raising=False)
-    monkeypatch.setattr(Config, "LLM_PROVIDER", "openai", raising=False)
+    monkeypatch.setattr(Config, "LLM_PROVIDER", provider_name, raising=False)
     monkeypatch.setattr(Config, "LLM_API_KEY", "test-key", raising=False)
     monkeypatch.setattr(Config, "LLM_EVALUATION_MODEL", "test-model", raising=False)
+    monkeypatch.setattr(Config, "LLM_BASE_URL", base_url, raising=False)
+    monkeypatch.setattr(Config, "LOCAL_BACKEND", local_backend, raising=False)
     monkeypatch.setattr(Config, "LLM_ROUTING", routing or {"enabled": False}, raising=False)
     monkeypatch.setattr(
         Config,
@@ -90,7 +106,8 @@ def build_gateway(monkeypatch, tmp_path, provider, routing=None, model_registry_
     monkeypatch.setattr(Config, "LLM_BACKOFF_BASE_SECONDS", 0.01, raising=False)
     monkeypatch.setattr(Config, "LLM_BACKOFF_MAX_SECONDS", 0.05, raising=False)
     monkeypatch.setattr(Config, "LLM_BACKOFF_JITTER", 0.0, raising=False)
-    monkeypatch.setattr(Config, "LLM_TIMEOUT_SECONDS", 5, raising=False)
+    monkeypatch.setattr(Config, "LLM_TIMEOUT_SECONDS", timeout_seconds, raising=False)
+    monkeypatch.setattr(Config, "LLM_TIMEOUT_SECONDS_LOCAL", timeout_seconds_local, raising=False)
     monkeypatch.setattr(LLMGateway, "_build_provider", lambda self: provider)
     return LLMGateway()
 
@@ -262,5 +279,97 @@ def test_fenced_json_is_recovered_without_retry(monkeypatch, tmp_path):
         assert traces[0]["status"] == "success"
         issues = await gateway.get_claim_issues("b6", "c6")
         assert any("Recovered JSON object" in issue["message"] for issue in issues)
+
+    asyncio.run(run())
+
+
+def test_timeout_override_is_ignored_when_routing_disabled(monkeypatch, tmp_path):
+    routing = {
+        "enabled": False,
+        "tasks": {
+            LLMTask.FINAL_REPORT: {
+                "timeout_seconds": 300,
+            }
+        },
+    }
+    gateway = build_gateway(
+        monkeypatch,
+        tmp_path,
+        provider=FakeProvider("success"),
+        routing=routing,
+        timeout_seconds=45,
+    )
+
+    timeout_value, timeout_source = gateway._resolve_timeout_details(LLMTask.FINAL_REPORT)
+
+    assert timeout_value == 45
+    assert timeout_source == "global_default"
+
+
+def test_timeout_override_is_used_when_routing_enabled(monkeypatch, tmp_path):
+    routing = {
+        "enabled": True,
+        "tasks": {
+            LLMTask.FINAL_REPORT: {
+                "timeout_seconds": 300,
+            }
+        },
+    }
+    gateway = build_gateway(
+        monkeypatch,
+        tmp_path,
+        provider=FakeProvider("success"),
+        routing=routing,
+        timeout_seconds=45,
+    )
+
+    timeout_value, timeout_source = gateway._resolve_timeout_details(LLMTask.FINAL_REPORT)
+
+    assert timeout_value == 300
+    assert timeout_source == "task_override"
+
+
+def test_loopback_openai_base_url_uses_local_timeout(monkeypatch, tmp_path):
+    gateway = build_gateway(
+        monkeypatch,
+        tmp_path,
+        provider=FakeProvider("success"),
+        timeout_seconds=45,
+        timeout_seconds_local=600,
+        base_url="http://127.0.0.1:11434/v1",
+    )
+
+    timeout_value, timeout_source = gateway._resolve_timeout_details(LLMTask.FINAL_REPORT)
+
+    assert timeout_value == 600
+    assert timeout_source == "local_default"
+
+
+def test_timeout_failure_records_timeout_diagnostics(monkeypatch, tmp_path):
+    gateway = build_gateway(
+        monkeypatch,
+        tmp_path,
+        provider=FakeProvider("async_timeout"),
+        timeout_seconds=9,
+    )
+    monkeypatch.setattr(gateway.retry_policy, "max_retries", 0)
+
+    async def run():
+        with pytest.raises(asyncio.TimeoutError):
+            await gateway.chat_json(
+                user_prompt="Return json",
+                system_prompt="Return valid JSON only",
+                task=LLMTask.GENERIC,
+                batch_id="b7",
+                claim_id="c7",
+            )
+        traces = await gateway.get_claim_traces("b7", "c7")
+        assert len(traces) == 1
+        assert traces[0]["status"] == "error"
+        assert traces[0]["timed_out"] is True
+        assert traces[0]["timeout_source"] == "global_default"
+        issues = await gateway.get_claim_issues("b7", "c7")
+        assert issues[0]["details"]["timed_out"] is True
+        assert issues[0]["details"]["timeout_source"] == "global_default"
 
     asyncio.run(run())

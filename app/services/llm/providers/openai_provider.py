@@ -37,6 +37,8 @@ class OpenAIProvider(BaseProvider):
             kwargs["max_tokens"] = int(request.max_output_tokens)
         if request.temperature is not None:
             kwargs["temperature"] = request.temperature
+        if request.timeout_seconds is not None:
+            kwargs["timeout"] = int(request.timeout_seconds)
         if request.extra_headers:
             kwargs["extra_headers"] = request.extra_headers
         elif self.extra_headers:

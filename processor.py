@@ -993,6 +993,7 @@ class ValsciProcessor:
 async def main():
     """Main function to run the processor."""
     try:
+        settings.Config.validate_config()
         await asyncio.to_thread(os.makedirs, QUEUED_JOBS_DIR, exist_ok=True)
         await asyncio.to_thread(os.makedirs, SAVED_JOBS_DIR, exist_ok=True)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
 import re
@@ -365,7 +366,7 @@ class LLMGateway:
             "response_format": response_format,
         }
 
-        effective_timeout = self._resolve_timeout(task)
+        effective_timeout, timeout_source = self._resolve_timeout_details(task)
 
         parent_trace_id = None
         retry_count = 0
@@ -453,6 +454,8 @@ class LLMGateway:
                                 finish_reason=finish_reason,
                                 retries=retry_count,
                                 timeout_configured_s=effective_timeout,
+                                timeout_source=timeout_source,
+                                timed_out=False,
                                 http_status=http_status,
                                 error_type="InvalidJSONResponseError",
                                 error_message="Invalid JSON returned by model. Retrying once with JSON reminder.",
@@ -507,6 +510,8 @@ class LLMGateway:
                     finish_reason=finish_reason,
                     retries=retry_count,
                     timeout_configured_s=effective_timeout,
+                    timeout_source=timeout_source,
+                    timed_out=False,
                     http_status=http_status,
                     error_type=None,
                     error_message=None,
@@ -542,6 +547,7 @@ class LLMGateway:
                 stacktrace = self._truncate_text(traceback.format_exc(), self.stacktrace_max_bytes)
                 decision = self.retry_policy.classify(exc, http_status=http_status)
                 should_retry = decision.should_retry and attempt <= self.retry_policy.max_retries
+                timed_out = self._is_timeout_exception(exc)
 
                 # Pre-compute backoff so it can be recorded in trace
                 backoff_s = (
@@ -568,6 +574,8 @@ class LLMGateway:
                         "exception_type": error_type,
                         "exception_message": error_message,
                         "timeout_configured_s": effective_timeout,
+                        "timeout_source": timeout_source,
+                        "timed_out": timed_out,
                         "elapsed_s": elapsed_s,
                     },
                 )
@@ -593,6 +601,8 @@ class LLMGateway:
                     finish_reason=finish_reason,
                     retries=retry_count,
                     timeout_configured_s=effective_timeout,
+                    timeout_source=timeout_source,
+                    timed_out=timed_out,
                     backoff_waited_s=backoff_s,
                     http_status=http_status,
                     error_type=error_type,
@@ -631,6 +641,8 @@ class LLMGateway:
         finish_reason: Optional[str],
         retries: int,
         timeout_configured_s: Optional[int] = None,
+        timeout_source: Optional[str] = None,
+        timed_out: bool = False,
         backoff_waited_s: Optional[float] = None,
         http_status: Optional[int] = None,
         error_type: Optional[str] = None,
@@ -668,6 +680,8 @@ class LLMGateway:
             finish_reason=finish_reason,
             retries=retries,
             timeout_configured_s=timeout_configured_s,
+            timeout_source=timeout_source,
+            timed_out=timed_out,
             backoff_waited_s=backoff_waited_s,
             http_status=http_status,
             error_type=error_type,
@@ -766,14 +780,41 @@ class LLMGateway:
         return self.provider_name in {"local", "llamacpp", "ollama"}
 
     def _resolve_timeout(self, task: str) -> int:
-        """Resolve timeout: task-level override > local provider default > global default."""
+        return self._resolve_timeout_details(task)[0]
+
+    def _resolve_timeout_details(self, task: str) -> Tuple[int, str]:
+        """Resolve timeout: routing task override > local provider default > global default."""
         task_cfg = self._task_config(task)
         task_timeout = task_cfg.get("timeout_seconds")
-        if task_timeout is not None:
-            return int(task_timeout)
-        if self._is_local_provider() and self.timeout_seconds_local is not None:
-            return int(self.timeout_seconds_local)
-        return self.timeout_seconds
+        if self.routing_enabled and task_timeout is not None:
+            return int(task_timeout), "task_override"
+        if self._uses_local_timeout_default() and self.timeout_seconds_local is not None:
+            return int(self.timeout_seconds_local), "local_default"
+        return int(self.timeout_seconds), "global_default"
+
+    def _uses_local_timeout_default(self) -> bool:
+        if self._is_local_provider():
+            return True
+        if self.local_backend:
+            return True
+        host = self._base_url_hostname()
+        if not host:
+            return False
+        if host == "host.docker.internal":
+            return True
+        try:
+            return ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            return host == "localhost"
+
+    def _base_url_hostname(self) -> Optional[str]:
+        if not self.base_url:
+            return None
+        parsed = urlparse(self.base_url)
+        host = parsed.hostname
+        if not host:
+            return None
+        return host.lower()
 
     def _candidate_models(self, task_config: Dict[str, Any], model_override: Optional[str]) -> Tuple[List[str], str]:
         if model_override:
@@ -1030,6 +1071,12 @@ class LLMGateway:
             if isinstance(code, int):
                 return code
         return None
+
+    @staticmethod
+    def _is_timeout_exception(exc: Exception) -> bool:
+        if isinstance(exc, (TimeoutError, asyncio.TimeoutError, httpx.TimeoutException)):
+            return True
+        return "timeout" in exc.__class__.__name__.lower()
 
     @staticmethod
     def _redact_base_url(base_url: Optional[str]) -> Optional[str]:

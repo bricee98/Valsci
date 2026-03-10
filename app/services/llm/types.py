@@ -110,6 +110,8 @@ class TraceRecord:
     finish_reason: Optional[str]
     retries: int
     timeout_configured_s: Optional[int]
+    timeout_source: Optional[str]
+    timed_out: bool
     backoff_waited_s: Optional[float]
     http_status: Optional[int]
     error_type: Optional[str]
@@ -132,4 +134,3 @@ class IssueRecord:
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
-

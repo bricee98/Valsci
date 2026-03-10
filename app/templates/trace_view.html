@@ -27,12 +27,38 @@
         .trace-toolbar a:hover {
             background: #ececec;
         }
+        .trace-toolbar button.primary {
+            background: #0f62fe;
+            border-color: #0f62fe;
+            color: #fff;
+        }
+        .trace-toolbar button.primary:hover {
+            background: #0353e9;
+        }
+        .trace-toolbar button[disabled] {
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
         .trace-summary {
             border: 1px solid #ddd;
             border-radius: 8px;
             padding: 12px;
             background: #fafafa;
             margin-bottom: 16px;
+        }
+        .trace-summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 10px;
+        }
+        .trace-summary-card {
+            border: 1px solid #e3e3e3;
+            border-radius: 8px;
+            background: #fff;
+            padding: 10px;
+        }
+        .trace-summary-card p {
+            margin: 4px 0;
         }
         .trace-list {
             display: grid;
@@ -71,6 +97,19 @@
         .trace-meta {
             margin: 8px 0 0 0;
             line-height: 1.5;
+        }
+        .trace-timing {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 8px;
+            margin-top: 12px;
+            padding: 10px;
+            border: 1px solid #e6e6e6;
+            border-radius: 6px;
+            background: #fafafa;
+        }
+        .trace-timing div {
+            line-height: 1.4;
         }
         .trace-badge {
             display: inline-block;
@@ -151,6 +190,7 @@
             <a id="downloadTrace" href="#">Download Trace File</a>
             <a id="downloadIssues" href="#">Download Issues File</a>
             <button id="jumpToHighlight" type="button">Jump to Highlight</button>
+            <button id="resumeClaim" class="primary" type="button" hidden>Resume Claim</button>
         </div>
 
         <div id="statusMessage"></div>
@@ -168,8 +208,11 @@
         const traceList = document.getElementById('traceList');
         const batchLabel = document.getElementById('batchLabel');
         const claimLabel = document.getElementById('claimLabel');
+        const resumeButton = document.getElementById('resumeClaim');
 
         let currentHighlightedIndices = [];
+        let currentResumeStage = null;
+        let currentResumeReason = null;
 
         function escapeHtml(value) {
             return String(value ?? '')
@@ -214,10 +257,75 @@
             }
         }
 
-        function renderSummary(records, errorLikeIndices, highlightedIndices, focusedIndex, invalidLines, traceFile) {
+        function formatDurationMs(value) {
+            if (value === null || value === undefined || value === '') {
+                return 'n/a';
+            }
+            const totalMs = Number(value);
+            if (!Number.isFinite(totalMs)) {
+                return 'n/a';
+            }
+            if (totalMs < 1000) {
+                return `${totalMs} ms`;
+            }
+            const totalSeconds = totalMs / 1000;
+            if (totalSeconds < 60) {
+                return `${totalSeconds.toFixed(2)} s`;
+            }
+            const minutes = Math.floor(totalSeconds / 60);
+            const seconds = totalSeconds % 60;
+            return `${minutes}m ${seconds.toFixed(1)}s`;
+        }
+
+        function formatSeconds(value) {
+            if (value === null || value === undefined || value === '') {
+                return 'n/a';
+            }
+            const totalSeconds = Number(value);
+            if (!Number.isFinite(totalSeconds)) {
+                return 'n/a';
+            }
+            if (totalSeconds < 60) {
+                return `${totalSeconds} s`;
+            }
+            const minutes = Math.floor(totalSeconds / 60);
+            const seconds = totalSeconds % 60;
+            return `${minutes}m ${seconds}s`;
+        }
+
+        function humanizeClaimLocation(value) {
+            if (value === 'queued_jobs') {
+                return 'queued_jobs';
+            }
+            if (value === 'saved_jobs') {
+                return 'saved_jobs';
+            }
+            return 'unknown';
+        }
+
+        function updateResumeButton(payload) {
+            currentResumeStage = payload.resume_stage || null;
+            currentResumeReason = payload.resume_reason || null;
+
+            if (payload.resume_available) {
+                resumeButton.hidden = false;
+                resumeButton.disabled = false;
+                const stageLabel = payload.resume_stage ? ` (${payload.resume_stage})` : '';
+                resumeButton.textContent = `Resume Claim${stageLabel}`;
+                return;
+            }
+
+            resumeButton.hidden = true;
+            resumeButton.disabled = true;
+            resumeButton.textContent = 'Resume Claim';
+        }
+
+        function renderSummary(records, errorLikeIndices, highlightedIndices, focusedIndex, invalidLines, traceFile, payload) {
             const successCount = records.filter(r => (r.status || '').toLowerCase() === 'success').length;
             const retryCount = records.filter(r => (r.status || '').toLowerCase() === 'retrying').length;
             const errorCount = records.filter(r => (r.status || '').toLowerCase() === 'error').length;
+            const totalLatencyMs = records.reduce((sum, record) => sum + (Number(record.latency_ms) || 0), 0);
+            const timeoutCount = records.filter(record => Boolean(record.timed_out)).length;
 
             const focusText = focusedIndex !== null && focusedIndex !== undefined
                 ? `Focused trace index: ${focusedIndex + 1}`
@@ -227,12 +335,27 @@
 
             traceSummary.innerHTML = `
                 <h3>Summary</h3>
-                <p>Total calls: ${records.length}</p>
-                <p>Success: ${successCount} | Retrying: ${retryCount} | Error: ${errorCount}</p>
-                <p>Error-like entries: ${errorLikeIndices.length}</p>
-                <p>${escapeHtml(focusText)}</p>
-                <p>Invalid trace lines skipped: ${invalidLines}</p>
-                <p>Trace file: ${escapeHtml(traceFile || '')}</p>
+                <div class="trace-summary-grid">
+                    <div class="trace-summary-card">
+                        <p><strong>Claim Status:</strong> ${escapeHtml(payload.claim_status || 'unknown')}</p>
+                        <p><strong>Claim Location:</strong> ${escapeHtml(humanizeClaimLocation(payload.claim_location))}</p>
+                        <p><strong>Resume Available:</strong> ${payload.resume_available ? 'Yes' : 'No'}</p>
+                        <p><strong>Resume Stage:</strong> ${escapeHtml(payload.resume_stage || 'n/a')}</p>
+                    </div>
+                    <div class="trace-summary-card">
+                        <p><strong>Total Calls:</strong> ${records.length}</p>
+                        <p><strong>Success / Retrying / Error:</strong> ${successCount} / ${retryCount} / ${errorCount}</p>
+                        <p><strong>Timeout Attempts:</strong> ${timeoutCount}</p>
+                        <p><strong>Total Attempt Time:</strong> ${escapeHtml(formatDurationMs(totalLatencyMs))}</p>
+                    </div>
+                    <div class="trace-summary-card">
+                        <p><strong>Error-like Entries:</strong> ${errorLikeIndices.length}</p>
+                        <p><strong>Focus:</strong> ${escapeHtml(focusText)}</p>
+                        <p><strong>Invalid Trace Lines Skipped:</strong> ${invalidLines}</p>
+                        <p><strong>Trace File:</strong> ${escapeHtml(traceFile || '')}</p>
+                    </div>
+                </div>
+                <p style="margin-top: 12px;"><strong>Resume Reason:</strong> ${escapeHtml(payload.resume_reason || 'n/a')}</p>
             `;
         }
 
@@ -270,6 +393,13 @@
                             </div>
                         </div>
 
+                        <div class="trace-timing">
+                            <div><strong>Elapsed:</strong> ${escapeHtml(formatDurationMs(record.latency_ms))}</div>
+                            <div><strong>Configured Timeout:</strong> ${escapeHtml(formatSeconds(record.timeout_configured_s))}</div>
+                            <div><strong>Timeout Source:</strong> ${escapeHtml(record.timeout_source || 'n/a')}</div>
+                            <div><strong>Timed Out:</strong> ${record.timed_out ? 'Yes' : 'No'}</div>
+                        </div>
+
                         ${(record.parse_error || record.error_message || record.error_type) ? `
                             <div class="trace-error">
                                 ${record.error_type ? `<div><strong>Error Type:</strong> ${escapeHtml(record.error_type)}</div>` : ''}
@@ -285,6 +415,8 @@
                                 retries: record.retries,
                                 finish_reason: record.finish_reason,
                                 timeout_configured_s: record.timeout_configured_s,
+                                timeout_source: record.timeout_source,
+                                timed_out: record.timed_out,
                                 backoff_waited_s: record.backoff_waited_s,
                                 http_status: record.http_status,
                                 routing: record.routing
@@ -338,6 +470,7 @@
                 const highlighted = Array.isArray(payload.highlighted_indices) ? payload.highlighted_indices : [];
                 const errorLike = Array.isArray(payload.error_like_indices) ? payload.error_like_indices : [];
                 currentHighlightedIndices = highlighted;
+                updateResumeButton(payload);
 
                 if (records.length === 0) {
                     renderStatus('Trace file loaded, but no records were found.', 'info');
@@ -353,7 +486,8 @@
                     highlighted,
                     payload.focused_index,
                     payload.invalid_lines || 0,
-                    payload.trace_file || ''
+                    payload.trace_file || '',
+                    payload
                 );
                 renderTraceRows(records, highlighted, errorLike);
                 scrollToHighlight();
@@ -377,6 +511,40 @@
 
         document.getElementById('jumpToHighlight').addEventListener('click', () => {
             scrollToHighlight();
+        });
+
+        resumeButton.addEventListener('click', async () => {
+            const stageText = currentResumeStage ? ` to ${currentResumeStage}` : '';
+            const reasonText = currentResumeReason ? `\n\nReason: ${currentResumeReason}` : '';
+            const confirmed = window.confirm(
+                `Resume claim ${claimId}${stageText}?${reasonText}`
+            );
+            if (!confirmed) {
+                return;
+            }
+
+            resumeButton.disabled = true;
+            try {
+                const response = await fetch(
+                    `/api/v1/claims/${encodeURIComponent(batchId)}/${encodeURIComponent(claimId)}/resume`,
+                    { method: 'POST' }
+                );
+                const payload = await response.json();
+                if (!response.ok) {
+                    renderStatus(payload.error || 'Failed to resume claim.', 'error');
+                    resumeButton.disabled = false;
+                    return;
+                }
+                renderStatus(
+                    `Claim resumed to ${payload.resume_to_status}. The processor can pick it up on the next scan.`,
+                    'info'
+                );
+                await loadTrace();
+            } catch (error) {
+                console.error('Error resuming claim:', error);
+                renderStatus('Error resuming claim.', 'error');
+                resumeButton.disabled = false;
+            }
         });
 
         loadTrace();

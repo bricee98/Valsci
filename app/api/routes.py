@@ -12,7 +12,7 @@ from app.models.batch_job import BatchJob
 from app.models.paper import Paper
 from datetime import datetime, timezone
 import asyncio
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Optional, Tuple
 import math
 from app.services.email_service import EmailService
 import logging
@@ -75,6 +75,80 @@ def _read_jsonl_artifact(path: str) -> Tuple[List[Dict[str, Any]], int]:
             except json.JSONDecodeError:
                 invalid_lines += 1
     return records, invalid_lines
+
+
+def _claim_file_candidates(batch_id: str, claim_id: str) -> List[Tuple[str, str]]:
+    return [
+        ("queued_jobs", os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")),
+        ("saved_jobs", os.path.join(SAVED_JOBS_DIR, batch_id, f"{claim_id}.txt")),
+    ]
+
+
+def _find_claim_file(batch_id: str, claim_id: str) -> Tuple[Optional[str], Optional[str]]:
+    for location, path in _claim_file_candidates(batch_id, claim_id):
+        if os.path.exists(path):
+            return location, path
+    return None, None
+
+
+def _load_claim_data(batch_id: str, claim_id: str) -> Tuple[Optional[str], Optional[str], Optional[Dict[str, Any]]]:
+    location, path = _find_claim_file(batch_id, claim_id)
+    if not path:
+        return None, None, None
+    with open(path, 'r', encoding='utf-8') as f:
+        return location, path, json.load(f)
+
+
+def _infer_resume_stage(claim_data: Dict[str, Any]) -> Tuple[str, str]:
+    queries = claim_data.get("semantic_scholar_queries")
+    raw_papers = claim_data.get("raw_papers")
+    if not isinstance(queries, list) or not queries:
+        return "queued", "No saved search queries were found."
+    if not isinstance(raw_papers, list) or not raw_papers:
+        return "ready_for_search", "Saved search queries exist, but no fetched paper set was found."
+    return "ready_for_analysis", "Saved paper search output exists; resume from analysis/report generation."
+
+
+def _build_claim_trace_metadata(batch_id: str, claim_id: str) -> Dict[str, Any]:
+    location, path = _find_claim_file(batch_id, claim_id)
+    metadata = {
+        "claim_status": None,
+        "claim_location": location,
+        "resume_available": False,
+        "resume_stage": None,
+        "resume_reason": None,
+    }
+    if not path:
+        metadata["resume_reason"] = "Claim file was not found."
+        return metadata
+
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            claim_data = json.load(f)
+    except Exception as exc:
+        metadata["resume_reason"] = f"Claim file could not be read: {exc}"
+        return metadata
+
+    status = claim_data.get("status")
+    metadata["claim_status"] = status
+
+    if location == "queued_jobs":
+        metadata["resume_reason"] = "Claim is already queued or in progress."
+        return metadata
+
+    if status != "processed":
+        metadata["resume_reason"] = f"Claim is stored in saved_jobs with status '{status}'."
+        return metadata
+
+    resume_stage, resume_reason = _infer_resume_stage(claim_data)
+    metadata.update(
+        {
+            "resume_available": True,
+            "resume_stage": resume_stage,
+            "resume_reason": resume_reason,
+        }
+    )
+    return metadata
 
 def save_claim_to_file(claim, batch_id, claim_id):
     claim_dir = os.path.join(QUEUED_JOBS_DIR, batch_id)
@@ -228,6 +302,8 @@ def get_claim_trace_records(batch_id, claim_id):
     else:
         highlighted_indices = []
 
+    claim_metadata = _build_claim_trace_metadata(batch_id, claim_id)
+
     return jsonify({
         "batch_id": batch_id,
         "claim_id": claim_id,
@@ -239,6 +315,7 @@ def get_claim_trace_records(batch_id, claim_id):
         "compressed": trace_file.endswith(".gz"),
         "trace_file": f"traces/{claim_id}.jsonl" + (".gz" if trace_file.endswith(".gz") else ""),
         "records": records,
+        **claim_metadata,
     }), 200
 
 @api.route('/api/v1/claims/<batch_id>/<claim_id>/issues', methods=['GET'])
@@ -737,6 +814,55 @@ def export_batches():
             "Content-Disposition": f'attachment; filename="{filename}"',
         },
     )
+
+
+@api.route('/api/v1/claims/<batch_id>/<claim_id>/resume', methods=['POST'])
+@auth_required
+def resume_claim(batch_id, claim_id):
+    location, source_path, claim_data = _load_claim_data(batch_id, claim_id)
+    if not source_path or claim_data is None:
+        return jsonify({
+            "error": "Claim not found",
+            "claim_id": claim_id,
+            "code": "CLAIM_NOT_FOUND",
+        }), 404
+
+    if location == "queued_jobs":
+        return jsonify({
+            "error": "Claim is already queued or in progress",
+            "claim_id": claim_id,
+            "code": "CLAIM_ALREADY_QUEUED",
+        }), 409
+
+    queued_batch_dir = os.path.join(QUEUED_JOBS_DIR, batch_id)
+    os.makedirs(queued_batch_dir, exist_ok=True)
+    queued_path = os.path.join(queued_batch_dir, f"{claim_id}.txt")
+    if os.path.exists(queued_path):
+        return jsonify({
+            "error": "Claim is already queued or in progress",
+            "claim_id": claim_id,
+            "code": "CLAIM_ALREADY_QUEUED",
+        }), 409
+
+    resume_stage, resume_reason = _infer_resume_stage(claim_data)
+    claim_data = dict(claim_data)
+    claim_data["status"] = resume_stage
+    claim_data["batch_id"] = batch_id
+    claim_data["claim_id"] = claim_id
+    claim_data.pop("report", None)
+
+    with open(queued_path, 'w', encoding='utf-8') as f:
+        json.dump(claim_data, f, indent=2)
+    if source_path != queued_path and os.path.exists(source_path):
+        os.remove(source_path)
+
+    return jsonify({
+        "message": "Claim resumed successfully",
+        "batch_id": batch_id,
+        "claim_id": claim_id,
+        "resume_to_status": resume_stage,
+        "resume_reason": resume_reason,
+    }), 200
 
 @api.route('/api/v1/delete/claim/<batch_id>/<claim_id>', methods=['DELETE'])
 @api.route('/api/v1/delete/claim/<claim_id>', methods=['DELETE'])
