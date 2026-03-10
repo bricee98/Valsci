@@ -7,10 +7,20 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
     <link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator.min.css" rel="stylesheet">
     <script type="text/javascript" src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js"></script>
+    <style>
+        .trace-box {
+            margin: 0 0 16px 0;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            background: #fafafa;
+        }
+    </style>
 </head>
 <body>
     <div class="batch-results-container wide-container">
         <h1>Batch Results</h1>
+        <div id="batchStatusBanner"></div>
         <div class="actions-bar">
             <button id="deleteBatchButton" class="danger-button">Delete Batch</button>
             <button id="downloadCSV" class="primary-button">Download CSV</button>
@@ -25,6 +35,8 @@
     <script>
         const batchId = '{{ batch_id }}';
         let table;
+        let refreshTimer = null;
+        const batchStatusBanner = document.getElementById('batchStatusBanner');
 
         const columns = [
             {
@@ -40,6 +52,13 @@
                 field: "status", 
                 sorter: "string", 
                 headerFilter: true, 
+                widthGrow: 1
+            },
+            {
+                title: "Location",
+                field: "claim_location",
+                sorter: "string",
+                headerFilter: true,
                 widthGrow: 1
             },
             {
@@ -82,71 +101,114 @@
                 field: "report",
                 widthGrow: 1,
                 formatter: function(cell) {
-                    const claim_id = cell.getRow().getData().claim_id;
-                    return `<a href="/results?claim_id=${claim_id}&batch_id=${batchId}" class="report-link">View Report</a>`;
+                    const row = cell.getRow().getData();
+                    const claim_id = row.claim_id;
+                    if (row.report_available && row.claim_location === 'saved_jobs') {
+                        return `<a href="/results?claim_id=${claim_id}&batch_id=${batchId}" class="report-link">View Report</a>`;
+                    }
+                    return `<a href="/progress?claim_id=${claim_id}&batch_id=${batchId}" class="report-link">View Progress</a>`;
                 },
                 headerSort: false
             }
         ];
 
+        function renderBatchBanner(data) {
+            const statusText = data.has_partial_resume
+                ? 'This batch is processing again after one or more claims were resumed.'
+                : data.status === 'completed'
+                    ? 'This batch is completed.'
+                    : 'This batch is still processing.';
+            const savedCount = data.counts_by_location?.saved_jobs || 0;
+            const queuedCount = data.counts_by_location?.queued_jobs || 0;
+            batchStatusBanner.innerHTML = `
+                <div class="trace-box">
+                    <p><strong>Status:</strong> ${data.status}</p>
+                    <p><strong>Claims:</strong> ${data.processed_claims} completed out of ${data.total_claims}</p>
+                    <p><strong>Saved / Queued:</strong> ${savedCount} / ${queuedCount}</p>
+                    <p>${statusText}</p>
+                </div>
+            `;
+        }
+
         function initializeTable(data) {
             const tableData = data.claims.map(claim => {
                 const report = claim.report || {};
                 
-                if (claim.status === 'processed') {
+                if (claim.report_available && claim.claim_location === 'saved_jobs') {
                     return {
                         text: claim.text || 'N/A',
                         status: claim.status,
+                        claim_location: claim.claim_location || 'saved_jobs',
                         claimRating: report.claimRating !== undefined && report.claimRating !== null ? report.claimRating : null,
                         supporting_papers_count: report.relevantPapers?.length || 0,
                         non_relevant_papers_count: report.nonRelevantPapers?.length || 0,
                         price: report.usage_summary?.cost_usd || report.usage_stats?.cost_usd || report.usage_stats?.total_cost || 0,
-                        claim_id: claim.claim_id
+                        claim_id: claim.claim_id,
+                        report_available: true
                     };
                 }
 
                 return {
                     text: claim.text || 'N/A',
                     status: claim.status || 'Error',
+                    claim_location: claim.claim_location || 'unknown',
                     claimRating: null,
                     supporting_papers_count: 0,
                     non_relevant_papers_count: 0,
                     price: 0,
-                    claim_id: claim.claim_id
+                    claim_id: claim.claim_id,
+                    report_available: false
                 };
             });
 
-            table = new Tabulator("#resultsTable", {
-                data: tableData,
-                layout: "fitColumns",
-                responsiveLayout: true,
-                pagination: "local",
-                paginationSize: 25,
-                paginationSizeSelector: [10, 25, 50, 100],
-                columns: columns,
-                initialSort: [
-                    {column: "claimRating", dir: "desc"}
-                ],
-                rowHeight: 100,
-                textWrapping: true,
-                width: "100%"
-            });
+            if (table) {
+                table.setData(tableData);
+            } else {
+                table = new Tabulator("#resultsTable", {
+                    data: tableData,
+                    layout: "fitColumns",
+                    responsiveLayout: true,
+                    pagination: "local",
+                    paginationSize: 25,
+                    paginationSizeSelector: [10, 25, 50, 100],
+                    columns: columns,
+                    initialSort: [
+                        {column: "claimRating", dir: "desc"}
+                    ],
+                    rowHeight: 100,
+                    textWrapping: true,
+                    width: "100%"
+                });
+            }
 
             const totalPrice = tableData.reduce((sum, row) => sum + (row.price || 0), 0);
             document.getElementById('totalPrice').innerHTML = 
                 `<h3>Total Batch Price: $${totalPrice.toFixed(4)}</h3>`;
+            renderBatchBanner(data);
+            document.getElementById('downloadMarkdown').disabled = data.status !== 'completed';
         }
 
-        fetch(`/api/v1/batch/${batchId}`)
-            .then(response => response.json())
-            .then(data => {
-                initializeTable(data);
-            })
-            .catch(error => {
-                console.error('Error fetching batch results:', error);
-                document.getElementById('resultsTable').innerHTML = 
-                    '<div class="error-message">Error fetching batch results. Please try again later.</div>';
-            });
+        function loadBatchResults() {
+            fetch(`/api/v1/batch/${batchId}`)
+                .then(response => response.json())
+                .then(data => {
+                    initializeTable(data);
+                    if (refreshTimer) {
+                        clearTimeout(refreshTimer);
+                        refreshTimer = null;
+                    }
+                    if (data.status !== 'completed') {
+                        refreshTimer = setTimeout(loadBatchResults, 5000);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching batch results:', error);
+                    document.getElementById('resultsTable').innerHTML = 
+                        '<div class="error-message">Error fetching batch results. Please try again later.</div>';
+                });
+        }
+
+        loadBatchResults();
 
         // Download CSV handler
         document.getElementById('downloadCSV').addEventListener('click', function() {
@@ -176,7 +238,27 @@
 
         // Add a click handler for Bulk Download Markdown
         document.getElementById('downloadMarkdown').addEventListener('click', function() {
-            window.location.href = `/api/v1/batch/${batchId}/download_markdown`;
+            fetch(`/api/v1/batch/${batchId}/download_markdown`)
+                .then(async response => {
+                    if (!response.ok) {
+                        const payload = await response.json();
+                        throw new Error(payload.error || 'Failed to download markdown reports.');
+                    }
+                    return response.blob();
+                })
+                .then(blob => {
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = `batch_${batchId}_reports.zip`;
+                    document.body.appendChild(link);
+                    link.click();
+                    link.remove();
+                    URL.revokeObjectURL(url);
+                })
+                .catch(error => {
+                    alert(error.message || 'Failed to download markdown reports.');
+                });
         });
     </script>
 </body>

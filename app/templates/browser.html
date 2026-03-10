@@ -66,6 +66,33 @@
             return typeof rating === 'number' ? rating.toFixed(1) : rating;
         }
 
+        function batchStatusText(batch) {
+            const status = batch.status || 'unknown';
+            if (status === 'completed') {
+                return 'Completed';
+            }
+            if (batch.has_partial_resume) {
+                return 'Processing (partial resume)';
+            }
+            if (status === 'processing') {
+                return 'Processing';
+            }
+            return status;
+        }
+
+        function buildClaimLink(batchId, claim) {
+            if (claim.report_available && claim.claim_location === 'saved_jobs') {
+                return {
+                    href: `/results?batch_id=${encodeURIComponent(batchId)}&claim_id=${encodeURIComponent(claim.claim_id)}`,
+                    label: 'View Report',
+                };
+            }
+            return {
+                href: `/progress?batch_id=${encodeURIComponent(batchId)}&claim_id=${encodeURIComponent(claim.claim_id)}`,
+                label: 'View Progress',
+            };
+        }
+
         async function fetchWithAuth(url, options = {}) {
             try {
                 const response = await fetch(url, options);
@@ -157,22 +184,26 @@
                                         <tr>
                                             <th>Claim</th>
                                             <th>Status</th>
+                                            <th>Location</th>
                                             <th>Rating</th>
                                             <th>Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        ${batch.preview_claims.map(claim => `
-                                            <tr>
-                                                <td>${escapeHtml(claim.text)}</td>
-                                                <td>${escapeHtml(claim.status)}</td>
-                                                <td>${formatRating(claim.rating)}</td>
-                                                <td>
-                                                    <a href="/progress?batch_id=${encodeURIComponent(batchId)}&claim_id=${encodeURIComponent(claim.claim_id)}" 
-                                                       class="view-link">View Report</a>
-                                                </td>
-                                            </tr>
-                                        `).join('')}
+                                        ${batch.preview_claims.map(claim => {
+                                            const action = buildClaimLink(batchId, claim);
+                                            return `
+                                                <tr>
+                                                    <td>${escapeHtml(claim.text)}</td>
+                                                    <td>${escapeHtml(claim.status)}</td>
+                                                    <td>${escapeHtml(claim.claim_location || 'unknown')}</td>
+                                                    <td>${formatRating(claim.rating)}</td>
+                                                    <td>
+                                                        <a href="${action.href}" class="view-link">${action.label}</a>
+                                                    </td>
+                                                </tr>
+                                            `;
+                                        }).join('')}
                                     </tbody>
                                 </table>
                             </div>
@@ -185,6 +216,8 @@
                                     <div class="batch-meta">
                                         <span>Created: ${formatTimestamp(batch.timestamp)}</span>
                                         <span>Total Claims: ${batch.total_claims}</span>
+                                        <span>Status: ${escapeHtml(batchStatusText(batch))}</span>
+                                        <span>Saved / Queued: ${batch.counts_by_location?.saved_jobs || 0} / ${batch.counts_by_location?.queued_jobs || 0}</span>
                                     </div>
                                 </div>
                                 <label class="batch-selector-label">
@@ -200,7 +233,7 @@
                             ${claimsTable}
                             <div class="batch-actions">
                                 <a href="/batch_results?batch_id=${encodeURIComponent(batchId)}" 
-                                   class="primary-button">View Full Batch</a>
+                                   class="primary-button">${batch.status === 'completed' ? 'View Full Batch' : 'View Batch Status'}</a>
                                 <button data-delete-batch-id="${escapeHtml(batchId)}" 
                                         class="danger-button">Delete Batch</button>
                             </div>

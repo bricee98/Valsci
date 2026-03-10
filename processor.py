@@ -178,8 +178,18 @@ class ValsciProcessor:
         """Check if all claims in a batch are processed and handle notifications."""
         batch_claims = [(b, c) for (b, c) in self.claims_in_memory.keys() if b == batch_id]
         if not batch_claims:
-            # All claims processed, check for notification
-            notification_file = os.path.join(QUEUED_JOBS_DIR, batch_id, 'notification.json')
+            batch_dir = os.path.join(QUEUED_JOBS_DIR, batch_id)
+            pending_claim_files = []
+            if await async_os.path.exists(batch_dir):
+                pending_claim_files = [
+                    name
+                    for name in os.listdir(batch_dir)
+                    if name.endswith('.txt') and name != 'claims.txt'
+                ]
+            if pending_claim_files:
+                return
+
+            notification_file = os.path.join(batch_dir, 'notification.json')
             if await async_os.path.exists(notification_file):
                 async with aiofiles.open(notification_file, 'r') as f:
                     notification_data = json.loads(await f.read())
@@ -190,10 +200,8 @@ class ValsciProcessor:
                         notification_data.get('num_claims', 0),
                         notification_data.get('review_type', 'standard')
                     )
-                # Remove the batch directory
-                batch_dir = os.path.join(QUEUED_JOBS_DIR, batch_id)
-                if await async_os.path.exists(batch_dir):
-                    await self.async_rmtree(batch_dir)
+            if await async_os.path.exists(batch_dir):
+                await self.async_rmtree(batch_dir)
 
     def calculate_tokens_in_window(self):
         """Calculate token usage within the current window."""
@@ -903,12 +911,14 @@ class ValsciProcessor:
                         await asyncio.sleep(0.1)
                         claim_id = filename[:-4]  # Remove .txt
                         
-                        # Skip if already in memory or if a file exists in saved_jobs
+                        # Prefer queued claims if they overlap with saved copies.
                         if (batch_id, claim_id) in self.claims_in_memory:
                             claim_data = self.claims_in_memory[(batch_id, claim_id)]
-                        elif os.path.exists(os.path.join(SAVED_JOBS_DIR, batch_id, f"{claim_id}.txt")):
-                            continue
                         else:
+                            if os.path.exists(os.path.join(SAVED_JOBS_DIR, batch_id, f"{claim_id}.txt")):
+                                logger.warning(
+                                    f"Claim {claim_id} exists in both queued_jobs and saved_jobs; preferring queued copy."
+                                )
                             # Load new claim into memory
                             async with aiofiles.open(file_path, 'r') as f:
                                 claim_data = json.loads(await f.read())
@@ -968,14 +978,7 @@ class ValsciProcessor:
                                 await self.analyze_claim(claim_data, batch_id, claim_id)
                                 
                         elif claim_data['status'] == 'processed':
-                            # Clean up memory and move file
-                            self.claims_in_memory.pop((batch_id, claim_id), None)
-                            saved_batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
-                            os.makedirs(saved_batch_dir, exist_ok=True)
-                            await self.async_move_file(file_path, os.path.join(saved_batch_dir, f"{claim_id}.txt"))
-                            
-                            # Check if batch is complete
-                            await self._check_batch_completion(batch_id)
+                            await self._save_processed_claim(claim_data, batch_id, claim_id)
 
                     except Exception as e:
                         logger.error(f"Error processing claim file {file_path}: {str(e)}")

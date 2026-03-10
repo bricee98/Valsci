@@ -61,6 +61,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--queued-jobs-dir",
+        default=None,
+        help=(
+            "Optional directory containing in-progress batch folders. Defaults to a "
+            "sibling queued_jobs directory when present."
+        ),
+    )
+    parser.add_argument(
         "--format",
         choices=("json", "markdown"),
         default="json",
@@ -141,6 +149,11 @@ def main() -> int:
 
     saved_jobs_root = Path(args.saved_jobs_dir).resolve()
     trace_root = Path(args.trace_dir).resolve() if args.trace_dir else saved_jobs_root
+    if args.queued_jobs_dir:
+        queued_jobs_root = Path(args.queued_jobs_dir).resolve()
+    else:
+        sibling_queued = saved_jobs_root.parent / "queued_jobs"
+        queued_jobs_root = sibling_queued.resolve() if sibling_queued.exists() else None
     output_path = Path(args.output).resolve() if args.output else None
 
     if not saved_jobs_root.exists():
@@ -180,6 +193,7 @@ def main() -> int:
     export_data = build_export_document(
         batch_ids=batch_ids,
         saved_jobs_root=saved_jobs_root,
+        queued_jobs_root=queued_jobs_root,
         trace_root=trace_root,
         include_traces=include_traces,
         include_issues=include_issues,

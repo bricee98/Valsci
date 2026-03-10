@@ -8,10 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-
-def read_json(path: Path) -> Dict[str, Any]:
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+from app.services.batch_state import build_batch_state, list_claim_files, read_json
 
 
 def read_jsonl(path: Path) -> Tuple[List[Dict[str, Any]], int]:
@@ -66,31 +63,24 @@ def safe_title(value: Any, fallback: str) -> str:
     return text or fallback
 
 
-def list_claim_files(batch_dir: Path) -> List[Path]:
-    claim_files = [
-        path
-        for path in batch_dir.glob("*.txt")
-        if path.name != "claims.txt"
-    ]
-    return sorted(claim_files, key=lambda path: path.stem)
-
-
 def build_claim_export(
     *,
-    claim_path: Path,
+    claim_entry: Dict[str, Any],
     batch_id: str,
     saved_jobs_root: Path,
     trace_root: Path,
     include_traces: bool,
     include_issues: bool,
 ) -> Dict[str, Any]:
-    claim_id = claim_path.stem
-    claim_data = read_json(claim_path)
+    claim_id = claim_entry["claim_id"]
+    claim_data = claim_entry["claim_data"]
     result: Dict[str, Any] = {
         "claim_id": claim_id,
-        "source_file": str(claim_path.resolve()),
-        "text": claim_data.get("text", ""),
-        "status": claim_data.get("status", ""),
+        "source_file": claim_entry["source_file"],
+        "claim_location": claim_entry.get("location"),
+        "report_available": bool(claim_entry.get("report_available", False)),
+        "text": claim_entry.get("text", ""),
+        "status": claim_entry.get("status", ""),
         "claim_data": claim_data,
     }
 
@@ -143,20 +133,30 @@ def build_batch_export(
     *,
     batch_id: str,
     saved_jobs_root: Path,
+    queued_jobs_root: Optional[Path],
     trace_root: Path,
     include_traces: bool,
     include_issues: bool,
 ) -> Dict[str, Any]:
+    batch_state = build_batch_state(
+        batch_id=batch_id,
+        saved_jobs_root=saved_jobs_root,
+        queued_jobs_root=queued_jobs_root,
+    )
     batch_dir = saved_jobs_root / batch_id
-    claim_files = list_claim_files(batch_dir)
+    if not batch_dir.exists() and queued_jobs_root is not None:
+        queued_batch_dir = queued_jobs_root / batch_id
+        if queued_batch_dir.exists():
+            batch_dir = queued_batch_dir
+    claim_entries = (batch_state or {}).get("claims", [])
 
     claims: List[Dict[str, Any]] = []
-    errors: List[Dict[str, str]] = []
-    for claim_path in claim_files:
+    errors: List[Dict[str, str]] = list((batch_state or {}).get("errors", []))
+    for claim_entry in claim_entries:
         try:
             claims.append(
                 build_claim_export(
-                    claim_path=claim_path,
+                    claim_entry=claim_entry,
                     batch_id=batch_id,
                     saved_jobs_root=saved_jobs_root,
                     trace_root=trace_root,
@@ -167,8 +167,8 @@ def build_batch_export(
         except Exception as exc:
             errors.append(
                 {
-                    "claim_id": claim_path.stem,
-                    "source_file": str(claim_path.resolve()),
+                    "claim_id": claim_entry.get("claim_id", "unknown"),
+                    "source_file": claim_entry.get("source_file", ""),
                     "error": str(exc),
                 }
             )
@@ -176,6 +176,7 @@ def build_batch_export(
     return {
         "batch_id": batch_id,
         "batch_dir": str(batch_dir.resolve()),
+        "batch_status": (batch_state or {}).get("status", "initializing"),
         "claim_count": len(claims),
         "claims": claims,
         "errors": errors,
@@ -299,6 +300,8 @@ def build_markdown(export_data: Dict[str, Any]) -> str:
                 markdown_list(
                     [
                         f"Status: {claim.get('status', '')}",
+                        f"Claim Location: {claim.get('claim_location', '')}",
+                        f"Report Available: {markdown_bool(claim.get('report_available', False))}",
                         f"Source File: {claim.get('source_file', '')}",
                     ]
                 )
@@ -479,6 +482,7 @@ def build_export_document(
     *,
     batch_ids: List[str],
     saved_jobs_root: Path,
+    queued_jobs_root: Optional[Path],
     trace_root: Path,
     include_traces: bool,
     include_issues: bool,
@@ -486,14 +490,19 @@ def build_export_document(
     batches: List[Dict[str, Any]] = []
     missing_batches: List[str] = []
     for batch_id in batch_ids:
-        batch_dir = saved_jobs_root / batch_id
-        if not batch_dir.exists() or not batch_dir.is_dir():
+        batch_state = build_batch_state(
+            batch_id=batch_id,
+            saved_jobs_root=saved_jobs_root,
+            queued_jobs_root=queued_jobs_root,
+        )
+        if batch_state is None or batch_state["total_claims"] == 0:
             missing_batches.append(batch_id)
             continue
         batches.append(
             build_batch_export(
                 batch_id=batch_id,
                 saved_jobs_root=saved_jobs_root,
+                queued_jobs_root=queued_jobs_root,
                 trace_root=trace_root,
                 include_traces=include_traces,
                 include_issues=include_issues,

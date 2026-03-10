@@ -402,8 +402,21 @@
                 reportContent.textContent = 'Error: Batch ID is required';
             } else {
                 fetch(`/api/v1/claims/${batchId}/${claimId}/report`)
-                    .then(response => response.json())
+                    .then(async response => {
+                        const data = await response.json();
+                        if (!response.ok) {
+                            if (response.status === 409 && data.code === 'CLAIM_PROCESSING') {
+                                window.location.href = `/progress?batch_id=${encodeURIComponent(batchId)}&claim_id=${encodeURIComponent(claimId)}`;
+                                return null;
+                            }
+                            throw new Error(data.error || 'Report not found.');
+                        }
+                        return data;
+                    })
                     .then(data => {
+                        if (!data) {
+                            return;
+                        }
                         if (data.report || data.additional_info) {  // Check for both possible properties
                             displayReport(data);
                         } else {
@@ -412,7 +425,7 @@
                     })
                     .catch(error => {
                         console.error('Error fetching report:', error);
-                        reportContent.textContent = 'Error loading report.';
+                        reportContent.textContent = error.message || 'Error loading report.';
                     });
             }
         }

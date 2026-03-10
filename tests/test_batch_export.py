@@ -140,6 +140,35 @@ def test_export_batches_route_requires_selected_batches(monkeypatch, tmp_path):
     assert payload["code"] == "NO_BATCH_IDS"
 
 
+def test_export_batches_route_includes_queued_claims(monkeypatch, tmp_path):
+    saved_jobs_dir = tmp_path / "saved_jobs"
+    queued_jobs_dir = tmp_path / "queued_jobs"
+    write_claim(saved_jobs_dir, "batch-mixed", "claim-saved", "Completed claim")
+    write_claim(queued_jobs_dir, "batch-mixed", "claim-queued", "Resumed claim still processing")
+
+    queued_claim_path = queued_jobs_dir / "batch-mixed" / "claim-queued.txt"
+    queued_payload = json.loads(queued_claim_path.read_text(encoding="utf-8"))
+    queued_payload["status"] = "ready_for_analysis"
+    queued_payload.pop("report", None)
+    queued_claim_path.write_text(json.dumps(queued_payload, indent=2), encoding="utf-8")
+
+    client = create_test_client(monkeypatch, saved_jobs_dir)
+    response = client.post(
+        "/api/v1/batches/export",
+        json={"batch_ids": ["batch-mixed"]},
+    )
+
+    assert response.status_code == 200
+    payload = json.loads(response.data)
+    claims = payload["batches"][0]["claims"]
+    claims_by_id = {claim["claim_id"]: claim for claim in claims}
+    assert set(claims_by_id) == {"claim-saved", "claim-queued"}
+    assert claims_by_id["claim-saved"]["claim_location"] == "saved_jobs"
+    assert claims_by_id["claim-saved"]["report_available"] is True
+    assert claims_by_id["claim-queued"]["claim_location"] == "queued_jobs"
+    assert claims_by_id["claim-queued"]["report_available"] is False
+
+
 def test_export_batches_cli_can_select_batches_by_claim_regex(tmp_path):
     saved_jobs_dir = tmp_path / "saved_jobs"
     write_claim(saved_jobs_dir, "batch-memory", "claim-a", "Creatine improves memory in adults.")
