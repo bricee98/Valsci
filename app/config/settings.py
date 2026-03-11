@@ -4,6 +4,7 @@ import os
 
 # Get the path to the env_vars.json file
 env_file_path = Path(__file__).parent.parent / 'config/env_vars.json'
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # Load the JSON file
 try:
@@ -53,7 +54,19 @@ def _as_dict(value, default=None):
             return default
     return default
 
+
+def _resolve_project_path(value, default):
+    raw_value = value
+    if raw_value is None or (isinstance(raw_value, str) and not raw_value.strip()):
+        raw_value = default
+
+    path = Path(str(raw_value)).expanduser()
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return str(path.resolve())
+
 class Config:
+    PROJECT_ROOT = str(PROJECT_ROOT.resolve())
     SECRET_KEY = env_vars.get('FLASK_SECRET_KEY')
     SEMANTIC_SCHOLAR_API_KEY = env_vars.get('SEMANTIC_SCHOLAR_API_KEY')
     USER_EMAIL = env_vars.get('USER_EMAIL')
@@ -95,7 +108,14 @@ class Config:
 
     # LLM gateway controls
     TRACE_ENABLED = _as_bool(env_vars.get("TRACE_ENABLED", True), default=True)
-    TRACE_DIR = env_vars.get("TRACE_DIR", "saved_jobs")
+    SAVED_JOBS_DIR = _resolve_project_path(env_vars.get("SAVED_JOBS_DIR"), "saved_jobs")
+    QUEUED_JOBS_DIR = _resolve_project_path(env_vars.get("QUEUED_JOBS_DIR"), "queued_jobs")
+    STATE_DIR = _resolve_project_path(env_vars.get("STATE_DIR"), "state")
+    PROVIDER_CATALOG_PATH = _resolve_project_path(
+        env_vars.get("PROVIDER_CATALOG_PATH"),
+        os.path.join(STATE_DIR, "provider_catalog.json"),
+    )
+    TRACE_DIR = _resolve_project_path(env_vars.get("TRACE_DIR"), SAVED_JOBS_DIR)
     TRACE_EMBED_MODE = env_vars.get("TRACE_EMBED_MODE", "capped")
     TRACE_EMBED_MAX_BYTES = _as_int(env_vars.get("TRACE_EMBED_MAX_BYTES", 2_000_000), default=2_000_000)
     TRACE_STACKTRACE_MAX_BYTES = _as_int(env_vars.get("TRACE_STACKTRACE_MAX_BYTES", 4_000), default=4_000)

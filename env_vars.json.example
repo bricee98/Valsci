@@ -25,6 +25,8 @@
     "BASE_URL": "http://localhost:3000",
 
     "TRACE_ENABLED": true,
+    "STATE_DIR": "state",
+    "PROVIDER_CATALOG_PATH": "state/provider_catalog.json",
     "TRACE_DIR": "saved_jobs",
     "TRACE_EMBED_MODE": "capped",
     "TRACE_EMBED_MAX_BYTES": 2000000,

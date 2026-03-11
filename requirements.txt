@@ -1,4 +1,5 @@
 Flask
+aiofiles
 python-dotenv
 requests
 pandas

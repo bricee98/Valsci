@@ -1,6 +1,8 @@
 import json
 import sys
 import types
+import zipfile
+from io import BytesIO
 from pathlib import Path
 
 sys.modules.setdefault("ijson", types.SimpleNamespace())
@@ -9,6 +11,7 @@ sys.modules.setdefault("openai", types.SimpleNamespace(OpenAI=object))
 from app import create_app
 from app.api import routes as routes_module
 from app.config.settings import Config
+from app.services.claim_store import ClaimStore
 
 
 class TestConfig(Config):
@@ -67,12 +70,17 @@ def write_claim(
     (batch_dir / f"{claim_id}.txt").write_text(json.dumps(claim_data, indent=2), encoding="utf-8")
 
 
-def create_test_client(monkeypatch, saved_jobs_dir: Path, queued_jobs_dir: Path):
+def create_test_client(monkeypatch, saved_jobs_dir: Path, queued_jobs_dir: Path, state_dir: Path | None = None):
     monkeypatch.setattr(routes_module, "SAVED_JOBS_DIR", str(saved_jobs_dir))
     monkeypatch.setattr(routes_module, "QUEUED_JOBS_DIR", str(queued_jobs_dir))
+    if state_dir is None:
+        state_dir = saved_jobs_dir.parent / "state"
 
     app = create_app(TestConfig)
+    app.config["SAVED_JOBS_DIR"] = str(saved_jobs_dir)
+    app.config["QUEUED_JOBS_DIR"] = str(queued_jobs_dir)
     app.config["TRACE_DIR"] = str(saved_jobs_dir)
+    app.config["STATE_DIR"] = str(state_dir)
     return app.test_client()
 
 
@@ -227,6 +235,54 @@ def test_download_batch_markdown_rejects_incomplete_batch(monkeypatch, tmp_path)
     assert response.status_code == 409
     payload = response.get_json()
     assert payload["code"] == "BATCH_NOT_COMPLETED"
+
+
+def test_download_batch_markdown_supports_claim_store_batch_view(monkeypatch, tmp_path):
+    saved_jobs_dir = tmp_path / "saved_jobs"
+    queued_jobs_dir = tmp_path / "queued_jobs"
+    state_dir = tmp_path / "state"
+
+    claim_data = {
+        "text": "Creatine improves memory in adults.",
+        "status": "processed",
+        "batch_id": "batch-store-markdown",
+        "claim_id": "claim-store",
+        "report": {
+            "claimRating": 4,
+            "explanation": "Evidence leans supportive.",
+            "relevantPapers": [{"title": "Processed paper"}],
+            "searchQueries": ["memory trial"],
+        },
+    }
+
+    store = ClaimStore(
+        state_dir=str(state_dir),
+        saved_jobs_dir=str(saved_jobs_dir),
+        queued_jobs_dir=str(queued_jobs_dir),
+        trace_dir=str(saved_jobs_dir),
+    )
+    claim_record, _ = store.get_or_create_claim(
+        claim_data["text"],
+        batch_tags=["batch-store-markdown"],
+    )
+    store.create_run(
+        claim_record=claim_record,
+        batch_tags=["batch-store-markdown"],
+        transport_batch_id="batch-store-markdown",
+        transport_claim_id="claim-store",
+        status="processed",
+        initial_claim_data=claim_data,
+    )
+
+    client = create_test_client(monkeypatch, saved_jobs_dir, queued_jobs_dir, state_dir=state_dir)
+    response = client.get("/api/v1/batch/batch-store-markdown/download_markdown")
+
+    assert response.status_code == 200
+    archive = zipfile.ZipFile(BytesIO(response.data))
+    assert archive.namelist() == ["claim_claim-store.txt"]
+    markdown = archive.read("claim_claim-store.txt").decode("utf-8")
+    assert "Creatine improves memory in adults." in markdown
+    assert "Evidence leans supportive." in markdown
 
 
 def test_delete_batch_removes_saved_and_queued_dirs(monkeypatch, tmp_path):

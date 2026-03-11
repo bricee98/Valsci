@@ -17,6 +17,7 @@ from typing import Dict
 from datetime import datetime
 import logging
 import asyncio
+from app.config.settings import Config
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -316,7 +317,7 @@ class ClaimProcessor:
     def update_claim_status(self, batch_id: str, claim_id: str, status: str, report: dict = None, claim_text: str = None):
         """Update claim status and report in saved_jobs directory."""
         try:
-            claim_dir = os.path.join('saved_jobs', batch_id)
+            claim_dir = os.path.join(Config.SAVED_JOBS_DIR, batch_id)
             os.makedirs(claim_dir, exist_ok=True)
             claim_file = os.path.join(claim_dir, f"{claim_id}.txt")
             

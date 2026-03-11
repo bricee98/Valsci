@@ -79,6 +79,8 @@ def create_test_client(monkeypatch, saved_jobs_dir: Path, queued_jobs_dir: Path)
     monkeypatch.setattr(routes_module, "QUEUED_JOBS_DIR", str(queued_jobs_dir))
 
     app = create_app(TestConfig)
+    app.config["SAVED_JOBS_DIR"] = str(saved_jobs_dir)
+    app.config["QUEUED_JOBS_DIR"] = str(queued_jobs_dir)
     app.config["TRACE_DIR"] = str(saved_jobs_dir)
     return app.test_client()
 
@@ -190,3 +192,31 @@ def test_trace_records_include_resume_metadata(monkeypatch, tmp_path):
     assert "Saved paper search output exists" in payload["resume_reason"]
     assert payload["records"][0]["timed_out"] is True
     assert payload["records"][0]["timeout_source"] == "task_override"
+
+
+def test_trace_download_uses_configured_repo_root_paths(monkeypatch, tmp_path):
+    saved_jobs_dir = tmp_path / "saved_jobs"
+    queued_jobs_dir = tmp_path / "queued_jobs"
+    write_claim_file(
+        saved_jobs_dir,
+        "batch-f",
+        "claim-download",
+        status="processed",
+        queries=["query one"],
+        raw_papers=[{"title": "Paper A", "corpusId": 1}],
+        report={"explanation": "failed at final report"},
+    )
+    write_trace_file(saved_jobs_dir, "batch-f", "claim-download")
+
+    cwd_dir = tmp_path / "app"
+    cwd_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.chdir(cwd_dir)
+
+    client = create_test_client(monkeypatch, saved_jobs_dir, queued_jobs_dir)
+    records_response = client.get("/api/v1/claims/batch-f/claim-download/trace_records")
+    response = client.get("/api/v1/claims/batch-f/claim-download/trace")
+
+    assert records_response.status_code == 200
+    assert records_response.get_json()["resume_available"] is True
+    assert response.status_code == 200
+    assert response.data.decode("utf-8").strip().startswith("{")

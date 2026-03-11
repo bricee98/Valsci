@@ -97,10 +97,13 @@ def write_claim(saved_jobs_dir: Path, batch_id: str, claim_id: str, text: str) -
 
 
 def create_test_client(monkeypatch, saved_jobs_dir: Path):
+    queued_jobs_dir = saved_jobs_dir.parent / "queued_jobs"
     monkeypatch.setattr(routes_module, "SAVED_JOBS_DIR", str(saved_jobs_dir))
-    monkeypatch.setattr(routes_module, "QUEUED_JOBS_DIR", str(saved_jobs_dir.parent / "queued_jobs"))
+    monkeypatch.setattr(routes_module, "QUEUED_JOBS_DIR", str(queued_jobs_dir))
 
     app = create_app(TestConfig)
+    app.config["SAVED_JOBS_DIR"] = str(saved_jobs_dir)
+    app.config["QUEUED_JOBS_DIR"] = str(queued_jobs_dir)
     app.config["TRACE_DIR"] = str(saved_jobs_dir)
     return app.test_client()
 

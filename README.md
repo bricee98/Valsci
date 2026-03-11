@@ -63,7 +63,7 @@ Valsci's configuration is managed through a JSON file that controls LLM integrat
 
 1. **Create configuration file:**
 
-Create a `config/env_vars.json` file with your configuration settings. Below is a template with explanations for each setting:
+Create an `app/config/env_vars.json` file with your configuration settings. Below is a template with explanations for each setting:
 
 ```json
 {

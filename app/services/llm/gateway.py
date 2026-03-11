@@ -105,40 +105,69 @@ class PreflightResult:
 
 
 class LLMGateway:
-    def __init__(self):
-        self.provider_name = (Config.LLM_PROVIDER or "openai").lower()
-        self.local_backend = (getattr(Config, "LOCAL_BACKEND", "") or "").lower()
-        self.default_model = Config.LLM_EVALUATION_MODEL
-        self.base_url = getattr(Config, "LLM_BASE_URL", None)
+    def __init__(self, runtime_config: Optional[Dict[str, Any]] = None):
+        cfg = runtime_config or {}
+        self.runtime_config = cfg
+        self.provider_name = str(cfg.get("provider_name", Config.LLM_PROVIDER or "openai")).lower()
+        self.local_backend = str(cfg.get("local_backend", getattr(Config, "LOCAL_BACKEND", "") or "")).lower()
+        self.default_model = cfg.get("default_model", Config.LLM_EVALUATION_MODEL)
+        self.base_url = cfg.get("base_url", getattr(Config, "LLM_BASE_URL", None))
+        self.api_key = cfg.get("api_key", Config.LLM_API_KEY)
+        self.azure_openai_endpoint = cfg.get("azure_openai_endpoint", Config.AZURE_OPENAI_ENDPOINT)
+        self.azure_openai_api_version = cfg.get(
+            "azure_openai_api_version",
+            Config.AZURE_OPENAI_API_VERSION,
+        )
+        self.azure_ai_inference_endpoint = cfg.get(
+            "azure_ai_inference_endpoint",
+            Config.AZURE_AI_INFERENCE_ENDPOINT,
+        )
+        self.http_referer = cfg.get("http_referer", getattr(Config, "LLM_HTTP_REFERER", None))
+        self.site_name = cfg.get("site_name", getattr(Config, "LLM_SITE_NAME", None))
 
-        self.trace_store = TraceStore(root_dir=Config.TRACE_DIR, enabled=Config.TRACE_ENABLED)
-        self.issue_store = IssueStore(root_dir=Config.TRACE_DIR, enabled=Config.TRACE_ENABLED)
+        trace_dir = cfg.get("trace_dir", Config.TRACE_DIR)
+        trace_enabled = bool(cfg.get("trace_enabled", Config.TRACE_ENABLED))
+        self.trace_store = TraceStore(root_dir=trace_dir, enabled=trace_enabled)
+        self.issue_store = IssueStore(root_dir=trace_dir, enabled=trace_enabled)
         self.token_estimator = TokenEstimator()
         self.model_registry = ModelRegistry(
-            model_overrides=getattr(Config, "MODEL_REGISTRY_OVERRIDES", {}),
-            local_context_override=getattr(Config, "LOCAL_MODEL_CONTEXT_OVERRIDE", None),
+            model_overrides=cfg.get("model_registry_overrides", getattr(Config, "MODEL_REGISTRY_OVERRIDES", {})),
+            local_context_override=cfg.get(
+                "local_model_context_override",
+                getattr(Config, "LOCAL_MODEL_CONTEXT_OVERRIDE", None),
+            ),
         )
         self.rate_limiter = GatewayRateLimiter(
-            max_concurrency=Config.LLM_MAX_CONCURRENCY,
-            requests_per_minute=Config.LLM_REQUESTS_PER_MINUTE,
-            tokens_per_minute=Config.LLM_TOKENS_PER_MINUTE,
+            max_concurrency=int(cfg.get("max_concurrency", Config.LLM_MAX_CONCURRENCY)),
+            requests_per_minute=int(cfg.get("requests_per_minute", Config.LLM_REQUESTS_PER_MINUTE)),
+            tokens_per_minute=int(cfg.get("tokens_per_minute", Config.LLM_TOKENS_PER_MINUTE)),
         )
         self.retry_policy = RetryPolicy(
-            max_retries=Config.LLM_MAX_RETRIES,
-            backoff_base_seconds=Config.LLM_BACKOFF_BASE_SECONDS,
-            backoff_max_seconds=Config.LLM_BACKOFF_MAX_SECONDS,
-            backoff_jitter=Config.LLM_BACKOFF_JITTER,
+            max_retries=int(cfg.get("max_retries", Config.LLM_MAX_RETRIES)),
+            backoff_base_seconds=float(cfg.get("backoff_base_seconds", Config.LLM_BACKOFF_BASE_SECONDS)),
+            backoff_max_seconds=float(cfg.get("backoff_max_seconds", Config.LLM_BACKOFF_MAX_SECONDS)),
+            backoff_jitter=float(cfg.get("backoff_jitter", Config.LLM_BACKOFF_JITTER)),
         )
 
-        self.timeout_seconds = Config.LLM_TIMEOUT_SECONDS
-        self.timeout_seconds_local = getattr(Config, "LLM_TIMEOUT_SECONDS_LOCAL", None)
-        self.routing_config = getattr(Config, "LLM_ROUTING", {}) or {}
+        self.timeout_seconds = int(cfg.get("timeout_seconds", Config.LLM_TIMEOUT_SECONDS))
+        self.timeout_seconds_local = cfg.get(
+            "timeout_seconds_local",
+            getattr(Config, "LLM_TIMEOUT_SECONDS_LOCAL", None),
+        )
+        self.routing_config = cfg.get("routing_config", getattr(Config, "LLM_ROUTING", {}) or {})
         self.routing_enabled = bool(self.routing_config.get("enabled", False))
         self.routing_locked_models = bool(self.routing_config.get("locked_models", False))
-        self.context_safety_margin_tokens = int(getattr(Config, "LLM_CONTEXT_SAFETY_MARGIN_TOKENS", 256))
-        self.trace_embed_mode = getattr(Config, "TRACE_EMBED_MODE", "capped")
-        self.trace_embed_max_bytes = int(getattr(Config, "TRACE_EMBED_MAX_BYTES", 2_000_000))
-        self.stacktrace_max_bytes = int(getattr(Config, "TRACE_STACKTRACE_MAX_BYTES", 4000))
+        self.context_safety_margin_tokens = int(
+            cfg.get("context_safety_margin_tokens", getattr(Config, "LLM_CONTEXT_SAFETY_MARGIN_TOKENS", 256))
+        )
+        self.trace_embed_mode = cfg.get("trace_embed_mode", getattr(Config, "TRACE_EMBED_MODE", "capped"))
+        self.trace_embed_max_bytes = int(
+            cfg.get("trace_embed_max_bytes", getattr(Config, "TRACE_EMBED_MAX_BYTES", 2_000_000))
+        )
+        self.stacktrace_max_bytes = int(
+            cfg.get("trace_stacktrace_max_bytes", getattr(Config, "TRACE_STACKTRACE_MAX_BYTES", 4000))
+        )
+        self.ollama_show_url = cfg.get("ollama_show_url", getattr(Config, "OLLAMA_SHOW_URL", None))
 
         self.provider = self._build_provider()
         self._init_lock = asyncio.Lock()
@@ -862,24 +891,24 @@ class LLMGateway:
     def _build_provider(self):
         if self.provider_name == "azure-openai":
             return AzureOpenAIProvider(
-                api_key=Config.LLM_API_KEY,
-                endpoint=Config.AZURE_OPENAI_ENDPOINT,
-                api_version=Config.AZURE_OPENAI_API_VERSION,
+                api_key=self.api_key,
+                endpoint=self.azure_openai_endpoint,
+                api_version=self.azure_openai_api_version,
             )
         if self.provider_name == "azure-inference":
             return AzureInferenceProvider(
-                endpoint=Config.AZURE_AI_INFERENCE_ENDPOINT,
-                api_key=Config.LLM_API_KEY,
+                endpoint=self.azure_ai_inference_endpoint,
+                api_key=self.api_key,
             )
         if self.provider_name == "openrouter":
             base_url = self.base_url or "https://openrouter.ai/api/v1"
             extra_headers = {}
-            if getattr(Config, "LLM_HTTP_REFERER", None):
-                extra_headers["HTTP-Referer"] = Config.LLM_HTTP_REFERER
-            if getattr(Config, "LLM_SITE_NAME", None):
-                extra_headers["X-Title"] = Config.LLM_SITE_NAME
+            if self.http_referer:
+                extra_headers["HTTP-Referer"] = self.http_referer
+            if self.site_name:
+                extra_headers["X-Title"] = self.site_name
             return OpenRouterProvider(
-                api_key=Config.LLM_API_KEY,
+                api_key=self.api_key,
                 base_url=base_url,
                 extra_headers=extra_headers,
             )
@@ -894,8 +923,8 @@ class LLMGateway:
         if self.provider_name == "ollama":
             return OllamaProvider(base_url=self.base_url)
         if self.base_url and self.base_url != "http://localhost:8000":
-            return OpenAICompatibleProvider(api_key=Config.LLM_API_KEY, base_url=self.base_url)
-        return OpenAIProvider(api_key=Config.LLM_API_KEY)
+            return OpenAICompatibleProvider(api_key=self.api_key, base_url=self.base_url)
+        return OpenAIProvider(api_key=self.api_key)
 
     def _is_ollama_backend(self) -> bool:
         if self.provider_name == "ollama":
@@ -905,7 +934,7 @@ class LLMGateway:
         return bool(self.base_url and "11434" in self.base_url and self.provider_name in {"local", "openai"})
 
     async def _initialize_ollama_context(self) -> None:
-        show_url = getattr(Config, "OLLAMA_SHOW_URL", None) or self._derive_ollama_show_url(self.base_url)
+        show_url = self.ollama_show_url or self._derive_ollama_show_url(self.base_url)
         model_name = self.default_model
         try:
             details = None

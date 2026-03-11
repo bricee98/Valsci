@@ -2,14 +2,14 @@ import asyncio
 import os
 import json
 import logging
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import shutil
 from app.services.claim_processor import ClaimProcessor
+from app.services.claim_store import ClaimStore
+from app.services.gateway_factory import GatewayFactory
 from semantic_scholar.utils.searcher import S2Searcher
-from app.models.claim import Claim
-from app.models.paper import Paper
 from app.services.email_service import EmailService
-from app.services.llm.gateway import LLMGateway, LLMTask
+from app.services.llm.gateway import LLMTask
 from app.services.llm.types import empty_usage, merge_usage, normalize_usage
 from app.services.llm.validators import OutputValidationError, validate_query_list
 from app.services.paper_analyzer import PaperAnalyzer
@@ -19,8 +19,6 @@ from app.config import settings
 import os.path
 import aiofiles
 import aiofiles.os as async_os
-from contextlib import asynccontextmanager
-from filelock import FileLock
 import gzip
 
 # Configure logging
@@ -30,8 +28,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-QUEUED_JOBS_DIR = 'queued_jobs'
-SAVED_JOBS_DIR = 'saved_jobs'
+QUEUED_JOBS_DIR = settings.Config.QUEUED_JOBS_DIR
+SAVED_JOBS_DIR = settings.Config.SAVED_JOBS_DIR
 
 class ValsciProcessor:
     def __init__(self):
@@ -39,7 +37,9 @@ class ValsciProcessor:
         self.paper_analyzer = PaperAnalyzer()
         self.evidence_scorer = EvidenceScorer()
         self.claim_processor = ClaimProcessor()
-        self.ai_service = LLMGateway()
+        self.claim_store = ClaimStore()
+        self.gateway_factory = GatewayFactory()
+        self.ai_service = self.gateway_factory.default_gateway()
         self.email_service = EmailService()
 
         # In-memory storage for claims
@@ -65,7 +65,8 @@ class ValsciProcessor:
         self._active_locks = set()
 
         # Per-claim retry counters for processor-level circuit breaker
-        self._claim_stage_retries: Dict[Tuple[str, str], int] = {}
+        self._claim_stage_retries: Dict[Tuple[str, str, str], int] = {}
+        self._paper_stage_retries: Dict[Tuple[str, str, str, str], int] = {}
         self.max_stage_retries = 2  # Max processor-level retries before giving up
 
     def _ensure_claim_usage(self, claim_data: Dict) -> None:
@@ -83,16 +84,139 @@ class ValsciProcessor:
         claim_data["usage_by_stage"][stage] = merge_usage(stage_usage, usage)
 
     @staticmethod
+    def _ensure_claim_paper_lists(claim_data: Dict) -> None:
+        for key in ["inaccessible_papers", "processed_papers", "non_relevant_papers", "failed_papers"]:
+            if not isinstance(claim_data.get(key), list):
+                claim_data[key] = []
+
+    @staticmethod
+    def _extract_paper_id(paper_record: Dict[str, Any]) -> Optional[str]:
+        if not isinstance(paper_record, dict):
+            return None
+        if paper_record.get("corpusId") is not None:
+            return str(paper_record.get("corpusId"))
+        nested = paper_record.get("paper")
+        if isinstance(nested, dict) and nested.get("corpusId") is not None:
+            return str(nested.get("corpusId"))
+        return None
+
+    def _claim_stage_retry_result(self, batch_id: str, claim_id: str, stage: str) -> Tuple[int, bool]:
+        retry_key = (batch_id, claim_id, stage)
+        retries_used = self._claim_stage_retries.get(retry_key, 0) + 1
+        self._claim_stage_retries[retry_key] = retries_used
+        return retries_used, retries_used > self.max_stage_retries
+
+    def _clear_claim_stage_retry(self, batch_id: str, claim_id: str, stage: str) -> None:
+        self._claim_stage_retries.pop((batch_id, claim_id, stage), None)
+
+    def _paper_stage_retry_result(self, batch_id: str, claim_id: str, paper_id: str, stage: str) -> Tuple[int, bool]:
+        retry_key = (batch_id, claim_id, paper_id, stage)
+        retries_used = self._paper_stage_retries.get(retry_key, 0) + 1
+        self._paper_stage_retries[retry_key] = retries_used
+        return retries_used, retries_used > self.max_stage_retries
+
+    def _clear_paper_stage_retry(self, batch_id: str, claim_id: str, paper_id: Optional[str], stage: str) -> None:
+        if paper_id is None:
+            return
+        self._paper_stage_retries.pop((batch_id, claim_id, paper_id, stage), None)
+
+    def _clear_claim_retry_state(self, batch_id: str, claim_id: str) -> None:
+        for retry_key in [
+            key for key in self._claim_stage_retries
+            if key[0] == batch_id and key[1] == claim_id
+        ]:
+            self._claim_stage_retries.pop(retry_key, None)
+        for retry_key in [
+            key for key in self._paper_stage_retries
+            if key[0] == batch_id and key[1] == claim_id
+        ]:
+            self._paper_stage_retries.pop(retry_key, None)
+
+    @staticmethod
+    def _paper_status_ids(claim_data: Dict[str, Any]) -> Tuple[set[str], set[str], set[str], set[str]]:
+        processed_ids = {
+            str(paper["paper"]["corpusId"])
+            for paper in claim_data.get("processed_papers", [])
+            if isinstance(paper, dict)
+            and isinstance(paper.get("paper"), dict)
+            and paper["paper"].get("corpusId") is not None
+        }
+        non_relevant_ids = {
+            str(paper["paper"]["corpusId"])
+            for paper in claim_data.get("non_relevant_papers", [])
+            if isinstance(paper, dict)
+            and isinstance(paper.get("paper"), dict)
+            and paper["paper"].get("corpusId") is not None
+        }
+        inaccessible_ids = {
+            str(paper["corpusId"])
+            for paper in claim_data.get("inaccessible_papers", [])
+            if isinstance(paper, dict) and paper.get("corpusId") is not None
+        }
+        failed_ids = {
+            paper_id
+            for paper_id in (
+                ValsciProcessor._extract_paper_id(paper)
+                for paper in claim_data.get("failed_papers", [])
+            )
+            if paper_id is not None
+        }
+        return processed_ids, non_relevant_ids, inaccessible_ids, failed_ids
+
+    def _record_failed_paper(
+        self,
+        claim_data: Dict[str, Any],
+        paper_record: Dict[str, Any],
+        *,
+        stage: str,
+        message: str,
+        error: str,
+    ) -> None:
+        self._ensure_claim_paper_lists(claim_data)
+        paper_id = self._extract_paper_id(paper_record)
+        payload = paper_record.get("paper") if isinstance(paper_record.get("paper"), dict) else dict(paper_record)
+
+        for existing in claim_data["failed_papers"]:
+            if self._extract_paper_id(existing) == paper_id and existing.get("stage") == stage:
+                existing.update(
+                    {
+                        "paper": payload,
+                        "paper_id": paper_id,
+                        "stage": stage,
+                        "message": message,
+                        "error": error,
+                    }
+                )
+                return
+
+        claim_data["failed_papers"].append(
+            {
+                "paper": payload,
+                "paper_id": paper_id,
+                "stage": stage,
+                "message": message,
+                "error": error,
+            }
+        )
+
+    @staticmethod
     def _get_model_override(claim_data: Dict, task: str):
         overrides = claim_data.get("model_overrides")
         if isinstance(overrides, dict):
             return overrides.get(task)
         return None
 
+    def _get_ai_service(self, claim_data: Optional[Dict]) -> Any:
+        snapshot = {}
+        if isinstance(claim_data, dict):
+            snapshot = claim_data.get("provider_snapshot") or {}
+        return self.gateway_factory.get_gateway(snapshot)
+
     async def _attach_report_debug(self, batch_id: str, claim_id: str, claim_data: Dict, report: Dict) -> Dict:
         self._ensure_claim_usage(claim_data)
-        issues = await self.ai_service.get_claim_issues(batch_id, claim_id)
-        debug_trace = await self.ai_service.build_debug_trace(batch_id, claim_id)
+        ai_service = self._get_ai_service(claim_data)
+        issues = await ai_service.get_claim_issues(batch_id, claim_id)
+        debug_trace = await ai_service.build_debug_trace(batch_id, claim_id)
 
         usage_summary = normalize_usage(claim_data.get("usage"))
         report["issues"] = issues
@@ -112,7 +236,8 @@ class ValsciProcessor:
             logger.warning(f"Claim {claim_id} exceeded token cap of {self.max_tokens_per_claim}. Marking as processed.")
             claim_data = self.claims_in_memory.get((batch_id, claim_id))
             if claim_data:
-                await self.ai_service.add_issue(
+                ai_service = self._get_ai_service(claim_data)
+                await ai_service.add_issue(
                     batch_id=batch_id,
                     claim_id=claim_id,
                     severity="ERROR",
@@ -134,6 +259,8 @@ class ValsciProcessor:
 
     async def _save_processed_claim(self, claim_data: Dict, batch_id: str, claim_id: str):
         """Save a processed claim to disk and handle cleanup."""
+        self._clear_claim_retry_state(batch_id, claim_id)
+
         # Create saved jobs directory
         saved_batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
         os.makedirs(saved_batch_dir, exist_ok=True)
@@ -144,7 +271,9 @@ class ValsciProcessor:
             await f.write(json.dumps(claim_data, indent=2))
 
         if settings.Config.TRACE_COMPRESS_ON_COMPLETE:
-            await self._compress_trace_files(batch_id, claim_id)
+            await self._compress_trace_files(batch_id, claim_id, claim_data)
+
+        self.claim_store.ingest_transport_artifact(batch_id, claim_id)
         
         # Remove the original file from queued_jobs
         queued_file_path = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
@@ -153,14 +282,17 @@ class ValsciProcessor:
         
         # Remove from memory
         self.claims_in_memory.pop((batch_id, claim_id), None)
-        
+
+        await self._seed_waiting_reuse_runs(batch_id, claim_id, claim_data)
+
         # Check if batch is complete
         await self._check_batch_completion(batch_id)
 
-    async def _compress_trace_files(self, batch_id: str, claim_id: str) -> None:
+    async def _compress_trace_files(self, batch_id: str, claim_id: str, claim_data: Optional[Dict] = None) -> None:
+        ai_service = self._get_ai_service(claim_data)
         files = [
-            self.ai_service.get_trace_file_path(batch_id, claim_id),
-            self.ai_service.get_issues_file_path(batch_id, claim_id),
+            ai_service.get_trace_file_path(batch_id, claim_id),
+            ai_service.get_issues_file_path(batch_id, claim_id),
         ]
         for file_path in files:
             if not os.path.exists(file_path):
@@ -203,6 +335,42 @@ class ValsciProcessor:
             if await async_os.path.exists(batch_dir):
                 await self.async_rmtree(batch_dir)
 
+    async def _seed_waiting_reuse_runs(self, batch_id: str, claim_id: str, baseline_claim_data: Dict[str, Any]) -> None:
+        baseline_run = self.claim_store.find_run_by_legacy(batch_id, claim_id)
+        if not baseline_run:
+            return
+        waiting_runs = [
+            run
+            for run in self.claim_store.list_runs_for_claim(baseline_run["claim_key"])
+            if run.get("status") == "waiting_for_baseline"
+            and run.get("reuse_from_run_id") == baseline_run["run_id"]
+        ]
+        if not waiting_runs:
+            return
+
+        if baseline_claim_data.get("raw_papers"):
+            next_status = "ready_for_analysis"
+        elif baseline_claim_data.get("semantic_scholar_queries"):
+            next_status = "ready_for_search"
+        else:
+            next_status = "queued"
+
+        for waiting_run in waiting_runs:
+            seeded_claim_data = json.loads(json.dumps(baseline_claim_data))
+            seeded_claim_data["processed_papers"] = []
+            seeded_claim_data["non_relevant_papers"] = []
+            seeded_claim_data["report"] = None
+            seeded_claim_data["usage"] = empty_usage()
+            seeded_claim_data["usage_by_stage"] = {}
+            seeded_claim_data["status"] = next_status
+            waiting_run["status"] = next_status
+            self.claim_store.save_run(waiting_run)
+            self.claim_store.materialize_run_to_queue(
+                waiting_run,
+                status=next_status,
+                seeded_claim_data=seeded_claim_data,
+            )
+
     def calculate_tokens_in_window(self):
         """Calculate token usage within the current window."""
         current_time = time.time()
@@ -215,6 +383,7 @@ class ValsciProcessor:
 
     async def generate_search_queries(self, claim_data, batch_id: str, claim_id: str) -> None:
         """Generate search queries for a claim."""
+        ai_service = self._get_ai_service(claim_data)
         try:
             self._ensure_claim_usage(claim_data)
             # Token tracking
@@ -230,7 +399,7 @@ class ValsciProcessor:
             queries, usage = await self.s2_searcher.generate_search_queries(
                 claim_data['text'],
                 claim_data['search_config']['num_queries'],
-                ai_service=self.ai_service,
+                ai_service=ai_service,
                 batch_id=batch_id,
                 claim_id=claim_id,
                 model_override=self._get_model_override(claim_data, LLMTask.QUERY_GENERATION),
@@ -244,7 +413,7 @@ class ValsciProcessor:
             if not queries:
                 # Query generation returned empty results -- do not advance to search
                 claim_data['status'] = 'processed'
-                await self.ai_service.add_issue(
+                await ai_service.add_issue(
                     batch_id=batch_id,
                     claim_id=claim_id,
                     severity="ERROR",
@@ -262,18 +431,20 @@ class ValsciProcessor:
                 }
                 claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
                 await self._save_processed_claim(claim_data, batch_id, claim_id)
+                self._clear_claim_stage_retry(batch_id, claim_id, LLMTask.QUERY_GENERATION)
                 return
 
             claim_data['status'] = 'ready_for_search'
+            self._clear_claim_stage_retry(batch_id, claim_id, LLMTask.QUERY_GENERATION)
 
         except Exception as e:
             logger.error(f"Error generating search queries for claim {claim_id}: {str(e)}")
 
-            retry_key = (batch_id, claim_id)
-            self._claim_stage_retries[retry_key] = self._claim_stage_retries.get(retry_key, 0) + 1
-            retries_used = self._claim_stage_retries[retry_key]
+            retries_used, retries_exhausted = self._claim_stage_retry_result(
+                batch_id, claim_id, LLMTask.QUERY_GENERATION
+            )
 
-            await self.ai_service.add_issue(
+            await ai_service.add_issue(
                 batch_id=batch_id,
                 claim_id=claim_id,
                 severity="ERROR",
@@ -282,7 +453,7 @@ class ValsciProcessor:
                 details={"exception_message": str(e)},
             )
 
-            if retries_used > self.max_stage_retries:
+            if retries_exhausted:
                 # Exhausted processor-level retries -- produce terminal failure report
                 logger.error(f"Claim {claim_id}: query generation failed after {retries_used} processor attempts. Marking as processed.")
                 claim_data = self.claims_in_memory.get((batch_id, claim_id), claim_data)
@@ -297,7 +468,7 @@ class ValsciProcessor:
                 }
                 claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
                 await self._save_processed_claim(claim_data, batch_id, claim_id)
-                self._claim_stage_retries.pop(retry_key, None)
+                self._clear_claim_stage_retry(batch_id, claim_id, LLMTask.QUERY_GENERATION)
             # else: claim stays 'queued' and will be retried on next loop iteration
 
         finally:
@@ -305,6 +476,7 @@ class ValsciProcessor:
 
     async def search_papers(self, claim_data, batch_id: str, claim_id: str) -> None:
         """Search for papers relevant to the claim."""
+        ai_service = self._get_ai_service(claim_data)
         try:
             # Token tracking
             estimated_tokens = 100  # Small overhead for query processing
@@ -322,7 +494,7 @@ class ValsciProcessor:
             try:
                 queries = validate_query_list(raw_queries, min_count=1)
             except OutputValidationError as exc:
-                await self.ai_service.add_issue(
+                await ai_service.add_issue(
                     batch_id=batch_id,
                     claim_id=claim_id,
                     severity="ERROR",
@@ -341,10 +513,11 @@ class ValsciProcessor:
                 }
                 claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
                 await self._save_processed_claim(claim_data, batch_id, claim_id)
+                self._clear_claim_stage_retry(batch_id, claim_id, "paper_search")
                 return
 
             if queries != raw_queries:
-                await self.ai_service.add_issue(
+                await ai_service.add_issue(
                     batch_id=batch_id,
                     claim_id=claim_id,
                     severity="WARN",
@@ -360,7 +533,7 @@ class ValsciProcessor:
             # Guard: refuse to search with empty queries (upstream failure)
             if not queries:
                 logger.warning(f"search_papers called with empty queries for claim {claim_id}")
-                await self.ai_service.add_issue(
+                await ai_service.add_issue(
                     batch_id=batch_id,
                     claim_id=claim_id,
                     severity="ERROR",
@@ -379,6 +552,7 @@ class ValsciProcessor:
                 }
                 claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
                 await self._save_processed_claim(claim_data, batch_id, claim_id)
+                self._clear_claim_stage_retry(batch_id, claim_id, "paper_search")
                 return
 
             # Search papers
@@ -404,7 +578,7 @@ class ValsciProcessor:
             # Update claim data in memory
             if not papers:
                 claim_data['status'] = 'processed'
-                await self.ai_service.add_issue(
+                await ai_service.add_issue(
                     batch_id=batch_id,
                     claim_id=claim_id,
                     severity="WARN",
@@ -423,20 +597,39 @@ class ValsciProcessor:
                 claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
                 # Save final state since we're done
                 await self._save_processed_claim(claim_data, batch_id, claim_id)
+                self._clear_claim_stage_retry(batch_id, claim_id, "paper_search")
             else:
                 claim_data['raw_papers'] = papers
                 claim_data['status'] = 'ready_for_analysis'
+                self._clear_claim_stage_retry(batch_id, claim_id, "paper_search")
 
         except Exception as e:
             logger.error(f"Error searching for papers for claim {claim_id}: {str(e)}")
-            await self.ai_service.add_issue(
+            retries_used, retries_exhausted = self._claim_stage_retry_result(
+                batch_id, claim_id, "paper_search"
+            )
+            await ai_service.add_issue(
                 batch_id=batch_id,
                 claim_id=claim_id,
                 severity="ERROR",
                 stage="paper_search",
-                message="Paper search failed.",
+                message=f"Paper search failed (processor attempt {retries_used}/{self.max_stage_retries + 1}).",
                 details={"exception_message": str(e)},
             )
+            if retries_exhausted:
+                claim_data = self.claims_in_memory.get((batch_id, claim_id), claim_data)
+                claim_data['status'] = 'processed'
+                report = {
+                    "relevantPapers": [],
+                    "explanation": f"Paper search failed after all retries: {str(e)}",
+                    "claimRating": 0,
+                    "timing_stats": {},
+                    "searchQueries": claim_data.get('semantic_scholar_queries', []),
+                    "claim_text": claim_data.get('text', ''),
+                }
+                claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
+                await self._save_processed_claim(claim_data, batch_id, claim_id)
+                self._clear_claim_stage_retry(batch_id, claim_id, "paper_search")
         finally:
             self.claims_searching_in_progress.discard(claim_id)
 
@@ -457,10 +650,11 @@ class ValsciProcessor:
 
     async def analyze_claim(self, claim_data, batch_id: str, claim_id: str) -> None:
         """Analyze the claim."""
+        ai_service = self._get_ai_service(claim_data)
         # Check for token limit exceeded at the beginning
         if claim_id in self.claim_token_usage and self.claim_token_usage[claim_id] > self.max_tokens_per_claim:
             logger.warning(f"Claim {claim_id} has exceeded token limit in analyze_claim. Marking as processed.")
-            await self.ai_service.add_issue(
+            await ai_service.add_issue(
                 batch_id=batch_id,
                 claim_id=claim_id,
                 severity="ERROR",
@@ -484,34 +678,26 @@ class ValsciProcessor:
             await self._save_processed_claim(claim_data, batch_id, claim_id)
             return
             
-        # Initialize lists if they don't exist
-        if 'inaccessible_papers' not in claim_data:
-            claim_data['inaccessible_papers'] = []
-        if 'processed_papers' not in claim_data:
-            claim_data['processed_papers'] = []
-        if 'non_relevant_papers' not in claim_data:
-            claim_data['non_relevant_papers'] = []
-
-        # Get sets of processed paper IDs
-        processed_ids = {p['paper']['corpusId'] for p in claim_data.get('processed_papers', [])}
-        non_relevant_ids = {p['paper']['corpusId'] for p in claim_data.get('non_relevant_papers', [])}
-        inaccessible_ids = {p['corpusId'] for p in claim_data.get('inaccessible_papers', [])}
+        self._ensure_claim_paper_lists(claim_data)
+        processed_ids, non_relevant_ids, inaccessible_ids, failed_ids = self._paper_status_ids(claim_data)
 
         # Analyze raw papers
         for raw_paper in claim_data.get('raw_papers', []):
             try:
                 await asyncio.sleep(0.1)
-                corpus_id = raw_paper.get('corpusId')
-                if not corpus_id:
+                raw_corpus_id = raw_paper.get('corpusId')
+                if not raw_corpus_id:
                     logger.warning(f"Raw paper missing corpus ID: {raw_paper}")
                     continue
+                corpus_id = str(raw_corpus_id)
 
                 if (corpus_id not in processed_ids and 
                     corpus_id not in non_relevant_ids and 
-                    corpus_id not in inaccessible_ids):
+                    corpus_id not in inaccessible_ids and
+                    corpus_id not in failed_ids):
                     
                     # Get paper content
-                    content_dict = self.s2_searcher.get_paper_content(corpus_id)
+                    content_dict = self.s2_searcher.get_paper_content(raw_corpus_id)
 
                     if content_dict is None or content_dict.get('text') is None:
                         inaccessible_paper = dict(raw_paper)
@@ -538,7 +724,7 @@ class ValsciProcessor:
 
                         # Add to inaccessible papers
                         claim_data['inaccessible_papers'].append(inaccessible_paper)
-                        await self.ai_service.add_issue(
+                        await ai_service.add_issue(
                             batch_id=batch_id,
                             claim_id=claim_id,
                             severity="WARN",
@@ -561,7 +747,7 @@ class ValsciProcessor:
                     
                     if (estimated_tokens_for_analysis + current_num_tokens < self.max_tokens_per_window and 
                         current_num_requests < self.max_requests_per_window and
-                        corpus_id not in self.papers_analyzing_in_progress and
+                        raw_corpus_id not in self.papers_analyzing_in_progress and
                         corpus_id not in processed_ids and
                         corpus_id not in non_relevant_ids):
                         self.request_token_estimates.append({
@@ -595,11 +781,13 @@ class ValsciProcessor:
                     return
 
         # Check completion status
+        processed_ids, non_relevant_ids, inaccessible_ids, failed_ids = self._paper_status_ids(claim_data)
         all_papers_scored = all(paper.get('score', -1) != -1 for paper in claim_data.get('processed_papers', []))
         all_papers_processed = all(
-            paper['corpusId'] in processed_ids or 
-            paper['corpusId'] in non_relevant_ids or 
-            paper['corpusId'] in inaccessible_ids 
+            str(paper['corpusId']) in processed_ids or 
+            str(paper['corpusId']) in non_relevant_ids or 
+            str(paper['corpusId']) in inaccessible_ids or
+            str(paper['corpusId']) in failed_ids
             for paper in claim_data.get('raw_papers', []) 
             if paper.get('corpusId')
         )
@@ -660,10 +848,14 @@ class ValsciProcessor:
 
     async def analyze_single_paper(self, raw_paper, claim_text, batch_id: str, claim_id: str) -> None:
         """Analyze a single paper."""
+        ai_service = self.ai_service
+        paper_id = str(raw_paper.get('corpusId'))
         try:
             self.papers_analyzing_in_progress.add(raw_paper['corpusId'])
             claim_data = self.claims_in_memory[(batch_id, claim_id)]
             self._ensure_claim_usage(claim_data)
+            self._ensure_claim_paper_lists(claim_data)
+            ai_service = self._get_ai_service(claim_data)
             
             # Estimate tokens before analysis
             estimated_tokens_for_analysis = 1000 + (len(raw_paper['content']) / 3.5)
@@ -677,7 +869,7 @@ class ValsciProcessor:
                 await self.paper_analyzer.analyze_relevance_and_extract(
                     raw_paper['content'], 
                     claim_text, 
-                    ai_service=self.ai_service,
+                    ai_service=ai_service,
                     batch_id=batch_id,
                     claim_id=claim_id,
                     paper_id=str(raw_paper.get('corpusId')),
@@ -692,30 +884,41 @@ class ValsciProcessor:
 
             # Get claim data from memory
             claim_data = self.claims_in_memory[(batch_id, claim_id)]
+            self._ensure_claim_paper_lists(claim_data)
             
             # Check for duplicates in processed_papers before adding
-            processed_corpus_ids = {p['paper']['corpusId'] for p in claim_data.get('processed_papers', [])}
+            processed_corpus_ids = {
+                str(p['paper']['corpusId'])
+                for p in claim_data.get('processed_papers', [])
+                if isinstance(p.get('paper'), dict) and p['paper'].get('corpusId') is not None
+            }
             
             # Update claim data
             if relevance >= 0.1:
-                if raw_paper['corpusId'] not in processed_corpus_ids:
+                if paper_id not in processed_corpus_ids:
                     claim_data['processed_papers'].append({
                         'paper': raw_paper,
                         'relevance': relevance,
                         'excerpts': excerpts,
                         'score': -1,
+                        'score_status': 'pending',
                         'explanations': explanations,
                         'content_type': raw_paper['content_type'],
                         'excerpt_pages': excerpt_pages
                     })
                     # Add usage to claim data
                     self._add_claim_usage(claim_data, LLMTask.PAPER_ANALYSIS, usage)
+                    self._clear_paper_stage_retry(batch_id, claim_id, paper_id, LLMTask.PAPER_ANALYSIS)
                 else:
                     logger.warning(f"Skipping duplicate paper {raw_paper['corpusId']} for claim {claim_id}")
             else:
                 # Check for duplicates in non_relevant_papers
-                non_relevant_corpus_ids = {p['paper']['corpusId'] for p in claim_data.get('non_relevant_papers', [])}
-                if raw_paper['corpusId'] not in non_relevant_corpus_ids:
+                non_relevant_corpus_ids = {
+                    str(p['paper']['corpusId'])
+                    for p in claim_data.get('non_relevant_papers', [])
+                    if isinstance(p.get('paper'), dict) and p['paper'].get('corpusId') is not None
+                }
+                if paper_id not in non_relevant_corpus_ids:
                     claim_data['non_relevant_papers'].append({
                         'paper': raw_paper,
                         'explanation': non_relevant_explanation,
@@ -724,24 +927,40 @@ class ValsciProcessor:
 
                 # Add usage to claim data
                 self._add_claim_usage(claim_data, LLMTask.PAPER_ANALYSIS, usage)
+                self._clear_paper_stage_retry(batch_id, claim_id, paper_id, LLMTask.PAPER_ANALYSIS)
 
         except Exception as e:
             logger.error(f"Error analyzing paper {raw_paper['corpusId']}: {str(e)}")
-            await self.ai_service.add_issue(
+            retries_used, retries_exhausted = self._paper_stage_retry_result(
+                batch_id, claim_id, paper_id, LLMTask.PAPER_ANALYSIS
+            )
+            await ai_service.add_issue(
                 batch_id=batch_id,
                 claim_id=claim_id,
                 severity="ERROR",
                 stage=LLMTask.PAPER_ANALYSIS,
-                message="Paper analysis failed.",
-                details={"paper_id": str(raw_paper.get('corpusId')), "exception_message": str(e)},
+                message=f"Paper analysis failed (processor attempt {retries_used}/{self.max_stage_retries + 1}).",
+                details={"paper_id": paper_id, "exception_message": str(e)},
             )
+            if retries_exhausted:
+                claim_data = self.claims_in_memory.get((batch_id, claim_id))
+                if claim_data:
+                    self._record_failed_paper(
+                        claim_data,
+                        raw_paper,
+                        stage=LLMTask.PAPER_ANALYSIS,
+                        message="Paper analysis failed after all retries.",
+                        error=str(e),
+                    )
+                self._clear_paper_stage_retry(batch_id, claim_id, paper_id, LLMTask.PAPER_ANALYSIS)
         finally:
             self.papers_analyzing_in_progress.discard(raw_paper['corpusId'])
 
     async def score_paper(self, processed_paper, batch_id: str, claim_id: str) -> None:
         """Score a single paper."""
+        ai_service = self.ai_service
+        paper_id = str(processed_paper.get('paper', {}).get('corpusId'))
         try:
-            paper_id = processed_paper['paper']['corpusId']
             estimated_tokens_for_scoring = 500
             await self._add_tokens_for_claim(claim_id, estimated_tokens_for_scoring, batch_id)
 
@@ -752,17 +971,19 @@ class ValsciProcessor:
             # Get claim data to access bibliometric config
             claim_data = self.claims_in_memory[(batch_id, claim_id)]
             self._ensure_claim_usage(claim_data)
+            self._ensure_claim_paper_lists(claim_data)
+            ai_service = self._get_ai_service(claim_data)
             
             # Get bibliometric configuration
             bibliometric_config = claim_data.get('bibliometric_config', None)
 
             score, usage = await self.evidence_scorer.calculate_paper_weight(
                 processed_paper, 
-                ai_service=self.ai_service,
+                ai_service=ai_service,
                 bibliometric_config=bibliometric_config,
                 batch_id=batch_id,
                 claim_id=claim_id,
-                paper_id=str(paper_id),
+                paper_id=paper_id,
                 model_override=self._get_model_override(claim_data, LLMTask.VENUE_SCORING),
             )
 
@@ -773,34 +994,60 @@ class ValsciProcessor:
 
             # Update score
             for paper in claim_data['processed_papers']:
-                if paper['paper']['corpusId'] == paper_id:
+                if str(paper['paper']['corpusId']) == paper_id:
                     print(f"Found paper to set score for: {paper_id}")
                     paper['score'] = score
+                    paper['score_status'] = 'completed'
+                    paper.pop('score_error', None)
                     break
 
             # Add usage to claim data
             self._add_claim_usage(claim_data, LLMTask.VENUE_SCORING, usage)
+            self._clear_paper_stage_retry(batch_id, claim_id, paper_id, LLMTask.VENUE_SCORING)
 
         except Exception as e:
             logger.error(f"Error scoring paper: {str(e)}")
-            await self.ai_service.add_issue(
+            retries_used, retries_exhausted = self._paper_stage_retry_result(
+                batch_id, claim_id, paper_id, LLMTask.VENUE_SCORING
+            )
+            await ai_service.add_issue(
                 batch_id=batch_id,
                 claim_id=claim_id,
                 severity="ERROR",
                 stage=LLMTask.VENUE_SCORING,
-                message="Evidence scoring failed for paper.",
-                details={"paper_id": str(processed_paper.get('paper', {}).get('corpusId')), "exception_message": str(e)},
+                message=f"Evidence scoring failed for paper (processor attempt {retries_used}/{self.max_stage_retries + 1}).",
+                details={"paper_id": paper_id, "exception_message": str(e)},
             )
+            if retries_exhausted:
+                claim_data = self.claims_in_memory.get((batch_id, claim_id))
+                if claim_data:
+                    self._ensure_claim_paper_lists(claim_data)
+                    for paper in claim_data.get('processed_papers', []):
+                        if str(paper.get('paper', {}).get('corpusId')) == paper_id:
+                            paper['score'] = 0.0
+                            paper['score_status'] = 'failed'
+                            paper['score_error'] = str(e)
+                            break
+                    self._record_failed_paper(
+                        claim_data,
+                        processed_paper,
+                        stage=LLMTask.VENUE_SCORING,
+                        message="Evidence scoring failed after all retries.",
+                        error=str(e),
+                    )
+                self._clear_paper_stage_retry(batch_id, claim_id, paper_id, LLMTask.VENUE_SCORING)
         finally:
-            if 'paper_id' in locals():
-                self.papers_scoring_in_progress.discard(paper_id)
+            if processed_paper.get('paper', {}).get('corpusId') is not None:
+                self.papers_scoring_in_progress.discard(processed_paper['paper']['corpusId'])
 
     async def generate_final_report(self, batch_id: str, claim_id: str) -> None:
         """Generate the final report."""
+        ai_service = self.ai_service
         try:
             # Get claim data from memory
             claim_data = self.claims_in_memory[(batch_id, claim_id)]
             self._ensure_claim_usage(claim_data)
+            ai_service = self._get_ai_service(claim_data)
             
             # Estimate tokens for final report generation
             estimated_tokens_for_final_report = 2000 + (
@@ -841,7 +1088,7 @@ class ValsciProcessor:
                     claim_data['non_relevant_papers'],
                     claim_data['inaccessible_papers'],
                     claim_data['semantic_scholar_queries'],
-                    ai_service=self.ai_service,
+                    ai_service=ai_service,
                     bibliometric_config=bibliometric_config,
                     batch_id=batch_id,
                     claim_id=claim_id,
@@ -858,7 +1105,7 @@ class ValsciProcessor:
 
         except Exception as e:
             logger.error(f"Error preparing final report: {e}")
-            await self.ai_service.add_issue(
+            await ai_service.add_issue(
                 batch_id=batch_id,
                 claim_id=claim_id,
                 severity="ERROR",
@@ -932,7 +1179,8 @@ class ValsciProcessor:
                             if claim_data['status'] != 'processed':
                                 logger.warning(f"Claim {claim_id} exceeded token cap but wasn't marked as processed. Fixing.")
                                 claim_data['status'] = 'processed'
-                                await self.ai_service.add_issue(
+                                ai_service = self._get_ai_service(claim_data)
+                                await ai_service.add_issue(
                                     batch_id=batch_id,
                                     claim_id=claim_id,
                                     severity="ERROR",

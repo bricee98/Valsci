@@ -1,0 +1,77 @@
+{
+  "providers": [
+    {
+      "provider_id": "default",
+      "label": "Default Config Provider",
+      "provider_type": "openai",
+      "enabled": true,
+      "api_key": "your_api_key",
+      "base_url": "https://api.openai.com/v1",
+      "local_backend": "",
+      "default_model": "gpt-4o",
+      "task_defaults": {},
+      "http_referer": null,
+      "site_name": null,
+      "azure_openai_endpoint": "",
+      "azure_openai_api_version": "2024-06-01",
+      "azure_ai_inference_endpoint": "",
+      "models": [
+        {
+          "model_name": "gpt-4o",
+          "label": "gpt-4o",
+          "enabled": true,
+          "context_window_tokens": 128000,
+          "max_output_tokens_default": 4096,
+          "supports_temperature": true,
+          "supports_json_mode": true,
+          "input_cost_per_million": 2.5,
+          "output_cost_per_million": 10.0
+        },
+        {
+          "model_name": "gpt-4o-mini",
+          "label": "gpt-4o-mini",
+          "enabled": true,
+          "context_window_tokens": 128000,
+          "max_output_tokens_default": 4096,
+          "supports_temperature": true,
+          "supports_json_mode": true,
+          "input_cost_per_million": 0.15,
+          "output_cost_per_million": 0.6
+        },
+        {
+          "model_name": "gpt-5",
+          "label": "gpt-5",
+          "enabled": true,
+          "context_window_tokens": 272000,
+          "max_output_tokens_default": 8192,
+          "supports_temperature": false,
+          "supports_json_mode": true,
+          "input_cost_per_million": 1.25,
+          "output_cost_per_million": 10.0
+        },
+        {
+          "model_name": "gpt-5-mini",
+          "label": "gpt-5-mini",
+          "enabled": true,
+          "context_window_tokens": 272000,
+          "max_output_tokens_default": 8192,
+          "supports_temperature": false,
+          "supports_json_mode": true,
+          "input_cost_per_million": 0.25,
+          "output_cost_per_million": 2.0
+        },
+        {
+          "model_name": "o3",
+          "label": "o3",
+          "enabled": true,
+          "context_window_tokens": 200000,
+          "max_output_tokens_default": 4096,
+          "supports_temperature": false,
+          "supports_json_mode": true,
+          "input_cost_per_million": 2.0,
+          "output_cost_per_million": 8.0
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Claim Detail</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container wide-container">
+        <header class="page-header">
+            <div>
+                <h1>Claim Detail</h1>
+                <p class="subtext">Run history, edited reruns, and side-by-side comparison.</p>
+            </div>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Home</a>
+                <a href="/arena" class="nav-link">Arena</a>
+                <a href="/browser" class="nav-link">Claims</a>
+            </div>
+        </header>
+
+        <div id="claimHeader" class="panel"></div>
+        <div class="grid-two">
+            <section class="panel">
+                <h2>Rerun or Edit Claim</h2>
+                <div class="form-row">
+                    <label for="claimText">Claim Text</label>
+                    <textarea id="claimText" rows="4" placeholder="Editing the claim creates a new canonical claim key."></textarea>
+                </div>
+                <div class="form-row grid-two">
+                    <div>
+                        <label for="providerId">Provider</label>
+                        <select id="providerId"></select>
+                    </div>
+                    <div>
+                        <label for="duplicateStrategy">Existing Claim Handling</label>
+                        <select id="duplicateStrategy">
+                            <option value="rerun">Create New Run</option>
+                            <option value="view">View Existing Claim</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <label for="batchTags">Batch Tags</label>
+                    <input type="text" id="batchTags" placeholder="Optional comma-separated tags">
+                </div>
+                <div class="form-row grid-two">
+                    <div>
+                        <label for="numQueries">Queries</label>
+                        <input type="number" id="numQueries" min="1" max="20" value="5">
+                    </div>
+                    <div>
+                        <label for="resultsPerQuery">Results / Query</label>
+                        <input type="number" id="resultsPerQuery" min="1" max="10" value="5">
+                    </div>
+                </div>
+                <div class="form-row grid-two">
+                    <div>
+                        <label for="modelQueryGeneration">Query Generation Model</label>
+                        <select id="modelQueryGeneration"></select>
+                    </div>
+                    <div>
+                        <label for="modelPaperAnalysis">Paper Analysis Model</label>
+                        <select id="modelPaperAnalysis"></select>
+                    </div>
+                </div>
+                <div class="form-row grid-two">
+                    <div>
+                        <label for="modelVenueScoring">Venue Scoring Model</label>
+                        <select id="modelVenueScoring"></select>
+                    </div>
+                    <div>
+                        <label for="modelFinalReport">Final Report Model</label>
+                        <select id="modelFinalReport"></select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <label class="checkbox-row">
+                        <input type="checkbox" id="useBibliometrics" checked>
+                        <span>Use bibliometric scoring</span>
+                    </label>
+                </div>
+                <div class="form-row grid-three">
+                    <div>
+                        <label for="authorImpactWeight">Author Weight</label>
+                        <input type="number" id="authorImpactWeight" min="0" max="1" step="0.1" value="0.4">
+                    </div>
+                    <div>
+                        <label for="citationImpactWeight">Citation Weight</label>
+                        <input type="number" id="citationImpactWeight" min="0" max="1" step="0.1" value="0.4">
+                    </div>
+                    <div>
+                        <label for="venueImpactWeight">Venue Weight</label>
+                        <input type="number" id="venueImpactWeight" min="0" max="1" step="0.1" value="0.2">
+                    </div>
+                </div>
+                <div class="inline-actions">
+                    <button type="button" id="preflightBtn" class="secondary-button">Estimate Rerun</button>
+                    <button type="button" id="rerunBtn" class="primary-button" disabled>Queue Rerun</button>
+                </div>
+            </section>
+            <section class="panel">
+                <h2>Compare Selected Runs</h2>
+                <div id="comparisonTarget" class="helper-text">Select two or more runs below to compare.</div>
+            </section>
+        </div>
+
+        <section id="preflightPanel" class="panel hidden"></section>
+
+        <section class="panel">
+            <h2>Run History</h2>
+            <div id="runList"></div>
+        </section>
+    </div>
+
+    <div id="costModal" class="modal hidden">
+        <div class="modal-card">
+            <h2>Confirm Rerun Cost</h2>
+            <div id="costModalBody"></div>
+            <label class="checkbox-row">
+                <input type="checkbox" id="confirmCostCheckbox">
+                <span>I approve this estimated spend and want to queue the rerun.</span>
+            </label>
+            <div class="inline-actions">
+                <button type="button" id="cancelCostBtn" class="secondary-button">Cancel</button>
+                <button type="button" id="confirmCostBtn" class="primary-button" disabled>Queue Rerun</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const claimKey = '{{ claim_key }}';
+        const providerCatalog = {{ providers|tojson }};
+        const selectedRunIds = new Set();
+        let claimDetail = null;
+        let preflightPayload = null;
+
+        const stageConfig = [
+            ['query_generation', 'modelQueryGeneration'],
+            ['paper_analysis', 'modelPaperAnalysis'],
+            ['venue_scoring', 'modelVenueScoring'],
+            ['final_report', 'modelFinalReport'],
+        ];
+
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function getProvider(providerId) {
+            return providerCatalog.find(provider => provider.provider_id === providerId) || providerCatalog[0] || null;
+        }
+
+        function providerModelNames(provider) {
+            const models = Array.isArray(provider?.models) ? provider.models : [];
+            return models
+                .map(model => String(model.model_name || '').trim())
+                .filter(Boolean);
+        }
+
+        function parseBatchTags() {
+            return document.getElementById('batchTags').value
+                .split(',')
+                .map(value => value.trim())
+                .filter(Boolean);
+        }
+
+        function currentSearchConfig() {
+            return {
+                num_queries: parseInt(document.getElementById('numQueries').value || '5', 10),
+                results_per_query: parseInt(document.getElementById('resultsPerQuery').value || '5', 10),
+            };
+        }
+
+        function currentBibliometricConfig() {
+            return {
+                use_bibliometrics: document.getElementById('useBibliometrics').checked,
+                author_impact_weight: parseFloat(document.getElementById('authorImpactWeight').value || '0.4'),
+                citation_impact_weight: parseFloat(document.getElementById('citationImpactWeight').value || '0.4'),
+                venue_impact_weight: parseFloat(document.getElementById('venueImpactWeight').value || '0.2'),
+            };
+        }
+
+        function currentModelOverrides() {
+            const overrides = {};
+            stageConfig.forEach(([taskName, selectId]) => {
+                const value = document.getElementById(selectId).value;
+                if (value) overrides[taskName] = value;
+            });
+            return overrides;
+        }
+
+        function reportLink(run) {
+            if (!run.transport_batch_id || !run.transport_claim_id) return '#';
+            return run.report_available
+                ? `/results?batch_id=${encodeURIComponent(run.transport_batch_id)}&claim_id=${encodeURIComponent(run.transport_claim_id)}`
+                : `/progress?batch_id=${encodeURIComponent(run.transport_batch_id)}&claim_id=${encodeURIComponent(run.transport_claim_id)}`;
+        }
+
+        function renderProviderOptions() {
+            const providerSelect = document.getElementById('providerId');
+            providerSelect.innerHTML = providerCatalog.map(provider => `
+                <option value="${escapeHtml(provider.provider_id)}">${escapeHtml(provider.label || provider.provider_id)}</option>
+            `).join('');
+            refreshModelSelectors();
+        }
+
+        function refreshModelSelectors() {
+            const provider = getProvider(document.getElementById('providerId').value);
+            stageConfig.forEach(([, selectId]) => {
+                const select = document.getElementById(selectId);
+                const current = select.value;
+                const models = providerModelNames(provider);
+                select.innerHTML = `
+                    <option value="">Provider Default (${escapeHtml(provider?.default_model || 'unset')})</option>
+                    ${models.map(model => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`).join('')}
+                `;
+                select.value = models.includes(current) ? current : '';
+            });
+        }
+
+        function invalidatePreflight() {
+            preflightPayload = null;
+            document.getElementById('preflightPanel').classList.add('hidden');
+            document.getElementById('rerunBtn').disabled = true;
+        }
+
+        function renderComparison() {
+            const runs = (claimDetail?.runs || []).filter(run => selectedRunIds.has(run.run_id));
+            const target = document.getElementById('comparisonTarget');
+            if (runs.length < 2) {
+                target.className = 'helper-text';
+                target.innerHTML = 'Select two or more runs below to compare.';
+                return;
+            }
+            target.className = 'comparison-grid';
+            target.innerHTML = runs.map(run => `
+                <article class="comparison-card">
+                    <h3>${escapeHtml(run.provider_label || run.default_model || run.run_id)}</h3>
+                    <p><strong>Status:</strong> ${escapeHtml(run.status)}</p>
+                    <p><strong>Rating:</strong> ${escapeHtml(run.rating_label)}${run.claimRating !== null && run.claimRating !== undefined ? ` (${run.claimRating})` : ''}</p>
+                    <p><strong>Execution:</strong> ${escapeHtml(run.execution_mode)}</p>
+                    <p><strong>Expected Cost:</strong> $${(((run.cost_estimate || {}).expected || {}).cost_usd || 0).toFixed(4)}</p>
+                    <p><strong>Actual Cost:</strong> $${((run.usage || {}).cost_usd || 0).toFixed(4)}</p>
+                    <p><strong>Batch Tags:</strong> ${escapeHtml((run.batch_tags || []).join(', '))}</p>
+                    <p><strong>Models:</strong> ${escapeHtml(Object.entries((run.effective_models || {}).task_models || {}).map(([task, model]) => `${task}: ${model}`).join(' | '))}</p>
+                    <p><strong>Search:</strong> ${escapeHtml(JSON.stringify(run.search_config || {}))}</p>
+                    <p><strong>Bibliometrics:</strong> ${escapeHtml(JSON.stringify(run.bibliometric_config || {}))}</p>
+                    <p><a href="${reportLink(run)}">${run.report_available ? 'Open report' : 'Open progress'}</a></p>
+                </article>
+            `).join('');
+        }
+
+        function renderRuns() {
+            document.getElementById('runList').innerHTML = claimDetail.runs.map(run => `
+                <article class="panel subtle-panel">
+                    <div class="panel-header-row">
+                        <label class="checkbox-row">
+                            <input type="checkbox" data-run-id="${escapeHtml(run.run_id)}">
+                            <span>${escapeHtml(run.provider_label || run.default_model || run.run_id)}</span>
+                        </label>
+                        <a href="${reportLink(run)}">${run.report_available ? 'Open report' : 'Open progress'}</a>
+                    </div>
+                    <p><strong>Status:</strong> ${escapeHtml(run.status)}</p>
+                    <p><strong>Rating:</strong> ${escapeHtml(run.rating_label)}${run.claimRating !== null && run.claimRating !== undefined ? ` (${run.claimRating})` : ''}</p>
+                    <p><strong>Execution:</strong> ${escapeHtml(run.execution_mode)}</p>
+                    <p><strong>Models:</strong> ${escapeHtml(Object.entries((run.effective_models || {}).task_models || {}).map(([task, model]) => `${task}: ${model}`).join(' | '))}</p>
+                    <p><strong>Expected Cost:</strong> $${(((run.cost_estimate || {}).expected || {}).cost_usd || 0).toFixed(4)}</p>
+                    <p><strong>Actual Cost:</strong> $${((run.usage || {}).cost_usd || 0).toFixed(4)}</p>
+                    <p><strong>Tags:</strong> ${escapeHtml((run.batch_tags || []).join(', '))}</p>
+                    <p><strong>Updated:</strong> ${escapeHtml(run.updated_at || '')}</p>
+                </article>
+            `).join('');
+
+            document.querySelectorAll('[data-run-id]').forEach(input => {
+                input.addEventListener('change', (event) => {
+                    if (event.target.checked) selectedRunIds.add(event.target.dataset.runId);
+                    else selectedRunIds.delete(event.target.dataset.runId);
+                    renderComparison();
+                });
+            });
+        }
+
+        async function loadClaim() {
+            const response = await fetch(`/api/v1/claims/${encodeURIComponent(claimKey)}`);
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Failed to load claim.');
+            claimDetail = data;
+            document.getElementById('claimText').value = data.claim.text;
+            document.getElementById('batchTags').value = (data.claim.batch_tags || []).join(', ');
+            document.getElementById('claimHeader').innerHTML = `
+                <h2>${escapeHtml(data.claim.text)}</h2>
+                <p><strong>Claim Key:</strong> ${escapeHtml(data.claim.claim_key)}</p>
+                <p><strong>Batch Tags:</strong> ${escapeHtml((data.claim.batch_tags || []).join(', '))}</p>
+                <p><strong>Runs:</strong> ${data.runs.length}</p>
+            `;
+            renderRuns();
+            renderComparison();
+        }
+
+        function renderPreflight(data) {
+            const warnings = [];
+            if (data.totals.duplicate_input_count) {
+                warnings.push(`<div class="status-card warning-card"><strong>Duplicate inputs will be collapsed.</strong> ${data.totals.duplicate_input_count} repeated input(s) were detected.</div>`);
+            }
+            if (data.totals.reused_existing_count) {
+                warnings.push(`<div class="status-card info-card"><strong>Existing claim will be reused.</strong> The current settings resolve to an existing claim history and will not queue a new run.</div>`);
+            }
+            if (!data.totals.pricing_complete) {
+                warnings.push(`<div class="status-card error-card"><strong>Pricing metadata missing.</strong> Add costs for: ${escapeHtml(data.totals.missing_pricing_models.join(', '))} before submitting.</div>`);
+            }
+            document.getElementById('preflightPanel').classList.remove('hidden');
+            document.getElementById('preflightPanel').innerHTML = `
+                <h2>Rerun Preflight</h2>
+                ${warnings.join('')}
+                <p><strong>Unique claims:</strong> ${data.totals.unique_claim_count}</p>
+                <p><strong>Runs to create:</strong> ${data.totals.run_count}</p>
+                <p><strong>Expected total:</strong> $${data.totals.expected_cost_usd.toFixed(4)}</p>
+                <p><strong>Upper bound:</strong> $${data.totals.upper_bound_cost_usd.toFixed(4)}</p>
+            `;
+        }
+
+        async function preflightRerun() {
+            const response = await fetch('/api/v1/claims/preflight', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    claims: [document.getElementById('claimText').value.trim()],
+                    candidates: [{
+                        provider_id: document.getElementById('providerId').value,
+                        model_overrides: currentModelOverrides(),
+                    }],
+                    search_config: currentSearchConfig(),
+                    duplicate_strategy: document.getElementById('duplicateStrategy').value,
+                }),
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Preflight failed.');
+            preflightPayload = data;
+            document.getElementById('rerunBtn').disabled = !data.totals.pricing_complete;
+            renderPreflight(data);
+        }
+
+        async function queueRerun() {
+            const response = await fetch('/api/v1/runs', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    claims: [document.getElementById('claimText').value.trim()],
+                    candidates: [{
+                        provider_id: document.getElementById('providerId').value,
+                        model_overrides: currentModelOverrides(),
+                    }],
+                    search_config: currentSearchConfig(),
+                    bibliometric_config: currentBibliometricConfig(),
+                    batch_tags: parseBatchTags(),
+                    duplicate_strategy: document.getElementById('duplicateStrategy').value,
+                    cost_confirmation: {
+                        accepted: true,
+                        expected_cost_usd: preflightPayload.totals.expected_cost_usd,
+                        upper_bound_cost_usd: preflightPayload.totals.upper_bound_cost_usd,
+                    },
+                }),
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Failed to rerun claim.');
+            if (data.created_runs && data.created_runs.length) {
+                window.location.href = `/batch_results?batch_id=${encodeURIComponent(data.batch_id)}`;
+                return;
+            }
+            if (data.reused_existing && data.reused_existing.length === 1) {
+                window.location.href = `/claims/${encodeURIComponent(data.reused_existing[0].claim_key)}`;
+                return;
+            }
+            await loadClaim();
+        }
+
+        document.getElementById('providerId').addEventListener('change', () => {
+            refreshModelSelectors();
+            invalidatePreflight();
+        });
+        [
+            'claimText',
+            'duplicateStrategy',
+            'batchTags',
+            'numQueries',
+            'resultsPerQuery',
+            'modelQueryGeneration',
+            'modelPaperAnalysis',
+            'modelVenueScoring',
+            'modelFinalReport',
+            'useBibliometrics',
+            'authorImpactWeight',
+            'citationImpactWeight',
+            'venueImpactWeight',
+        ].forEach(id => {
+            document.getElementById(id).addEventListener('change', invalidatePreflight);
+            document.getElementById(id).addEventListener('input', invalidatePreflight);
+        });
+        document.getElementById('preflightBtn').addEventListener('click', () => preflightRerun().catch(error => alert(error.message)));
+        document.getElementById('rerunBtn').addEventListener('click', () => {
+            if (!preflightPayload) {
+                alert('Run preflight first.');
+                return;
+            }
+            if (!preflightPayload.totals.pricing_complete) {
+                alert('Pricing metadata is incomplete for one or more models.');
+                return;
+            }
+            document.getElementById('costModalBody').innerHTML = `
+                <p><strong>Runs to create:</strong> ${preflightPayload.totals.run_count}</p>
+                <p><strong>Expected total:</strong> $${preflightPayload.totals.expected_cost_usd.toFixed(4)}</p>
+                <p><strong>Upper bound:</strong> $${preflightPayload.totals.upper_bound_cost_usd.toFixed(4)}</p>
+            `;
+            document.getElementById('confirmCostCheckbox').checked = false;
+            document.getElementById('confirmCostBtn').disabled = true;
+            document.getElementById('costModal').classList.remove('hidden');
+        });
+        document.getElementById('cancelCostBtn').addEventListener('click', () => document.getElementById('costModal').classList.add('hidden'));
+        document.getElementById('confirmCostCheckbox').addEventListener('change', (event) => {
+            document.getElementById('confirmCostBtn').disabled = !event.target.checked;
+        });
+        document.getElementById('confirmCostBtn').addEventListener('click', () => queueRerun().catch(error => alert(error.message)));
+
+        renderProviderOptions();
+        loadClaim().catch(error => {
+            document.getElementById('claimHeader').innerHTML = `<div class="error-message">${escapeHtml(error.message)}</div>`;
+        });
+    </script>
+</body>
+</html>

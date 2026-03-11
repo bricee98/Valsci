@@ -3,49 +3,44 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Browse Batches and Claims</title>
+    <title>Claim Library</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>Browse Batches and Claims</h1>
+    <div class="container wide-container">
+        <header class="page-header">
+            <div>
+                <h1>Claim Library</h1>
+                <p class="subtext">Browse canonical claims, latest runs, and batch tags.</p>
+            </div>
             <div class="nav-links">
                 <a href="/" class="nav-link">Home</a>
+                <a href="/arena" class="nav-link">Arena</a>
+                <a href="/providers" class="nav-link">Providers</a>
                 {% if config.REQUIRE_PASSWORD %}
                 <a href="/logout" class="logout-link">Logout</a>
                 {% endif %}
             </div>
         </header>
-        <div class="browse-toolbar">
-            <div class="selection-summary">
-                <strong id="selectedCount">0</strong> batch(es) selected
-            </div>
-            <div class="selection-actions">
-                <button id="selectVisibleButton" type="button" class="secondary-button">Select Visible</button>
-                <button id="clearSelectionButton" type="button" class="secondary-button">Clear Selection</button>
-                <button id="exportSelectedButton" type="button" class="primary-button" disabled>Export Selected JSON</button>
-            </div>
-        </div>
-        <div id="exportStatus" class="helper-text"></div>
-        <div class="search-container">
-            <input type="text" id="searchInput" placeholder="Search batches or claims...">
-            <button id="searchButton">Search</button>
-        </div>
-        <div id="batchesContainer"></div>
-    </div>
-    <script>
-        const searchInput = document.getElementById('searchInput');
-        const searchButton = document.getElementById('searchButton');
-        const batchesContainer = document.getElementById('batchesContainer');
-        const selectedCount = document.getElementById('selectedCount');
-        const selectVisibleButton = document.getElementById('selectVisibleButton');
-        const clearSelectionButton = document.getElementById('clearSelectionButton');
-        const exportSelectedButton = document.getElementById('exportSelectedButton');
-        const exportStatus = document.getElementById('exportStatus');
-        const selectedBatchIds = new Set();
-        let visibleBatchIds = [];
 
+        {% if migration_status.pending_count %}
+        <div class="status-card warning-card">
+            <strong>Legacy migration available.</strong>
+            <span>{{ migration_status.pending_count }} batch folder(s) are not yet imported.</span>
+        </div>
+        {% endif %}
+
+        <section class="panel">
+            <div class="inline-actions">
+                <input type="text" id="searchInput" placeholder="Search claims...">
+                <button type="button" id="searchBtn" class="secondary-button">Search</button>
+            </div>
+        </section>
+
+        <div id="claimList"></div>
+    </div>
+
+    <script>
         function escapeHtml(value) {
             return String(value ?? '')
                 .replace(/&/g, '&amp;')
@@ -55,323 +50,43 @@
                 .replace(/'/g, '&#39;');
         }
 
-        function formatTimestamp(timestamp) {
-            if (!timestamp || timestamp === '1970-01-01T00:00:00') return 'Unknown date';
-            const date = new Date(timestamp);
-            return date.toLocaleString();
+        function latestRunLink(latestRun) {
+            if (!latestRun || !latestRun.transport_batch_id || !latestRun.transport_claim_id) return '#';
+            return latestRun.report_available
+                ? `/results?batch_id=${encodeURIComponent(latestRun.transport_batch_id)}&claim_id=${encodeURIComponent(latestRun.transport_claim_id)}`
+                : `/progress?batch_id=${encodeURIComponent(latestRun.transport_batch_id)}&claim_id=${encodeURIComponent(latestRun.transport_claim_id)}`;
         }
 
-        function formatRating(rating) {
-            if (rating === null || rating === undefined) return 'N/A';
-            return typeof rating === 'number' ? rating.toFixed(1) : rating;
+        async function loadClaims() {
+            const search = document.getElementById('searchInput').value.trim();
+            const response = await fetch(`/api/v1/claims?search=${encodeURIComponent(search)}`);
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Failed to load claims.');
+            document.getElementById('claimList').innerHTML = data.claims.map(claim => `
+                <article class="panel">
+                    <h2>${escapeHtml(claim.text)}</h2>
+                    <p><strong>Claim Key:</strong> ${escapeHtml(claim.claim_key)}</p>
+                    <p><strong>Batch Tags:</strong> ${escapeHtml((claim.batch_tags || []).join(', '))}</p>
+                    <p><strong>Run Count:</strong> ${claim.run_count}</p>
+                    ${claim.latest_run ? `
+                        <p><strong>Latest Rating:</strong> ${escapeHtml(claim.latest_run.rating_label)}${claim.latest_run.claimRating !== null && claim.latest_run.claimRating !== undefined ? ` (${claim.latest_run.claimRating})` : ''}</p>
+                        <p><strong>Latest Provider:</strong> ${escapeHtml(claim.latest_run.provider_label || claim.latest_run.default_model || '')}</p>
+                    ` : '<p class="helper-text">No runs yet.</p>'}
+                    <div class="inline-actions">
+                        <a href="/claims/${encodeURIComponent(claim.claim_key)}" class="primary-button">Open Claim</a>
+                        ${claim.latest_run ? `<a href="${latestRunLink(claim.latest_run)}" class="secondary-button">${claim.latest_run.report_available ? 'Latest Report' : 'Latest Progress'}</a>` : ''}
+                    </div>
+                </article>
+            `).join('') || '<div class="panel helper-text">No claims found.</div>';
         }
 
-        function batchStatusText(batch) {
-            const status = batch.status || 'unknown';
-            if (status === 'completed') {
-                return 'Completed';
-            }
-            if (batch.has_partial_resume) {
-                return 'Processing (partial resume)';
-            }
-            if (status === 'processing') {
-                return 'Processing';
-            }
-            return status;
-        }
-
-        function buildClaimLink(batchId, claim) {
-            if (claim.report_available && claim.claim_location === 'saved_jobs') {
-                return {
-                    href: `/results?batch_id=${encodeURIComponent(batchId)}&claim_id=${encodeURIComponent(claim.claim_id)}`,
-                    label: 'View Report',
-                };
-            }
-            return {
-                href: `/progress?batch_id=${encodeURIComponent(batchId)}&claim_id=${encodeURIComponent(claim.claim_id)}`,
-                label: 'View Progress',
-            };
-        }
-
-        async function fetchWithAuth(url, options = {}) {
-            try {
-                const response = await fetch(url, options);
-                
-                // Check for authentication errors
-                if (response.status === 401) {
-                    const data = await response.json();
-                    if (data.code === 'AUTH_REQUIRED') {
-                        // Redirect to login page
-                        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
-                        return null;
-                    }
-                }
-                
-                return response;
-            } catch (error) {
-                console.error('Fetch error:', error);
-                throw error;
-            }
-        }
-
-        function setExportStatus(message, isError = false) {
-            exportStatus.textContent = message;
-            exportStatus.classList.toggle('error', isError);
-        }
-
-        function updateSelectionUI() {
-            selectedCount.textContent = selectedBatchIds.size;
-            exportSelectedButton.disabled = selectedBatchIds.size === 0;
-        }
-
-        function syncVisibleSelectionState() {
-            document.querySelectorAll('.batch-selector').forEach(checkbox => {
-                const { batchId } = checkbox.dataset;
-                const isSelected = selectedBatchIds.has(batchId);
-                checkbox.checked = isSelected;
-                const batchCard = checkbox.closest('.batch-preview');
-                if (batchCard) {
-                    batchCard.classList.toggle('selected', isSelected);
-                }
-            });
-            updateSelectionUI();
-        }
-
-        function getFilenameFromDisposition(disposition) {
-            if (!disposition) return null;
-            const match = disposition.match(/filename="?([^"]+)"?/i);
-            return match ? match[1] : null;
-        }
-
-        function loadBatches(searchTerm = '') {
-            batchesContainer.innerHTML = '<div class="loading">Loading batches...</div>';
-            visibleBatchIds = [];
-            
-            fetchWithAuth(`/api/v1/browse?search=${encodeURIComponent(searchTerm)}`)
-                .then(response => {
-                    if (!response) return null; // Redirected to login
-                    return response.json();
-                })
-                .then(data => {
-                    if (!data) return; // Redirected to login
-                    
-                    batchesContainer.innerHTML = '';
-                    
-                    if (data.error) {
-                        batchesContainer.innerHTML = `<div class="error-message">${data.error}</div>`;
-                        updateSelectionUI();
-                        return;
-                    }
-                    
-                    if (!data.batches || data.batches.length === 0) {
-                        batchesContainer.innerHTML = '<div class="no-results">No batches found</div>';
-                        updateSelectionUI();
-                        return;
-                    }
-
-                    visibleBatchIds = data.batches.map(batch => batch.batch_id);
-                    data.batches.forEach(batch => {
-                        const batchId = String(batch.batch_id || '');
-                        const isSelected = selectedBatchIds.has(batchId);
-                        const batchElement = document.createElement('div');
-                        batchElement.className = `batch-preview${isSelected ? ' selected' : ''}`;
-                        
-                        const claimsTable = batch.preview_claims.length > 0 ? `
-                            <h3>Preview Claims:</h3>
-                            <div class="table-container">
-                                <table>
-                                    <thead>
-                                        <tr>
-                                            <th>Claim</th>
-                                            <th>Status</th>
-                                            <th>Location</th>
-                                            <th>Rating</th>
-                                            <th>Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        ${batch.preview_claims.map(claim => {
-                                            const action = buildClaimLink(batchId, claim);
-                                            return `
-                                                <tr>
-                                                    <td>${escapeHtml(claim.text)}</td>
-                                                    <td>${escapeHtml(claim.status)}</td>
-                                                    <td>${escapeHtml(claim.claim_location || 'unknown')}</td>
-                                                    <td>${formatRating(claim.rating)}</td>
-                                                    <td>
-                                                        <a href="${action.href}" class="view-link">${action.label}</a>
-                                                    </td>
-                                                </tr>
-                                            `;
-                                        }).join('')}
-                                    </tbody>
-                                </table>
-                            </div>
-                        ` : '<p>No claims available for preview</p>';
-
-                        batchElement.innerHTML = `
-                            <div class="batch-header batch-header-row">
-                                <div>
-                                    <h2>Batch ID: ${escapeHtml(batchId)}</h2>
-                                    <div class="batch-meta">
-                                        <span>Created: ${formatTimestamp(batch.timestamp)}</span>
-                                        <span>Total Claims: ${batch.total_claims}</span>
-                                        <span>Status: ${escapeHtml(batchStatusText(batch))}</span>
-                                        <span>Saved / Queued: ${batch.counts_by_location?.saved_jobs || 0} / ${batch.counts_by_location?.queued_jobs || 0}</span>
-                                    </div>
-                                </div>
-                                <label class="batch-selector-label">
-                                    <input
-                                        type="checkbox"
-                                        class="batch-selector"
-                                        data-batch-id="${escapeHtml(batchId)}"
-                                        ${isSelected ? 'checked' : ''}
-                                    >
-                                    Select batch
-                                </label>
-                            </div>
-                            ${claimsTable}
-                            <div class="batch-actions">
-                                <a href="/batch_results?batch_id=${encodeURIComponent(batchId)}" 
-                                   class="primary-button">${batch.status === 'completed' ? 'View Full Batch' : 'View Batch Status'}</a>
-                                <button data-delete-batch-id="${escapeHtml(batchId)}" 
-                                        class="danger-button">Delete Batch</button>
-                            </div>
-                        `;
-                        const selector = batchElement.querySelector('.batch-selector');
-                        selector.addEventListener('change', (event) => {
-                            if (event.target.checked) {
-                                selectedBatchIds.add(batchId);
-                            } else {
-                                selectedBatchIds.delete(batchId);
-                            }
-                            syncVisibleSelectionState();
-                        });
-                        const deleteButton = batchElement.querySelector('[data-delete-batch-id]');
-                        deleteButton.addEventListener('click', () => deleteBatch(batchId));
-                        batchesContainer.appendChild(batchElement);
-                    });
-                    syncVisibleSelectionState();
-                })
-                .catch(error => {
-                    console.error('Error fetching batches:', error);
-                    batchesContainer.innerHTML = '<div class="error-message">Error fetching batches. Please try again later.</div>';
-                    updateSelectionUI();
-                });
-        }
-
-        async function exportSelectedBatches() {
-            const batchIds = Array.from(selectedBatchIds);
-            if (batchIds.length === 0) {
-                alert('Select at least one batch to export.');
-                return;
-            }
-
-            exportSelectedButton.disabled = true;
-            exportSelectedButton.textContent = 'Exporting...';
-            setExportStatus(`Preparing export for ${batchIds.length} batch(es)...`);
-
-            try {
-                const response = await fetchWithAuth('/api/v1/batches/export', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        batch_ids: batchIds,
-                        include_artifacts: true
-                    })
-                });
-
-                if (!response) return;
-
-                if (!response.ok) {
-                    let errorMessage = 'Failed to export batches';
-                    try {
-                        const errorData = await response.json();
-                        errorMessage = errorData.error || errorMessage;
-                    } catch (error) {
-                        console.error('Error parsing export error response:', error);
-                    }
-                    throw new Error(errorMessage);
-                }
-
-                const blob = await response.blob();
-                const filename =
-                    getFilenameFromDisposition(response.headers.get('Content-Disposition')) ||
-                    'valsci_batch_export.json';
-                const downloadUrl = URL.createObjectURL(blob);
-                const downloadLink = document.createElement('a');
-                downloadLink.href = downloadUrl;
-                downloadLink.download = filename;
-                document.body.appendChild(downloadLink);
-                downloadLink.click();
-                downloadLink.remove();
-                URL.revokeObjectURL(downloadUrl);
-                setExportStatus(`Downloaded ${filename}`);
-            } catch (error) {
-                console.error('Error exporting batches:', error);
-                setExportStatus(error.message || 'Failed to export batches', true);
-                alert(error.message || 'Failed to export batches');
-            } finally {
-                exportSelectedButton.textContent = 'Export Selected JSON';
-                updateSelectionUI();
-            }
-        }
-
-        async function deleteBatch(batchId) {
-            if (!confirm('Are you sure you want to delete this batch? This action cannot be undone.')) {
-                return;
-            }
-
-            try {
-                const response = await fetchWithAuth(`/api/v1/delete/batch/${encodeURIComponent(batchId)}`, {
-                    method: 'DELETE'
-                });
-                
-                if (!response) return; // Redirected to login
-                
-                const data = await response.json();
-                
-                if (response.ok) {
-                    selectedBatchIds.delete(batchId);
-                    setExportStatus('');
-                    loadBatches(searchInput.value);
-                } else {
-                    alert(data.error || 'Failed to delete batch');
-                }
-            } catch (error) {
-                console.error('Error deleting batch:', error);
-                alert('Error deleting batch. Please try again.');
-            }
-        }
-
-        selectVisibleButton.addEventListener('click', () => {
-            visibleBatchIds.forEach(batchId => selectedBatchIds.add(batchId));
-            syncVisibleSelectionState();
-            setExportStatus(`${visibleBatchIds.length} visible batch(es) selected`);
+        document.getElementById('searchBtn').addEventListener('click', () => loadClaims().catch(error => alert(error.message)));
+        document.getElementById('searchInput').addEventListener('keypress', (event) => {
+            if (event.key === 'Enter') loadClaims().catch(error => alert(error.message));
         });
-
-        clearSelectionButton.addEventListener('click', () => {
-            selectedBatchIds.clear();
-            syncVisibleSelectionState();
-            setExportStatus('Selection cleared');
+        loadClaims().catch(error => {
+            document.getElementById('claimList').innerHTML = `<div class="panel error-message">${escapeHtml(error.message)}</div>`;
         });
-
-        exportSelectedButton.addEventListener('click', exportSelectedBatches);
-
-        searchButton.addEventListener('click', () => {
-            loadBatches(searchInput.value);
-        });
-
-        searchInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                loadBatches(searchInput.value);
-            }
-        });
-
-        // Load batches on page load
-        loadBatches();
     </script>
 </body>
 </html>

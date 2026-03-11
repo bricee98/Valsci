@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify, send_file, render_template, current_app, Response
+from flask import Blueprint, request, jsonify, send_file, render_template, current_app, Response, has_app_context
 from flask import session, redirect, url_for, flash
 import os
 import uuid
@@ -21,11 +21,15 @@ from functools import wraps
 from pathlib import Path
 from app.services.batch_export import build_export_document
 from app.services.batch_state import build_batch_state, list_batch_ids
+from app.config.settings import Config
+from app.services.claim_store import ClaimStore
+from app.services.provider_catalog import ProviderCatalog
+from app.services.submission_service import SubmissionService
 
 api = Blueprint('api', __name__)
 
-QUEUED_JOBS_DIR = 'queued_jobs'
-SAVED_JOBS_DIR = 'saved_jobs'
+QUEUED_JOBS_DIR = Config.QUEUED_JOBS_DIR
+SAVED_JOBS_DIR = Config.SAVED_JOBS_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -33,27 +37,88 @@ logger = logging.getLogger(__name__)
 email_service = EmailService()
 
 
-def _trace_root_dir() -> str:
-    trace_dir = current_app.config.get('TRACE_DIR', SAVED_JOBS_DIR)
-    return trace_dir or SAVED_JOBS_DIR
+def _configured_path(config_key: str, fallback: str) -> Path:
+    if has_app_context():
+        configured_value = current_app.config.get(config_key)
+        if configured_value:
+            return Path(configured_value)
+    return Path(fallback)
+
+
+def _saved_jobs_dir() -> Path:
+    return _configured_path("SAVED_JOBS_DIR", SAVED_JOBS_DIR)
+
+
+def _queued_jobs_dir() -> Path:
+    return _configured_path("QUEUED_JOBS_DIR", QUEUED_JOBS_DIR)
+
+
+def _trace_root_dir() -> Path:
+    return _configured_path("TRACE_DIR", SAVED_JOBS_DIR)
+
+
+def _state_dir() -> Path:
+    return _configured_path("STATE_DIR", Config.STATE_DIR)
+
+
+def _provider_catalog_path() -> Path:
+    return _configured_path("PROVIDER_CATALOG_PATH", Config.PROVIDER_CATALOG_PATH)
+
+
+def _claim_store() -> ClaimStore:
+    return ClaimStore(
+        state_dir=str(_state_dir()),
+        saved_jobs_dir=str(_saved_jobs_dir()),
+        queued_jobs_dir=str(_queued_jobs_dir()),
+        trace_dir=str(_trace_root_dir()),
+    )
+
+
+def _provider_catalog() -> ProviderCatalog:
+    return ProviderCatalog(path=str(_provider_catalog_path()))
+
+
+def _submission_service() -> SubmissionService:
+    return SubmissionService(_claim_store(), _provider_catalog())
+
+
+def _public_providers() -> List[Dict[str, Any]]:
+    public_fields = {
+        "provider_id",
+        "label",
+        "provider_type",
+        "default_model",
+        "local_backend",
+        "task_defaults",
+        "http_referer",
+        "site_name",
+        "azure_openai_endpoint",
+        "azure_openai_api_version",
+        "azure_ai_inference_endpoint",
+        "models",
+    }
+    providers = []
+    for provider in _provider_catalog().list_providers():
+        providers.append({key: provider.get(key) for key in public_fields})
+    return providers
 
 
 def _find_claim_artifact(batch_id: str, artifact_dir: str, claim_id: str, extension: str):
     """Resolve trace/issue artifact path with TRACE_DIR support and saved_jobs fallback."""
     candidates = [
-        os.path.join(_trace_root_dir(), batch_id, artifact_dir, f"{claim_id}.{extension}"),
-        os.path.join(_trace_root_dir(), batch_id, artifact_dir, f"{claim_id}.{extension}.gz"),
+        _trace_root_dir() / batch_id / artifact_dir / f"{claim_id}.{extension}",
+        _trace_root_dir() / batch_id / artifact_dir / f"{claim_id}.{extension}.gz",
     ]
     # Backward compatibility fallback
     candidates.extend(
         [
-            os.path.join(SAVED_JOBS_DIR, batch_id, artifact_dir, f"{claim_id}.{extension}"),
-            os.path.join(SAVED_JOBS_DIR, batch_id, artifact_dir, f"{claim_id}.{extension}.gz"),
+            _saved_jobs_dir() / batch_id / artifact_dir / f"{claim_id}.{extension}",
+            _saved_jobs_dir() / batch_id / artifact_dir / f"{claim_id}.{extension}.gz",
         ]
     )
 
     for path in candidates:
-        if os.path.exists(path):
+        if path.exists():
             return path
     return None
 
@@ -61,8 +126,9 @@ def _find_claim_artifact(batch_id: str, artifact_dir: str, claim_id: str, extens
 def _read_jsonl_artifact(path: str) -> Tuple[List[Dict[str, Any]], int]:
     records: List[Dict[str, Any]] = []
     invalid_lines = 0
-    open_fn = gzip.open if path.endswith(".gz") else open
-    with open_fn(path, "rt", encoding="utf-8") as f:
+    artifact_path = Path(path)
+    open_fn = gzip.open if artifact_path.suffix == ".gz" else open
+    with open_fn(artifact_path, "rt", encoding="utf-8") as f:
         for line in f:
             raw = line.strip()
             if not raw:
@@ -80,8 +146,8 @@ def _read_jsonl_artifact(path: str) -> Tuple[List[Dict[str, Any]], int]:
 
 def _claim_file_candidates(batch_id: str, claim_id: str) -> List[Tuple[str, str]]:
     return [
-        ("queued_jobs", os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")),
-        ("saved_jobs", os.path.join(SAVED_JOBS_DIR, batch_id, f"{claim_id}.txt")),
+        ("queued_jobs", str(_queued_jobs_dir() / batch_id / f"{claim_id}.txt")),
+        ("saved_jobs", str(_saved_jobs_dir() / batch_id / f"{claim_id}.txt")),
     ]
 
 
@@ -153,10 +219,13 @@ def _build_claim_trace_metadata(batch_id: str, claim_id: str) -> Dict[str, Any]:
 
 
 def _build_batch_state_view(batch_id: str) -> Optional[Dict[str, Any]]:
+    store_state = _claim_store().build_batch_state(batch_id)
+    if store_state is not None:
+        return store_state
     return build_batch_state(
         batch_id=batch_id,
-        saved_jobs_root=Path(SAVED_JOBS_DIR),
-        queued_jobs_root=Path(QUEUED_JOBS_DIR),
+        saved_jobs_root=_saved_jobs_dir(),
+        queued_jobs_root=_queued_jobs_dir(),
     )
 
 
@@ -173,25 +242,72 @@ def _claim_results_template(claim_data: Dict[str, Any]) -> str:
 def _serialize_batch_claim(claim: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "claim_id": claim.get("claim_id"),
+        "claim_key": claim.get("claim_key"),
         "text": claim.get("text", ""),
         "status": claim.get("status", "unknown"),
         "report": claim.get("report", {}),
         "review_type": claim.get("review_type", "regular"),
-        "claim_location": claim.get("location"),
+        "claim_location": claim.get("claim_location") or claim.get("location"),
         "report_available": bool(claim.get("report_available", False)),
         "is_active": bool(claim.get("is_active", False)),
-        "rating": claim.get("rating"),
+        "rating": claim.get("rating", claim.get("claimRating")),
     }
 
+
+def _default_search_config() -> Dict[str, Any]:
+    return {"num_queries": 5, "results_per_query": 5}
+
+
+def _default_bibliometric_config() -> Dict[str, Any]:
+    return {
+        "use_bibliometrics": True,
+        "author_impact_weight": 0.4,
+        "citation_impact_weight": 0.4,
+        "venue_impact_weight": 0.2,
+    }
+
+
+def _claims_from_payload(payload: Dict[str, Any]) -> List[str]:
+    claims = payload.get("claims", [])
+    cleaned: List[str] = []
+    for value in claims if isinstance(claims, list) else []:
+        if not isinstance(value, str):
+            continue
+        text = value.strip()
+        if text:
+            cleaned.append(text)
+    return cleaned
+
+
+def _string_list(value: Any) -> List[str]:
+    if isinstance(value, list):
+        items = value
+    elif isinstance(value, str):
+        items = value.split(",")
+    else:
+        items = []
+
+    cleaned: List[str] = []
+    seen = set()
+    for item in items:
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        cleaned.append(text)
+    return cleaned
+
 def save_claim_to_file(claim, batch_id, claim_id):
-    claim_dir = os.path.join(QUEUED_JOBS_DIR, batch_id)
-    os.makedirs(claim_dir, exist_ok=True)
-    claim_file = os.path.join(claim_dir, f"{claim_id}.txt")
+    claim_dir = _queued_jobs_dir() / batch_id
+    claim_dir.mkdir(parents=True, exist_ok=True)
+    claim_file = claim_dir / f"{claim_id}.txt"
     
     # Ensure claim.text is a string, not a list
     claim_text = claim.text[0] if isinstance(claim.text, list) else claim.text
     
-    with open(claim_file, 'w') as f:
+    with claim_file.open('w', encoding='utf-8') as f:
         json.dump({
             "text": claim_text,
             "status": "queued",
@@ -244,9 +360,9 @@ def auth_required(f):
 @auth_required
 def get_claim_status(batch_id, claim_id):
     # Check queued jobs first
-    claim_file = os.path.join(QUEUED_JOBS_DIR, batch_id, f"{claim_id}.txt")
-    if os.path.exists(claim_file):
-        with open(claim_file, 'r') as f:
+    claim_file = _queued_jobs_dir() / batch_id / f"{claim_id}.txt"
+    if claim_file.exists():
+        with claim_file.open('r', encoding='utf-8') as f:
             claim_data = json.load(f)
             return jsonify({
                 "claim_id": claim_id,
@@ -257,9 +373,9 @@ def get_claim_status(batch_id, claim_id):
             }), 200
     
     # Then check saved jobs
-    claim_file = os.path.join(SAVED_JOBS_DIR, batch_id, f"{claim_id}.txt")
-    if os.path.exists(claim_file):
-        with open(claim_file, 'r') as f:
+    claim_file = _saved_jobs_dir() / batch_id / f"{claim_id}.txt"
+    if claim_file.exists():
+        with claim_file.open('r', encoding='utf-8') as f:
             claim_data = json.load(f)
             return jsonify({
                 "claim_id": claim_id,
@@ -298,9 +414,9 @@ def get_claim_report(batch_id, claim_id):
 @auth_required
 def download_claim_trace(batch_id, claim_id):
     trace_file = _find_claim_artifact(batch_id, "traces", claim_id, "jsonl")
-    if not trace_file or not os.path.exists(trace_file):
+    if not trace_file or not trace_file.exists():
         return jsonify({"error": "Trace not found"}), 404
-    download_name = f"{claim_id}_trace.jsonl.gz" if trace_file.endswith(".gz") else f"{claim_id}_trace.jsonl"
+    download_name = f"{claim_id}_trace.jsonl.gz" if trace_file.suffix == ".gz" else f"{claim_id}_trace.jsonl"
     return send_file(trace_file, as_attachment=True, download_name=download_name)
 
 
@@ -308,7 +424,7 @@ def download_claim_trace(batch_id, claim_id):
 @auth_required
 def get_claim_trace_records(batch_id, claim_id):
     trace_file = _find_claim_artifact(batch_id, "traces", claim_id, "jsonl")
-    if not trace_file or not os.path.exists(trace_file):
+    if not trace_file or not trace_file.exists():
         return jsonify({"error": "Trace not found"}), 404
 
     focus_trace_id = (request.args.get("focus_trace_id") or "").strip() or None
@@ -353,8 +469,8 @@ def get_claim_trace_records(batch_id, claim_id):
         "highlighted_indices": highlighted_indices,
         "error_like_indices": error_like_indices,
         "invalid_lines": invalid_lines,
-        "compressed": trace_file.endswith(".gz"),
-        "trace_file": f"traces/{claim_id}.jsonl" + (".gz" if trace_file.endswith(".gz") else ""),
+        "compressed": trace_file.suffix == ".gz",
+        "trace_file": f"traces/{claim_id}.jsonl" + (".gz" if trace_file.suffix == ".gz" else ""),
         "records": records,
         **claim_metadata,
     }), 200
@@ -363,10 +479,201 @@ def get_claim_trace_records(batch_id, claim_id):
 @auth_required
 def download_claim_issues(batch_id, claim_id):
     issue_file = _find_claim_artifact(batch_id, "issues", claim_id, "jsonl")
-    if not issue_file or not os.path.exists(issue_file):
+    if not issue_file or not issue_file.exists():
         return jsonify({"error": "Issues not found"}), 404
-    download_name = f"{claim_id}_issues.jsonl.gz" if issue_file.endswith(".gz") else f"{claim_id}_issues.jsonl"
+    download_name = f"{claim_id}_issues.jsonl.gz" if issue_file.suffix == ".gz" else f"{claim_id}_issues.jsonl"
     return send_file(issue_file, as_attachment=True, download_name=download_name)
+
+
+@api.route('/api/v1/migration/status', methods=['GET'])
+@auth_required
+def migration_status():
+    return jsonify(_claim_store().migration_status()), 200
+
+
+@api.route('/api/v1/migration/run', methods=['POST'])
+@auth_required
+def migration_run():
+    payload = request.get_json(silent=True) or {}
+    apply_changes = bool(payload.get("apply", False))
+    return jsonify(_claim_store().migrate_legacy(apply_changes=apply_changes)), 200
+
+
+@api.route('/api/v1/providers', methods=['GET'])
+@auth_required
+def list_providers():
+    return jsonify({"providers": _provider_catalog().list_providers()}), 200
+
+
+@api.route('/api/v1/providers', methods=['POST'])
+@auth_required
+def create_provider():
+    payload = request.get_json(silent=True) or {}
+    provider = _provider_catalog().upsert_provider(payload)
+    return jsonify(provider), 201
+
+
+@api.route('/api/v1/providers/<provider_id>', methods=['PUT'])
+@auth_required
+def update_provider(provider_id):
+    payload = request.get_json(silent=True) or {}
+    payload["provider_id"] = provider_id
+    provider = _provider_catalog().upsert_provider(payload)
+    return jsonify(provider), 200
+
+
+@api.route('/api/v1/providers/<provider_id>', methods=['DELETE'])
+@auth_required
+def delete_provider(provider_id):
+    deleted = _provider_catalog().delete_provider(provider_id)
+    if not deleted:
+        return jsonify({"error": "Provider not found"}), 404
+    return jsonify({"deleted": True, "provider_id": provider_id}), 200
+
+
+@api.route('/api/v1/claims/preflight', methods=['POST'])
+@auth_required
+def claims_preflight():
+    payload = request.get_json(silent=True) or {}
+    claims = _claims_from_payload(payload)
+    if not claims:
+        return jsonify({"error": "At least one claim is required"}), 400
+
+    search_config = dict(payload.get("search_config") or _default_search_config())
+    try:
+        candidates = _submission_service().resolve_candidates(payload.get("candidates"))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    preflight = _submission_service().preflight(
+        claims=claims,
+        candidates=candidates,
+        search_config=search_config,
+        duplicate_strategy=str(payload.get("duplicate_strategy", "rerun")),
+        execution_mode=str(payload.get("execution_mode", "full_pipeline")),
+    )
+    return jsonify(preflight), 200
+
+
+@api.route('/api/v1/runs', methods=['POST'])
+@auth_required
+def create_runs():
+    payload = request.get_json(silent=True) or {}
+    claims = _claims_from_payload(payload)
+    if not claims:
+        return jsonify({"error": "At least one claim is required"}), 400
+
+    search_config = dict(payload.get("search_config") or _default_search_config())
+    bibliometric_config = dict(payload.get("bibliometric_config") or _default_bibliometric_config())
+    cost_confirmation = dict(payload.get("cost_confirmation") or {})
+    duplicate_strategy = str(payload.get("duplicate_strategy", "rerun"))
+    batch_tags = _string_list(payload.get("batch_tags"))
+    execution_mode = str(payload.get("execution_mode", "full_pipeline"))
+
+    try:
+        candidates = _submission_service().resolve_candidates(payload.get("candidates"))
+        result = _submission_service().submit(
+            claims=claims,
+            candidates=candidates,
+            search_config=search_config,
+            bibliometric_config=bibliometric_config,
+            batch_tags=batch_tags,
+            execution_mode=execution_mode,
+            cost_confirmation=cost_confirmation,
+            duplicate_strategy=duplicate_strategy,
+            create_arena=False,
+            review_type=str(payload.get("review_type", "regular")),
+        )
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify(result), 202
+
+
+@api.route('/api/v1/arenas', methods=['POST'])
+@auth_required
+def create_arena():
+    payload = request.get_json(silent=True) or {}
+    claims = _claims_from_payload(payload)
+    if not claims:
+        return jsonify({"error": "At least one claim is required"}), 400
+
+    try:
+        candidates = _submission_service().resolve_candidates(payload.get("candidates"))
+        result = _submission_service().submit(
+            claims=claims,
+            candidates=candidates,
+            search_config=dict(payload.get("search_config") or _default_search_config()),
+            bibliometric_config=dict(payload.get("bibliometric_config") or _default_bibliometric_config()),
+            batch_tags=_string_list(payload.get("batch_tags")),
+            execution_mode=str(payload.get("execution_mode", "full_pipeline")),
+            cost_confirmation=dict(payload.get("cost_confirmation") or {}),
+            duplicate_strategy=str(payload.get("duplicate_strategy", "rerun")),
+            create_arena=True,
+            arena_title=payload.get("title"),
+            review_type="regular",
+        )
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify(result), 202
+
+
+@api.route('/api/v1/runs/<run_id>', methods=['GET'])
+@auth_required
+def get_run(run_id):
+    run_record = _claim_store().get_run(run_id)
+    if not run_record:
+        return jsonify({"error": "Run not found"}), 404
+    claim_data = _claim_store().load_claim_data_for_run(run_record)
+    return jsonify(
+        {
+            "run": _claim_store().build_run_summary(run_record),
+            "claim_data": claim_data or run_record.get("claim_data") or {},
+        }
+    ), 200
+
+
+@api.route('/api/v1/claims/<claim_key>', methods=['GET'])
+@auth_required
+def get_claim_detail_api(claim_key):
+    detail = _claim_store().build_claim_detail(claim_key)
+    if not detail:
+        return jsonify({"error": "Claim not found"}), 404
+    return jsonify(detail), 200
+
+
+@api.route('/api/v1/claims', methods=['GET'])
+@auth_required
+def list_claims_api():
+    search_term = (request.args.get("search") or "").strip().lower()
+    claims = []
+    store = _claim_store()
+    for claim in store.list_claims():
+        text = str(claim.get("text", ""))
+        if search_term and search_term not in text.lower() and search_term not in claim.get("claim_key", "").lower():
+            continue
+        latest_run = store.get_run(claim.get("latest_run_id")) if claim.get("latest_run_id") else None
+        claims.append(
+            {
+                "claim_key": claim.get("claim_key"),
+                "text": text,
+                "batch_tags": claim.get("batch_tags", []),
+                "latest_run": store.build_run_summary(latest_run) if latest_run else None,
+                "run_count": len(claim.get("run_ids", [])),
+            }
+        )
+    claims.sort(key=lambda item: item.get("text", ""))
+    return jsonify({"claims": claims}), 200
+
+
+@api.route('/api/v1/arenas/<arena_id>', methods=['GET'])
+@auth_required
+def get_arena_api(arena_id):
+    arena = _claim_store().get_arena(arena_id)
+    if not arena:
+        return jsonify({"error": "Arena not found"}), 404
+    return jsonify(arena), 200
 
 @api.route('/api/v1/batch', methods=['POST'])
 @auth_required
@@ -404,70 +711,58 @@ def start_batch_job():
         return jsonify({"error": "No selected file"}), 400
     
     if file and file.filename.endswith('.txt'):
-        batch_id = str(uuid.uuid4())[:8]
-        batch_dir = os.path.join(QUEUED_JOBS_DIR, batch_id)
-        os.makedirs(batch_dir, exist_ok=True)
-        
-        # Save claims file
-        file_path = os.path.join(batch_dir, 'claims.txt')
+        temp_batch_id = str(uuid.uuid4())[:8]
+        batch_dir = _queued_jobs_dir() / temp_batch_id
+        batch_dir.mkdir(parents=True, exist_ok=True)
+        file_path = batch_dir / 'claims.txt'
         file.save(file_path)
-        
-        # Read claims
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with file_path.open('r', encoding='utf-8') as f:
             claims = [line.strip() for line in f if line.strip()]
-        
-        # Create claims with search config and save them
-        batch_claims = []
-        claim_ids = {}  # Map to store claim_text -> claim_id
-        for claim_text in claims:
-            claim = Claim(text=claim_text)
-            claim.search_config = {
-                'num_queries': num_queries,
-                'results_per_query': results_per_query
-            }
-            claim_id = str(uuid.uuid4())[:8]
-            claim_ids[claim_text] = claim_id
-            
-            # Save claim to file with bibliometric config
-            claim_dir = os.path.join(QUEUED_JOBS_DIR, batch_id)
-            os.makedirs(claim_dir, exist_ok=True)
-            claim_file = os.path.join(claim_dir, f"{claim_id}.txt")
-            
-            # Ensure claim.text is a string, not a list
-            claim_text = claim.text[0] if isinstance(claim.text, list) else claim.text
-            
-            with open(claim_file, 'w') as f:
-                json.dump({
-                    "text": claim_text,
-                    "status": "queued",
-                    "batch_id": batch_id,
-                    "claim_id": claim_id,
-                    "search_config": claim.search_config,
-                    "bibliometric_config": bibliometric_config,
-                    "model_overrides": model_overrides,
-                    "usage": {
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "total_tokens": 0,
-                        "cost_usd": 0.0,
-                        "is_estimated": False
-                    },
-                    "usage_by_stage": {},
-                    "additional_info": ""
-                }, f, indent=2)
-            
-            batch_claims.append(claim)
-        
-        batch_job = BatchJob(claims=batch_claims)
-        
-        # Store claim_ids mapping for the batch
-        with open(os.path.join(batch_dir, 'claim_ids.json'), 'w') as f:
-            json.dump(claim_ids, f)
+
+        provider_id = request.form.get("providerId", "").strip() or "default"
+        cost_confirmation = {
+            "accepted": request.form.get("costConfirmationAccepted", "").strip().lower() == "true",
+        }
+        try:
+            candidates = _submission_service().resolve_candidates(
+                [
+                    {
+                        "provider_id": provider_id,
+                        "model_overrides": model_overrides,
+                    }
+                ]
+            )
+            result = _submission_service().submit(
+                claims=claims,
+                candidates=candidates,
+                search_config={
+                    'num_queries': num_queries,
+                    'results_per_query': results_per_query
+                },
+                bibliometric_config=bibliometric_config,
+                batch_tags=[temp_batch_id],
+                execution_mode="full_pipeline",
+                cost_confirmation=cost_confirmation,
+                duplicate_strategy=request.form.get("duplicateStrategy", "rerun"),
+                create_arena=False,
+                review_type="regular",
+            )
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        batch_id = result["batch_id"]
+        actual_batch_dir = _queued_jobs_dir() / batch_id
+        actual_batch_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            if batch_dir != actual_batch_dir and file_path.exists():
+                shutil.copy(file_path, actual_batch_dir / "claims.txt")
+        except Exception:
+            pass
         
         # Save notification settings
         if notification_email:
-            notification_file = os.path.join(batch_dir, 'notification.json')
-            with open(notification_file, 'w') as f:
+            notification_file = actual_batch_dir / 'notification.json'
+            with notification_file.open('w', encoding='utf-8') as f:
                 json.dump({
                     'email': notification_email,
                     'num_claims': len(claims)
@@ -483,34 +778,75 @@ def start_batch_job():
         
         return jsonify({
             "batch_id": batch_id,
-            "status": "processing"
+            "status": "processing",
+            "created_runs": result["created_runs"],
+            "reused_existing": result["reused_existing"],
         }), 202
 
 @api.route('/api/v1/batch/<batch_id>/download', methods=['GET'])
 @auth_required
 def download_batch_reports(batch_id):
-    batch_dir = os.path.join(SAVED_JOBS_DIR, batch_id)
-    if not os.path.exists(batch_dir):
+    batch_dir = _saved_jobs_dir() / batch_id
+    if not batch_dir.exists():
         return jsonify({"error": "Batch not found"}), 404
     
     # Create a zip file of the batch directory
     zip_path = f"{batch_dir}.zip"
-    shutil.make_archive(batch_dir, 'zip', batch_dir)
+    shutil.make_archive(str(batch_dir), 'zip', str(batch_dir))
     return send_file(zip_path, as_attachment=True)
 
 @api.route('/', methods=['GET'])
 @auth_required
 def index():
-    saved_jobs_path = os.path.join(current_app.root_path, '..', 'saved_jobs')
-    saved_jobs_exist = os.path.isdir(saved_jobs_path)
+    saved_jobs_path = _saved_jobs_dir()
+    saved_jobs_exist = saved_jobs_path.is_dir()
     return render_template('index.html', 
                          saved_jobs_exist=saved_jobs_exist,
-                         config=current_app.config)
+                         config=current_app.config,
+                         migration_status=_claim_store().migration_status(),
+                         providers=_public_providers())
 
 @api.route('/results', methods=['GET'])
 @auth_required
 def results():
     return render_template('results.html')
+
+
+@api.route('/arena', methods=['GET'])
+@auth_required
+def arena_submit():
+    return render_template(
+        'arena.html',
+        config=current_app.config,
+        providers=_public_providers(),
+        migration_status=_claim_store().migration_status(),
+    )
+
+
+@api.route('/arena_results', methods=['GET'])
+@auth_required
+def arena_results():
+    arena_id = request.args.get('arena_id')
+    if not arena_id:
+        return "Arena not found", 404
+    return render_template('arena_results.html', arena_id=arena_id, config=current_app.config)
+
+
+@api.route('/providers', methods=['GET'])
+@auth_required
+def providers_page():
+    return render_template('providers.html', config=current_app.config)
+
+
+@api.route('/claims/<claim_key>', methods=['GET'])
+@auth_required
+def claim_detail_page(claim_key):
+    return render_template(
+        'claim_detail.html',
+        claim_key=claim_key,
+        config=current_app.config,
+        providers=_public_providers(),
+    )
 
 
 @api.route('/claims/<batch_id>/<claim_id>/trace', methods=['GET'])
@@ -537,9 +873,9 @@ def progress():
             if location == "saved_jobs" and claim_data:
                 return render_template(_claim_results_template(claim_data), claim_id=claim_id)
         else:
-            for root, dirs, files in os.walk(SAVED_JOBS_DIR):
+            for root, dirs, files in os.walk(_saved_jobs_dir()):
                 if f"{claim_id}.txt" in files:
-                    with open(os.path.join(root, f"{claim_id}.txt"), 'r') as f:
+                    with open(os.path.join(root, f"{claim_id}.txt"), 'r', encoding='utf-8') as f:
                         claim_data = json.load(f)
                         return render_template(_claim_results_template(claim_data), claim_id=claim_id)
     
@@ -557,6 +893,7 @@ def get_batch_status(batch_id):
         "batch_id": batch_id,
         "status": batch_state["status"],
         "claims": [_serialize_batch_claim(claim) for claim in batch_state["claims"]],
+        "all_runs": [_serialize_batch_claim(run) for run in batch_state.get("all_runs", [])],
         "review_type": batch_state["claims"][0].get("review_type", "regular"),
         "total_claims": batch_state["total_claims"],
         "processed_claims": batch_state["processed_claims"],
@@ -618,7 +955,11 @@ def batch_results():
 @api.route('/browser', methods=['GET'])
 @auth_required
 def browser():
-    return render_template('browser.html')
+    return render_template(
+        'browser.html',
+        config=current_app.config,
+        migration_status=_claim_store().migration_status(),
+    )
 
 @api.route('/api/v1/browse', methods=['GET'])
 @auth_required
@@ -627,16 +968,23 @@ def browse_batches():
         search_term = request.args.get('search', '').lower()
         batches = []
 
-        if not os.path.exists(SAVED_JOBS_DIR) and not os.path.exists(QUEUED_JOBS_DIR):
+        saved_jobs_dir = _saved_jobs_dir()
+        queued_jobs_dir = _queued_jobs_dir()
+        if not saved_jobs_dir.exists() and not queued_jobs_dir.exists():
             return jsonify({
                 "error": "No batch directories found",
                 "code": "NO_SAVED_JOBS"
             }), 404
 
-        for batch_id in list_batch_ids(
-            saved_jobs_root=Path(SAVED_JOBS_DIR),
-            queued_jobs_root=Path(QUEUED_JOBS_DIR),
-        ):
+        batch_ids = set(
+            list_batch_ids(
+                saved_jobs_root=saved_jobs_dir,
+                queued_jobs_root=queued_jobs_dir,
+            )
+        )
+        batch_ids.update(_claim_store().list_batch_tags())
+
+        for batch_id in sorted(batch_ids):
             try:
                 batch_state = _build_batch_state_view(batch_id)
                 if batch_state is None or batch_state["total_claims"] == 0:
@@ -727,9 +1075,9 @@ def export_batches():
 
     export_data = build_export_document(
         batch_ids=batch_ids,
-        saved_jobs_root=Path(SAVED_JOBS_DIR),
-        queued_jobs_root=Path(QUEUED_JOBS_DIR),
-        trace_root=Path(_trace_root_dir()),
+        saved_jobs_root=_saved_jobs_dir(),
+        queued_jobs_root=_queued_jobs_dir(),
+        trace_root=_trace_root_dir(),
         include_traces=include_traces,
         include_issues=include_issues,
     )
@@ -774,10 +1122,10 @@ def resume_claim(batch_id, claim_id):
             "code": "CLAIM_ALREADY_QUEUED",
         }), 409
 
-    queued_batch_dir = os.path.join(QUEUED_JOBS_DIR, batch_id)
-    os.makedirs(queued_batch_dir, exist_ok=True)
-    queued_path = os.path.join(queued_batch_dir, f"{claim_id}.txt")
-    if os.path.exists(queued_path):
+    queued_batch_dir = _queued_jobs_dir() / batch_id
+    queued_batch_dir.mkdir(parents=True, exist_ok=True)
+    queued_path = queued_batch_dir / f"{claim_id}.txt"
+    if queued_path.exists():
         return jsonify({
             "error": "Claim is already queued or in progress",
             "claim_id": claim_id,
@@ -791,10 +1139,11 @@ def resume_claim(batch_id, claim_id):
     claim_data["claim_id"] = claim_id
     claim_data.pop("report", None)
 
-    with open(queued_path, 'w', encoding='utf-8') as f:
+    with queued_path.open('w', encoding='utf-8') as f:
         json.dump(claim_data, f, indent=2)
-    if source_path != queued_path and os.path.exists(source_path):
-        os.remove(source_path)
+    source_path_obj = Path(source_path)
+    if source_path_obj != queued_path and source_path_obj.exists():
+        source_path_obj.unlink()
 
     return jsonify({
         "message": "Claim resumed successfully",
@@ -809,17 +1158,40 @@ def resume_claim(batch_id, claim_id):
 @auth_required
 def delete_claim(claim_id, batch_id=None):
     try:
+        store = _claim_store()
+        run_record = store.find_run_by_legacy(batch_id, claim_id) if batch_id else store.get_run(claim_id)
+        if run_record:
+            transport = run_record.get("transport") or {}
+            for root in [_saved_jobs_dir(), _queued_jobs_dir()]:
+                candidate = root / transport.get("batch_id", "") / f"{transport.get('claim_id', '')}.txt"
+                if candidate.exists():
+                    candidate.unlink()
+            for artifact_value in [
+                (run_record.get("artifact_paths") or {}).get("trace_file"),
+                (run_record.get("artifact_paths") or {}).get("issues_file"),
+            ]:
+                if artifact_value:
+                    artifact = Path(artifact_value)
+                    if artifact.exists():
+                        artifact.unlink()
+            store.delete_run(run_record["run_id"])
+            return jsonify({
+                "message": "Claim deleted successfully",
+                "claim_id": claim_id
+            }), 200
+
         candidate_files = []
+        saved_jobs_dir = _saved_jobs_dir()
         if batch_id:
-            candidate_files.append(os.path.join(SAVED_JOBS_DIR, batch_id, f"{claim_id}.txt"))
+            candidate_files.append(saved_jobs_dir / batch_id / f"{claim_id}.txt")
         else:
-            for root, dirs, files in os.walk(SAVED_JOBS_DIR):
+            for root, dirs, files in os.walk(saved_jobs_dir):
                 if f"{claim_id}.txt" in files:
-                    candidate_files.append(os.path.join(root, f"{claim_id}.txt"))
+                    candidate_files.append(Path(root) / f"{claim_id}.txt")
 
         for file_path in candidate_files:
-            if os.path.exists(file_path):
-                os.remove(file_path)
+            if file_path.exists():
+                file_path.unlink()
                 return jsonify({
                     "message": "Claim deleted successfully",
                     "claim_id": claim_id
@@ -842,23 +1214,25 @@ def delete_claim(claim_id, batch_id=None):
 @auth_required
 def delete_batch(batch_id):
     try:
+        deleted_runs = _claim_store().delete_runs_by_batch_tag(batch_id)
         deleted = False
         candidate_dirs = {
-            os.path.join(SAVED_JOBS_DIR, batch_id),
-            os.path.join(QUEUED_JOBS_DIR, batch_id),
+            _saved_jobs_dir() / batch_id,
+            _queued_jobs_dir() / batch_id,
         }
         trace_root_dir = _trace_root_dir()
-        if trace_root_dir not in {SAVED_JOBS_DIR, QUEUED_JOBS_DIR}:
-            candidate_dirs.add(os.path.join(trace_root_dir, batch_id))
+        if trace_root_dir not in {_saved_jobs_dir(), _queued_jobs_dir()}:
+            candidate_dirs.add(trace_root_dir / batch_id)
 
         for batch_dir in candidate_dirs:
-            if os.path.exists(batch_dir):
+            if batch_dir.exists():
                 shutil.rmtree(batch_dir)
                 deleted = True
-        if deleted:
+        if deleted or deleted_runs:
             return jsonify({
                 "message": "Batch deleted successfully",
-                "batch_id": batch_id
+                "batch_id": batch_id,
+                "deleted_runs": deleted_runs,
             }), 200
         return jsonify({
             "error": "Batch not found",
@@ -880,17 +1254,18 @@ def delete_batch(batch_id):
 def download_citations(claim_id, batch_id=None):
     try:
         candidate_files = []
+        saved_jobs_dir = _saved_jobs_dir()
         if batch_id:
-            candidate_files.append(os.path.join(SAVED_JOBS_DIR, batch_id, f"{claim_id}.txt"))
+            candidate_files.append(saved_jobs_dir / batch_id / f"{claim_id}.txt")
         else:
-            for root, dirs, files in os.walk(SAVED_JOBS_DIR):
+            for root, dirs, files in os.walk(saved_jobs_dir):
                 if f"{claim_id}.txt" in files:
-                    candidate_files.append(os.path.join(root, f"{claim_id}.txt"))
+                    candidate_files.append(Path(root) / f"{claim_id}.txt")
 
         for claim_file in candidate_files:
-            if not os.path.exists(claim_file):
+            if not claim_file.exists():
                 continue
-            with open(claim_file, 'r') as f:
+            with claim_file.open('r', encoding='utf-8') as f:
                 claim_data = json.load(f)
                 report = claim_data.get('report', {})
                 citations = []
@@ -900,15 +1275,15 @@ def download_citations(claim_id, batch_id=None):
                         if citation.get('citation'):
                             citations.append(citation['citation'])
 
-                citation_file_path = os.path.join(SAVED_JOBS_DIR, f"{claim_id}_citations.ris")
-                with open(citation_file_path, 'w') as citation_file:
+                citation_file_path = saved_jobs_dir / f"{claim_id}_citations.ris"
+                with citation_file_path.open('w', encoding='utf-8') as citation_file:
                     citation_file.write("\n\n".join(citations))
                 return send_file(citation_file_path, as_attachment=True, download_name=f"{claim_id}_citations.ris")
         
         return jsonify({"error": "Claim not found"}), 404
     finally:
-        if 'citation_file_path' in locals() and os.path.exists(citation_file_path):
-            os.remove(citation_file_path)
+        if 'citation_file_path' in locals() and citation_file_path.exists():
+            citation_file_path.unlink()
 
 def generate_markdown_report(claim_data):
     """Helper function to generate consistent markdown reports"""
@@ -1025,11 +1400,11 @@ def generate_markdown_report(claim_data):
 @auth_required
 def download_claim_md(batch_id, claim_id):
     """Download a single claim's final report as a markdown (.md) file."""
-    saved_file = os.path.join(SAVED_JOBS_DIR, batch_id, f"{claim_id}.txt")
-    if not os.path.exists(saved_file):
+    saved_file = _saved_jobs_dir() / batch_id / f"{claim_id}.txt"
+    if not saved_file.exists():
         return jsonify({"error": "Claim not found"}), 404
 
-    with open(saved_file, 'r') as f:
+    with saved_file.open('r', encoding='utf-8') as f:
         claim_data = json.load(f)
     
     md_text = generate_markdown_report(claim_data)
@@ -1063,7 +1438,17 @@ def download_batch_markdown(batch_id):
     with zipfile.ZipFile(zip_buffer, 'w') as zf:
         for claim in batch_state["claims"]:
             claim_id = claim["claim_id"]
-            claim_data = claim["claim_data"]
+            claim_data = claim.get("claim_data")
+            if not isinstance(claim_data, dict) or not claim_data:
+                location, _, claim_data = _load_claim_data(batch_id, claim_id)
+                if location is None or claim_data is None:
+                    return jsonify(
+                        {
+                            "error": f"Claim data missing for {claim_id}",
+                            "code": "CLAIM_DATA_MISSING",
+                            "claim_id": claim_id,
+                        }
+                    ), 500
             md_text = generate_markdown_report(claim_data)
             zf.writestr(f"claim_{claim_id}.txt", md_text)
 

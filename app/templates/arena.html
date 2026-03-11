@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Valsci Arena</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container wide-container">
+        <header class="page-header">
+            <div>
+                <h1>Arena Submit</h1>
+                <p class="subtext">Compare multiple provider/model candidates side by side.</p>
+            </div>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Home</a>
+                <a href="/browser" class="nav-link">Claims</a>
+                <a href="/providers" class="nav-link">Providers</a>
+            </div>
+        </header>
+
+        {% if migration_status.pending_count %}
+        <div class="status-card warning-card">
+            <strong>Legacy migration available.</strong>
+            <span>{{ migration_status.pending_count }} batch folder(s) are still only in the old batch-first layout.</span>
+        </div>
+        {% endif %}
+
+        <div class="grid-two">
+            <section class="panel">
+                <h2>Claims</h2>
+                <div class="form-row grid-two">
+                    <div>
+                        <label for="arenaTitle">Arena Title</label>
+                        <input type="text" id="arenaTitle" placeholder="Optional title">
+                    </div>
+                    <div>
+                        <label for="batchTags">Batch Tags</label>
+                        <input type="text" id="batchTags" placeholder="Optional comma-separated tags">
+                    </div>
+                </div>
+                <div class="form-row grid-two">
+                    <div>
+                        <label for="duplicateStrategy">Existing Claim Handling</label>
+                        <select id="duplicateStrategy">
+                            <option value="rerun">Create New Runs</option>
+                            <option value="view">View Existing Claim</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="executionMode">Execution Mode</label>
+                        <select id="executionMode">
+                            <option value="full_pipeline">Full Pipeline</option>
+                            <option value="reuse_retrieval">Reuse Query Generation</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <label for="claimInput">Claim</label>
+                    <textarea id="claimInput" rows="3" placeholder="Enter a claim, then add it to the arena"></textarea>
+                    <div class="inline-actions">
+                        <button type="button" id="addClaimBtn" class="secondary-button">Add Claim</button>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <label for="claimFile">Upload Claims</label>
+                    <input type="file" id="claimFile" accept=".txt">
+                </div>
+                <div id="arenaClaims" class="staged-claims"></div>
+            </section>
+
+            <section class="panel">
+                <h2>Candidates</h2>
+                <div class="form-row grid-two">
+                    <div>
+                        <label for="numQueries">Queries</label>
+                        <input type="number" id="numQueries" min="1" max="20" value="5">
+                    </div>
+                    <div>
+                        <label for="resultsPerQuery">Results / Query</label>
+                        <input type="number" id="resultsPerQuery" min="1" max="10" value="5">
+                    </div>
+                </div>
+                <div id="candidateList"></div>
+                <div class="inline-actions">
+                    <button type="button" id="addCandidateBtn" class="secondary-button">Add Candidate</button>
+                    <button type="button" id="preflightBtn" class="secondary-button">Estimate Arena</button>
+                    <button type="button" id="submitArenaBtn" class="primary-button" disabled>Submit Arena</button>
+                </div>
+            </section>
+        </div>
+
+        <section id="preflightPanel" class="panel hidden"></section>
+    </div>
+
+    <div id="costModal" class="modal hidden">
+        <div class="modal-card">
+            <h2>Confirm Arena Cost</h2>
+            <div id="costModalBody"></div>
+            <label class="checkbox-row">
+                <input type="checkbox" id="confirmCostCheckbox">
+                <span>I approve this arena comparison spend.</span>
+            </label>
+            <div class="inline-actions">
+                <button type="button" id="cancelCostBtn" class="secondary-button">Cancel</button>
+                <button type="button" id="confirmCostBtn" class="primary-button" disabled>Submit Arena</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const providerCatalog = {{ providers|tojson }};
+        const stagedClaims = [];
+        let preflightPayload = null;
+        let candidateCounter = 0;
+
+        const stageConfig = [
+            ['query_generation', 'Query Generation Model'],
+            ['paper_analysis', 'Paper Analysis Model'],
+            ['venue_scoring', 'Venue Scoring Model'],
+            ['final_report', 'Final Report Model'],
+        ];
+
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function getProvider(providerId) {
+            return providerCatalog.find(provider => provider.provider_id === providerId) || providerCatalog[0] || null;
+        }
+
+        function providerModelNames(provider) {
+            const models = Array.isArray(provider?.models) ? provider.models : [];
+            return models
+                .map(model => String(model.model_name || '').trim())
+                .filter(Boolean);
+        }
+
+        function parseBatchTags() {
+            return document.getElementById('batchTags').value
+                .split(',')
+                .map(value => value.trim())
+                .filter(Boolean);
+        }
+
+        function searchConfig() {
+            return {
+                num_queries: parseInt(document.getElementById('numQueries').value || '5', 10),
+                results_per_query: parseInt(document.getElementById('resultsPerQuery').value || '5', 10),
+            };
+        }
+
+        function setCandidateModelOptions(card) {
+            const provider = getProvider(card.querySelector('[data-provider-select]').value);
+            const models = providerModelNames(provider);
+            card.querySelectorAll('[data-model-task]').forEach(select => {
+                const current = select.value;
+                select.innerHTML = `
+                    <option value="">Provider Default (${escapeHtml(provider?.default_model || 'unset')})</option>
+                    ${models.map(model => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`).join('')}
+                `;
+                select.value = models.includes(current) ? current : '';
+            });
+        }
+
+        function candidateCardHtml(candidateId) {
+            return `
+                <div class="panel subtle-panel candidate-card" data-candidate-id="${candidateId}">
+                    <div class="panel-header-row">
+                        <h3>Candidate</h3>
+                        <button type="button" class="danger-button small-button" data-remove-candidate>Remove</button>
+                    </div>
+                    <div class="form-row grid-two">
+                        <div>
+                            <label>Provider</label>
+                            <select data-provider-select>
+                                ${providerCatalog.map(provider => `<option value="${escapeHtml(provider.provider_id)}">${escapeHtml(provider.label || provider.provider_id)}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div>
+                            <label>Label</label>
+                            <input type="text" data-label-input placeholder="Optional label">
+                        </div>
+                    </div>
+                    <div class="candidate-model-grid">
+                        ${stageConfig.map(([taskName, label]) => `
+                            <div class="form-row">
+                                <label>${escapeHtml(label)}</label>
+                                <select data-model-task="${escapeHtml(taskName)}"></select>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        function addCandidateCard() {
+            const candidateId = `candidate-${candidateCounter++}`;
+            const wrapper = document.createElement('div');
+            wrapper.innerHTML = candidateCardHtml(candidateId);
+            const card = wrapper.firstElementChild;
+            document.getElementById('candidateList').appendChild(card);
+            setCandidateModelOptions(card);
+        }
+
+        function invalidatePreflight() {
+            preflightPayload = null;
+            document.getElementById('submitArenaBtn').disabled = true;
+            document.getElementById('preflightPanel').classList.add('hidden');
+        }
+
+        function renderClaims() {
+            const target = document.getElementById('arenaClaims');
+            if (!stagedClaims.length) {
+                target.innerHTML = '<div class="helper-text">No claims staged.</div>';
+                document.getElementById('submitArenaBtn').disabled = true;
+                return;
+            }
+            target.innerHTML = stagedClaims.map((claim, index) => `
+                <div class="staged-claim">
+                    <span>${escapeHtml(claim)}</span>
+                    <button type="button" class="danger-button small-button" data-remove-claim="${index}">Remove</button>
+                </div>
+            `).join('');
+            document.getElementById('submitArenaBtn').disabled = !preflightPayload || !preflightPayload.totals.pricing_complete;
+        }
+
+        function addClaim(text) {
+            const cleaned = String(text || '').trim();
+            if (!cleaned) return;
+            stagedClaims.push(cleaned);
+            invalidatePreflight();
+            renderClaims();
+            document.getElementById('claimInput').value = '';
+        }
+
+        function collectCandidates() {
+            return Array.from(document.querySelectorAll('[data-candidate-id]')).map(card => {
+                const modelOverrides = {};
+                card.querySelectorAll('[data-model-task]').forEach(select => {
+                    if (select.value) modelOverrides[select.dataset.modelTask] = select.value;
+                });
+                return {
+                    provider_id: card.querySelector('[data-provider-select]').value,
+                    label: card.querySelector('[data-label-input]').value.trim(),
+                    model_overrides: modelOverrides,
+                };
+            });
+        }
+
+        function renderClaimPlanTable(data) {
+            const rows = data.unique_claims.map(claim => `
+                <tr>
+                    <td>${escapeHtml(claim.text)}</td>
+                    <td>${claim.duplicate_input_count}</td>
+                    <td>${claim.existing_claim ? 'Yes' : 'No'}</td>
+                    <td>${escapeHtml(claim.submission_action === 'view_existing' ? 'View Existing' : 'Create Run')}</td>
+                </tr>
+            `).join('');
+            return `
+                <table>
+                    <thead>
+                        <tr><th>Claim</th><th>Inputs</th><th>Existing</th><th>Action</th></tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            `;
+        }
+
+        function renderCostTable(data) {
+            return `
+                <table>
+                    <thead>
+                        <tr><th>Candidate</th><th>Runs</th><th>Expected</th><th>Upper Bound</th><th>Pricing</th></tr>
+                    </thead>
+                    <tbody>
+                        ${data.candidates.map(candidate => `
+                            <tr>
+                                <td>${escapeHtml(candidate.label || candidate.provider_id)}</td>
+                                <td>${candidate.run_count}</td>
+                                <td>$${candidate.expected_cost_usd.toFixed(4)}</td>
+                                <td>$${candidate.upper_bound_cost_usd.toFixed(4)}</td>
+                                <td>${candidate.pricing_complete ? 'Complete' : `Missing: ${escapeHtml(candidate.missing_pricing_models.join(', '))}`}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+        }
+
+        async function preflightArena() {
+            const candidates = collectCandidates();
+            if (!stagedClaims.length || !candidates.length) {
+                alert('Add claims and at least one candidate first.');
+                return;
+            }
+            const response = await fetch('/api/v1/claims/preflight', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    claims: stagedClaims,
+                    candidates,
+                    search_config: searchConfig(),
+                    execution_mode: document.getElementById('executionMode').value,
+                    duplicate_strategy: document.getElementById('duplicateStrategy').value,
+                }),
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Preflight failed.');
+
+            preflightPayload = data;
+            document.getElementById('submitArenaBtn').disabled = !data.totals.pricing_complete;
+
+            const warnings = [];
+            if (data.totals.duplicate_input_count) {
+                warnings.push(`<div class="status-card warning-card"><strong>Duplicate inputs will be collapsed.</strong> ${data.totals.duplicate_input_count} repeated input(s) reduce to ${data.totals.unique_claim_count} unique claim(s).</div>`);
+            }
+            if (data.totals.reused_existing_count) {
+                warnings.push(`<div class="status-card info-card"><strong>Existing claims will be reused.</strong> ${data.totals.reused_existing_count} unique claim(s) will open existing history instead of queueing new arena runs.</div>`);
+            }
+            if (!data.totals.pricing_complete) {
+                warnings.push(`<div class="status-card error-card"><strong>Pricing metadata missing.</strong> Add costs for: ${escapeHtml(data.totals.missing_pricing_models.join(', '))} before submitting.</div>`);
+            }
+
+            document.getElementById('preflightPanel').classList.remove('hidden');
+            document.getElementById('preflightPanel').innerHTML = `
+                <h2>Arena Preflight</h2>
+                ${warnings.join('')}
+                <p><strong>Raw claims:</strong> ${data.totals.raw_claim_count}</p>
+                <p><strong>Unique claims:</strong> ${data.totals.unique_claim_count}</p>
+                <p><strong>Candidates:</strong> ${data.totals.candidate_count}</p>
+                <p><strong>Runs to create:</strong> ${data.totals.run_count}</p>
+                <p><strong>Execution mode:</strong> ${escapeHtml(data.execution_mode)}</p>
+                <p><strong>Batch tags:</strong> ${escapeHtml(parseBatchTags().join(', ') || 'none')}</p>
+                ${renderClaimPlanTable(data)}
+                ${renderCostTable(data)}
+                <p><strong>Total expected:</strong> $${data.totals.expected_cost_usd.toFixed(4)}</p>
+                <p><strong>Total upper bound:</strong> $${data.totals.upper_bound_cost_usd.toFixed(4)}</p>
+            `;
+        }
+
+        async function submitArena() {
+            const response = await fetch('/api/v1/arenas', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    title: document.getElementById('arenaTitle').value.trim(),
+                    claims: stagedClaims,
+                    candidates: collectCandidates(),
+                    batch_tags: parseBatchTags(),
+                    execution_mode: document.getElementById('executionMode').value,
+                    duplicate_strategy: document.getElementById('duplicateStrategy').value,
+                    search_config: searchConfig(),
+                    cost_confirmation: {
+                        accepted: true,
+                        expected_cost_usd: preflightPayload.totals.expected_cost_usd,
+                        upper_bound_cost_usd: preflightPayload.totals.upper_bound_cost_usd,
+                    },
+                }),
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Arena submission failed.');
+            window.location.href = `/arena_results?arena_id=${encodeURIComponent(data.arena_id)}`;
+        }
+
+        document.getElementById('addClaimBtn').addEventListener('click', () => addClaim(document.getElementById('claimInput').value));
+        document.getElementById('claimFile').addEventListener('change', async (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+            const text = await file.text();
+            text.split('\n').map(line => line.trim()).filter(Boolean).forEach(addClaim);
+        });
+        document.getElementById('arenaClaims').addEventListener('click', (event) => {
+            const index = event.target.getAttribute('data-remove-claim');
+            if (index === null) return;
+            stagedClaims.splice(parseInt(index, 10), 1);
+            invalidatePreflight();
+            renderClaims();
+        });
+        document.getElementById('candidateList').addEventListener('change', (event) => {
+            const card = event.target.closest('[data-candidate-id]');
+            if (!card) return;
+            if (event.target.matches('[data-provider-select]')) {
+                setCandidateModelOptions(card);
+            }
+            invalidatePreflight();
+        });
+        document.getElementById('candidateList').addEventListener('input', () => invalidatePreflight());
+        document.getElementById('candidateList').addEventListener('click', (event) => {
+            if (!event.target.closest('[data-remove-candidate]')) return;
+            event.target.closest('[data-candidate-id]').remove();
+            invalidatePreflight();
+        });
+        document.getElementById('addCandidateBtn').addEventListener('click', () => {
+            addCandidateCard();
+            invalidatePreflight();
+        });
+        document.getElementById('preflightBtn').addEventListener('click', () => preflightArena().catch(error => alert(error.message)));
+        document.getElementById('submitArenaBtn').addEventListener('click', () => {
+            if (!preflightPayload) {
+                alert('Run preflight first.');
+                return;
+            }
+            if (!preflightPayload.totals.pricing_complete) {
+                alert('Pricing metadata is incomplete for one or more models.');
+                return;
+            }
+            document.getElementById('costModalBody').innerHTML = `
+                <p><strong>Unique claims:</strong> ${preflightPayload.totals.unique_claim_count}</p>
+                <p><strong>Runs to create:</strong> ${preflightPayload.totals.run_count}</p>
+                <p><strong>Expected total:</strong> $${preflightPayload.totals.expected_cost_usd.toFixed(4)}</p>
+                <p><strong>Upper bound:</strong> $${preflightPayload.totals.upper_bound_cost_usd.toFixed(4)}</p>
+            `;
+            document.getElementById('confirmCostCheckbox').checked = false;
+            document.getElementById('confirmCostBtn').disabled = true;
+            document.getElementById('costModal').classList.remove('hidden');
+        });
+        document.getElementById('cancelCostBtn').addEventListener('click', () => document.getElementById('costModal').classList.add('hidden'));
+        document.getElementById('confirmCostCheckbox').addEventListener('change', (event) => {
+            document.getElementById('confirmCostBtn').disabled = !event.target.checked;
+        });
+        document.getElementById('confirmCostBtn').addEventListener('click', () => submitArena().catch(error => alert(error.message)));
+
+        ['arenaTitle', 'batchTags', 'duplicateStrategy', 'executionMode', 'numQueries', 'resultsPerQuery'].forEach(id => {
+            document.getElementById(id).addEventListener('change', invalidatePreflight);
+        });
+
+        addCandidateCard();
+        addCandidateCard();
+        renderClaims();
+    </script>
+</body>
+</html>

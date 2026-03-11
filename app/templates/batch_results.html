@@ -25,6 +25,10 @@
             <button id="deleteBatchButton" class="danger-button">Delete Batch</button>
             <button id="downloadCSV" class="primary-button">Download CSV</button>
             <button id="downloadMarkdown" class="primary-button">Bulk Download Reports</button>
+            <label class="checkbox-row inline-checkbox">
+                <input type="checkbox" id="showAllRunsToggle">
+                <span>Show all tagged runs</span>
+            </label>
             <input type="text" id="filter-input" placeholder="Filter results..." class="filter-input">
         </div>
         
@@ -104,9 +108,9 @@
                     const row = cell.getRow().getData();
                     const claim_id = row.claim_id;
                     if (row.report_available && row.claim_location === 'saved_jobs') {
-                        return `<a href="/results?claim_id=${claim_id}&batch_id=${batchId}" class="report-link">View Report</a>`;
+                        return `<a href="/results?claim_id=${claim_id}&batch_id=${batchId}" class="report-link">View Report</a> | <a href="/claims/${row.claim_key}" class="report-link">Claim</a>`;
                     }
-                    return `<a href="/progress?claim_id=${claim_id}&batch_id=${batchId}" class="report-link">View Progress</a>`;
+                    return `<a href="/progress?claim_id=${claim_id}&batch_id=${batchId}" class="report-link">View Progress</a> | <a href="/claims/${row.claim_key}" class="report-link">Claim</a>`;
                 },
                 headerSort: false
             }
@@ -131,7 +135,9 @@
         }
 
         function initializeTable(data) {
-            const tableData = data.claims.map(claim => {
+            const useAllRuns = document.getElementById('showAllRunsToggle').checked;
+            const sourceRows = useAllRuns && Array.isArray(data.all_runs) && data.all_runs.length ? data.all_runs : data.claims;
+            const tableData = sourceRows.map(claim => {
                 const report = claim.report || {};
                 
                 if (claim.report_available && claim.claim_location === 'saved_jobs') {
@@ -144,6 +150,7 @@
                         non_relevant_papers_count: report.nonRelevantPapers?.length || 0,
                         price: report.usage_summary?.cost_usd || report.usage_stats?.cost_usd || report.usage_stats?.total_cost || 0,
                         claim_id: claim.claim_id,
+                        claim_key: claim.claim_key,
                         report_available: true
                     };
                 }
@@ -157,6 +164,7 @@
                     non_relevant_papers_count: 0,
                     price: 0,
                     claim_id: claim.claim_id,
+                    claim_key: claim.claim_key,
                     report_available: false
                 };
             });
@@ -259,6 +267,10 @@
                 .catch(error => {
                     alert(error.message || 'Failed to download markdown reports.');
                 });
+        });
+
+        document.getElementById('showAllRunsToggle').addEventListener('change', function() {
+            loadBatchResults();
         });
     </script>
 </body>
