@@ -1,8 +1,8 @@
 import logging
+from datetime import datetime, timezone
 from typing import Dict, List
 from app.models.paper import Paper
 from textwrap import dedent
-from app.config.settings import Config
 from app.services.llm.gateway import LLMTask
 from app.services.llm.types import empty_usage
 from app.services.llm.validators import validate_venue_score_payload
@@ -12,6 +12,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class EvidenceScorer:
+    @staticmethod
+    def _current_year() -> int:
+        return datetime.now(timezone.utc).year
 
     async def calculate_paper_weight(
         self,
@@ -142,7 +145,7 @@ class EvidenceScorer:
             citation_count = paper.get('citationCount', 0)
             
             # Calculate years since publication
-            current_year = 2024  # TODO: Get dynamically
+            current_year = self._current_year()
             years_since_pub = max(1, current_year - (paper.get('year', current_year) or current_year))
             
             # Calculate citations per year
