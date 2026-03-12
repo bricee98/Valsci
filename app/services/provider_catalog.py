@@ -30,7 +30,10 @@ def _dedupe_models(models: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not name or name in seen:
             continue
         seen.add(name)
-        deduped.append(model)
+        normalized = dict(model)
+        normalized.setdefault("label", name)
+        normalized.setdefault("enabled", True)
+        deduped.append(normalized)
     return deduped
 
 
@@ -70,6 +73,27 @@ class ProviderCatalog:
             if provider.get("provider_id") == provider_id:
                 return provider
         return None
+
+    @staticmethod
+    def enabled_models(provider: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return [
+            dict(model)
+            for model in provider.get("models", [])
+            if isinstance(model, dict) and model.get("enabled", True)
+        ]
+
+    @staticmethod
+    def merge_models(existing_models: List[Dict[str, Any]], incoming_models: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        merged = {str(model.get("model_name", "")).strip(): dict(model) for model in existing_models if model.get("model_name")}
+        for model in incoming_models:
+            model_name = str(model.get("model_name", "")).strip()
+            if not model_name:
+                continue
+            if model_name not in merged:
+                merged[model_name] = dict(model)
+                merged[model_name].setdefault("label", model_name)
+                merged[model_name].setdefault("enabled", True)
+        return _dedupe_models(list(merged.values()))
 
     def upsert_provider(self, provider_payload: Dict[str, Any]) -> Dict[str, Any]:
         payload = self.load()

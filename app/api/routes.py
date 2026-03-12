@@ -23,6 +23,7 @@ from app.services.batch_export import build_export_document
 from app.services.batch_state import build_batch_state, list_batch_ids
 from app.config.settings import Config
 from app.services.claim_store import ClaimStore
+from app.services.ollama_discovery import discover_ollama_models
 from app.services.provider_catalog import ProviderCatalog
 from app.services.submission_service import SubmissionService
 
@@ -531,6 +532,25 @@ def delete_provider(provider_id):
     return jsonify({"deleted": True, "provider_id": provider_id}), 200
 
 
+@api.route('/api/v1/providers/ollama/discover', methods=['POST'])
+@auth_required
+def discover_ollama_provider_models():
+    payload = request.get_json(silent=True) or {}
+    provider_id = str(payload.get("provider_id", "")).strip()
+    if provider_id:
+        provider = _provider_catalog().get_provider(provider_id)
+        if not provider:
+            return jsonify({"error": "Provider not found"}), 404
+        is_ollama_provider = provider.get("provider_type") == "ollama" or provider.get("local_backend") == "ollama"
+        if not is_ollama_provider:
+            return jsonify({"error": "Provider is not Ollama-backed"}), 400
+    try:
+        models = discover_ollama_models()
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"models": models, "count": len(models)}), 200
+
+
 @api.route('/api/v1/claims/preflight', methods=['POST'])
 @auth_required
 def claims_preflight():
@@ -551,6 +571,7 @@ def claims_preflight():
         search_config=search_config,
         duplicate_strategy=str(payload.get("duplicate_strategy", "rerun")),
         execution_mode=str(payload.get("execution_mode", "full_pipeline")),
+        stop_after=str(payload.get("stop_after", "final_report")),
     )
     return jsonify(preflight), 200
 
@@ -579,6 +600,7 @@ def create_runs():
             bibliometric_config=bibliometric_config,
             batch_tags=batch_tags,
             execution_mode=execution_mode,
+            stop_after=str(payload.get("stop_after", "final_report")),
             cost_confirmation=cost_confirmation,
             duplicate_strategy=duplicate_strategy,
             create_arena=False,
@@ -607,6 +629,7 @@ def create_arena():
             bibliometric_config=dict(payload.get("bibliometric_config") or _default_bibliometric_config()),
             batch_tags=_string_list(payload.get("batch_tags")),
             execution_mode=str(payload.get("execution_mode", "full_pipeline")),
+            stop_after=str(payload.get("stop_after", "final_report")),
             cost_confirmation=dict(payload.get("cost_confirmation") or {}),
             duplicate_strategy=str(payload.get("duplicate_strategy", "rerun")),
             create_arena=True,
@@ -616,6 +639,35 @@ def create_arena():
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
 
+    return jsonify(result), 202
+
+
+@api.route('/api/v1/arenas/<arena_id>/continue/preflight', methods=['POST'])
+@auth_required
+def continue_arena_preflight(arena_id):
+    payload = request.get_json(silent=True) or {}
+    try:
+        result = _submission_service().continue_arena_preflight(
+            arena_id=arena_id,
+            decisions=payload.get("decisions"),
+        )
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(result), 200
+
+
+@api.route('/api/v1/arenas/<arena_id>/continue', methods=['POST'])
+@auth_required
+def continue_arena(arena_id):
+    payload = request.get_json(silent=True) or {}
+    try:
+        result = _submission_service().continue_arena(
+            arena_id=arena_id,
+            decisions=payload.get("decisions"),
+            cost_confirmation=dict(payload.get("cost_confirmation") or {}),
+        )
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
     return jsonify(result), 202
 
 

@@ -124,9 +124,11 @@ def validate_query_generation_payload(payload: Any, *, expected_query_count: int
         _require_string(text, f"explanations[{idx}]", max_len=1200)
         for idx, text in enumerate(raw_explanations)
     ]
-    if expected_query_count > 0 and len(explanations) != expected_query_count:
+    if expected_query_count > 0:
+        explanations = explanations[:expected_query_count]
+    if expected_query_count > 0 and len(explanations) < expected_query_count:
         raise OutputValidationError(
-            f"Expected exactly {expected_query_count} explanations, got {len(explanations)}."
+            f"Expected at least {expected_query_count} explanations, got {len(explanations)}."
         )
 
     return {

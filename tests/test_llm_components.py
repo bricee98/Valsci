@@ -69,7 +69,7 @@ def test_rate_limiter_basic_reservation():
     assert asyncio.run(run()) is True
 
 
-def test_validate_config_rejects_invalid_backoff(monkeypatch):
+def test_validate_config_accepts_out_of_range_numeric_values(monkeypatch):
     monkeypatch.setattr(Config, "LLM_PROVIDER", "openai", raising=False)
     monkeypatch.setattr(Config, "LLM_API_KEY", "test", raising=False)
     monkeypatch.setattr(Config, "SECRET_KEY", "secret", raising=False)
@@ -78,6 +78,20 @@ def test_validate_config_rejects_invalid_backoff(monkeypatch):
     monkeypatch.setattr(Config, "REQUIRE_PASSWORD", False, raising=False)
     monkeypatch.setattr(Config, "LLM_BACKOFF_BASE_SECONDS", 10.0, raising=False)
     monkeypatch.setattr(Config, "LLM_BACKOFF_MAX_SECONDS", 1.0, raising=False)
+    monkeypatch.setattr(Config, "LLM_BACKOFF_JITTER", 9.0, raising=False)
+    monkeypatch.setattr(Config, "LLM_TIMEOUT_SECONDS", 999999, raising=False)
+
+    Config.validate_config()
+
+
+def test_validate_config_rejects_non_numeric_backoff(monkeypatch):
+    monkeypatch.setattr(Config, "LLM_PROVIDER", "openai", raising=False)
+    monkeypatch.setattr(Config, "LLM_API_KEY", "test", raising=False)
+    monkeypatch.setattr(Config, "SECRET_KEY", "secret", raising=False)
+    monkeypatch.setattr(Config, "USER_EMAIL", "user@example.com", raising=False)
+    monkeypatch.setattr(Config, "SEMANTIC_SCHOLAR_API_KEY", "test", raising=False)
+    monkeypatch.setattr(Config, "REQUIRE_PASSWORD", False, raising=False)
+    monkeypatch.setattr(Config, "LLM_BACKOFF_BASE_SECONDS", "abc", raising=False)
 
     with pytest.raises(ValueError):
         Config.validate_config()

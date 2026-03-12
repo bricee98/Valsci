@@ -10,9 +10,14 @@ from typing import Any, Dict, Iterable, List, Optional
 from app.services.claim_store import ClaimStore, normalize_claim_text
 from app.services.cost_estimator import CostEstimator
 from app.services.provider_catalog import ProviderCatalog
-
-
-TASK_NAMES = ["query_generation", "paper_analysis", "venue_scoring", "final_report"]
+from app.services.stage_execution import (
+    TASK_NAMES,
+    next_stage,
+    normalize_execution_settings,
+    normalize_stop_after,
+    skip_stages_for_execution,
+    start_status_for_stage,
+)
 
 
 def clean_model_overrides(payload: Optional[Dict[str, Any]]) -> Dict[str, str]:
@@ -41,6 +46,26 @@ class SubmissionService:
             "citation_impact_weight": 0.4,
             "venue_impact_weight": 0.2,
         }
+
+    @staticmethod
+    def _start_stage_for_status(status: Optional[str]) -> str:
+        mapping = {
+            "queued": "query_generation",
+            "ready_for_search": "paper_analysis",
+            "ready_for_analysis": "venue_scoring",
+        }
+        return mapping.get(str(status or "").strip().lower(), "query_generation")
+
+    @staticmethod
+    def _claim_seed_for_continuation(claim_data: Dict[str, Any], next_stage_name: str, seed_from_run_id: str) -> Dict[str, Any]:
+        seeded = deepcopy(claim_data or {})
+        seeded["status"] = start_status_for_stage(next_stage_name)
+        seeded["report"] = None
+        seeded["stop_after"] = next_stage_name
+        seeded["completed_stage"] = None
+        seeded["is_stage_checkpoint"] = next_stage_name != "final_report"
+        seeded["seed_from_run_id"] = seed_from_run_id
+        return seeded
 
     def resolve_candidates(self, raw_candidates: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
         providers = self.provider_catalog.list_providers()
@@ -75,13 +100,6 @@ class SubmissionService:
         if strategy not in {"rerun", "view"}:
             raise ValueError("duplicate_strategy must be either 'rerun' or 'view'.")
         return strategy
-
-    @staticmethod
-    def _normalize_execution_mode(value: Optional[str]) -> str:
-        mode = str(value or "full_pipeline").strip().lower()
-        if mode not in {"full_pipeline", "reuse_retrieval"}:
-            raise ValueError("execution_mode must be either 'full_pipeline' or 'reuse_retrieval'.")
-        return mode
 
     def _claim_plan(self, claims: List[str], duplicate_strategy: str) -> Dict[str, Any]:
         normalized_groups: Dict[str, List[int]] = defaultdict(list)
@@ -160,6 +178,8 @@ class SubmissionService:
         candidates: List[Dict[str, Any]],
         search_config: Dict[str, Any],
         execution_mode: str,
+        stop_after: str,
+        start_stage: str = "query_generation",
     ) -> Dict[str, Any]:
         candidate_estimates = []
         total_expected_cost = 0.0
@@ -182,8 +202,14 @@ class SubmissionService:
                 skip_stages = set()
                 if action != "create_run":
                     skip_stages = set(TASK_NAMES)
-                elif execution_mode == "reuse_retrieval" and len(candidates) > 1 and candidate_index > 0:
-                    skip_stages = {"query_generation"}
+                else:
+                    skip_stages = skip_stages_for_execution(
+                        stop_after=stop_after,
+                        start_stage=start_stage,
+                        reuse_query_generation=(
+                            execution_mode == "reuse_retrieval" and len(candidates) > 1 and candidate_index > 0
+                        ),
+                    )
 
                 estimate = estimator.estimate_run(
                     unique_claim["text"],
@@ -205,6 +231,8 @@ class SubmissionService:
                         "duplicate_input_count": unique_claim["duplicate_input_count"],
                         "existing_claim": bool(unique_claim.get("existing_claim")),
                         "action": action,
+                        "stop_after": stop_after,
+                        "start_stage": start_stage,
                         "estimate": estimate,
                     }
                 )
@@ -226,6 +254,8 @@ class SubmissionService:
                     "pricing_complete": candidate_pricing_complete,
                     "missing_pricing_models": sorted(candidate_missing_pricing),
                     "run_count": candidate_run_count,
+                    "stop_after": stop_after,
+                    "start_stage": start_stage,
                     "runs": run_estimates,
                 }
             )
@@ -249,16 +279,20 @@ class SubmissionService:
         search_config: Optional[Dict[str, Any]] = None,
         duplicate_strategy: str = "rerun",
         execution_mode: str = "full_pipeline",
+        stop_after: str = "final_report",
+        start_stage: str = "query_generation",
     ) -> Dict[str, Any]:
         search_config = dict(search_config or self.default_search_config())
         duplicate_strategy = self._normalize_duplicate_strategy(duplicate_strategy)
-        execution_mode = self._normalize_execution_mode(execution_mode)
+        execution_mode, stop_after = normalize_execution_settings(execution_mode, stop_after)
         plan = self._claim_plan(claims, duplicate_strategy)
         estimates = self._candidate_estimates(
             unique_claims=plan["unique_claims"],
             candidates=candidates,
             search_config=search_config,
             execution_mode=execution_mode,
+            stop_after=stop_after,
+            start_stage=start_stage,
         )
 
         return {
@@ -283,6 +317,8 @@ class SubmissionService:
             },
             "duplicate_strategy": duplicate_strategy,
             "execution_mode": execution_mode,
+            "stop_after": stop_after,
+            "start_stage": start_stage,
         }
 
     def submit(
@@ -294,14 +330,16 @@ class SubmissionService:
         bibliometric_config: Optional[Dict[str, Any]] = None,
         batch_tags: Optional[Iterable[str]] = None,
         execution_mode: str = "full_pipeline",
+        stop_after: str = "final_report",
         cost_confirmation: Optional[Dict[str, Any]] = None,
         duplicate_strategy: str = "rerun",
         create_arena: bool = False,
         arena_title: Optional[str] = None,
         review_type: str = "regular",
+        start_stage: str = "query_generation",
     ) -> Dict[str, Any]:
         duplicate_strategy = self._normalize_duplicate_strategy(duplicate_strategy)
-        execution_mode = self._normalize_execution_mode(execution_mode)
+        execution_mode, stop_after = normalize_execution_settings(execution_mode, stop_after)
         if not (cost_confirmation or {}).get("accepted"):
             raise ValueError("Cost confirmation is required before submission.")
 
@@ -313,6 +351,8 @@ class SubmissionService:
             search_config=search_config,
             duplicate_strategy=duplicate_strategy,
             execution_mode=execution_mode,
+            stop_after=stop_after,
+            start_stage=start_stage,
         )
         if not preflight["totals"]["pricing_complete"]:
             raise ValueError(
@@ -329,6 +369,7 @@ class SubmissionService:
                 title=arena_title or f"Arena {primary_batch_tag}",
                 batch_tags=normalized_batch_tags,
                 execution_mode=execution_mode,
+                current_stage=stop_after,
                 candidates=[self._candidate_public_summary(candidate) for candidate in candidates],
             )
             normalized_batch_tags = [arena_record["arena_id"], *normalized_batch_tags]
@@ -371,6 +412,7 @@ class SubmissionService:
                     batch_tags=normalized_batch_tags,
                     arena_id=arena_record["arena_id"] if arena_record else None,
                     execution_mode=execution_mode,
+                    stop_after=stop_after,
                     provider_snapshot={
                         **candidate["provider_snapshot"],
                         "label": candidate["label"],
@@ -382,7 +424,7 @@ class SubmissionService:
                     cost_confirmation=cost_confirmation,
                     transport_batch_id=arena_record["arena_id"] if arena_record else primary_batch_tag,
                     review_type=review_type,
-                    status="queued",
+                    status=start_status_for_stage(start_stage),
                     source="arena" if create_arena else "standard",
                 )
                 if execution_mode == "reuse_retrieval" and len(candidates) > 1:
@@ -400,8 +442,12 @@ class SubmissionService:
 
         if arena_record:
             arena_record["claim_keys"] = claim_keys
-            arena_record["run_ids"] = [run["run_id"] for run in created_runs]
-            self.claim_store.save_arena(arena_record)
+            self.claim_store.append_arena_stage_history(
+                arena_record,
+                stage=stop_after,
+                run_ids=[run["run_id"] for run in created_runs],
+                source="initial_submit",
+            )
 
         return {
             "batch_id": primary_batch_tag,
@@ -411,6 +457,209 @@ class SubmissionService:
             "reused_existing": reused_existing,
             "preflight": preflight,
             "execution_mode": execution_mode,
+            "stop_after": stop_after,
+        }
+
+    def _normalize_continue_decisions(
+        self,
+        arena: Dict[str, Any],
+        decisions: Optional[List[Dict[str, Any]]],
+    ) -> List[Dict[str, Any]]:
+        decision_map = {
+            item.get("claim_key"): item
+            for item in (decisions or [])
+            if isinstance(item, dict) and isinstance(item.get("claim_key"), str)
+        }
+        normalized: List[Dict[str, Any]] = []
+        for group in arena.get("claim_groups", []):
+            claim_key = group.get("claim_key")
+            runs = list(group.get("runs") or [])
+            chosen = decision_map.get(claim_key, {})
+            skip_claim = bool(chosen.get("skip_claim"))
+            selected_run_id = chosen.get("selected_run_id")
+            if not skip_claim and not selected_run_id and len(runs) == 1:
+                selected_run_id = runs[0].get("run_id")
+            normalized.append(
+                {
+                    "claim_key": claim_key,
+                    "text": group.get("text", ""),
+                    "skip_claim": skip_claim,
+                    "selected_run_id": selected_run_id,
+                    "available_run_ids": [run.get("run_id") for run in runs],
+                }
+            )
+        return normalized
+
+    def continue_arena_preflight(
+        self,
+        *,
+        arena_id: str,
+        decisions: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        arena = self.claim_store.get_arena(arena_id)
+        if not arena:
+            raise ValueError("Arena not found.")
+        current_stage = normalize_stop_after(arena.get("current_stage"))
+        next_stage_name = next_stage(current_stage)
+        if not next_stage_name:
+            raise ValueError("Arena is already at the final stage.")
+
+        normalized_decisions = self._normalize_continue_decisions(arena, decisions)
+        claims_payload: List[Dict[str, Any]] = []
+        total_expected_cost = 0.0
+        total_upper_bound_cost = 0.0
+        missing_pricing_models = set()
+        pricing_complete = True
+
+        for decision in normalized_decisions:
+            action = "skip" if decision["skip_claim"] else "continue"
+            claim_entry = {
+                "claim_key": decision["claim_key"],
+                "text": decision["text"],
+                "action": action,
+                "selected_run_id": decision["selected_run_id"],
+            }
+            if decision["skip_claim"]:
+                claims_payload.append(claim_entry)
+                continue
+            selected_run_id = decision.get("selected_run_id")
+            if not isinstance(selected_run_id, str) or not selected_run_id.strip():
+                raise ValueError(f"A winner must be selected for claim {decision['claim_key']} or the claim must be skipped.")
+            if selected_run_id not in set(decision["available_run_ids"]):
+                raise ValueError(f"Selected run {selected_run_id} is not part of the current arena stage.")
+            run_record = self.claim_store.get_run(selected_run_id)
+            if not run_record:
+                raise ValueError(f"Selected run not found: {selected_run_id}")
+            if run_record.get("arena_id") != arena_id:
+                raise ValueError(f"Selected run {selected_run_id} does not belong to arena {arena_id}.")
+            if run_record.get("completed_stage") != current_stage:
+                raise ValueError(f"Selected run {selected_run_id} is not completed at stage {current_stage}.")
+            claim_data = self.claim_store.load_claim_data_for_run(run_record) or run_record.get("claim_data") or {}
+            if not isinstance(claim_data, dict) or not claim_data:
+                raise ValueError(f"Saved stage output is unavailable for run {selected_run_id}.")
+            estimate = CostEstimator(
+                run_record.get("provider_snapshot") or {},
+                run_record.get("model_overrides") or {},
+            ).estimate_run(
+                run_record.get("text", ""),
+                run_record.get("search_config") or self.default_search_config(),
+                skip_stages=skip_stages_for_execution(
+                    stop_after=next_stage_name,
+                    start_stage=next_stage_name,
+                ),
+            )
+            total_expected_cost = round(total_expected_cost + estimate["expected"]["cost_usd"], 10)
+            total_upper_bound_cost = round(total_upper_bound_cost + estimate["upper_bound"]["cost_usd"], 10)
+            missing_pricing_models.update(estimate.get("missing_pricing_models", []))
+            pricing_complete = pricing_complete and bool(estimate.get("pricing_complete", True))
+            claim_entry["estimate"] = estimate
+            claim_entry["source_run"] = self.claim_store.build_run_summary(run_record)
+            claim_entry["claim_data_present"] = isinstance(claim_data, dict) and bool(claim_data)
+            claims_payload.append(claim_entry)
+
+        return {
+            "arena_id": arena_id,
+            "current_stage": current_stage,
+            "next_stage": next_stage_name,
+            "claims": claims_payload,
+            "totals": {
+                "claim_count": len(claims_payload),
+                "run_count": sum(1 for item in claims_payload if item["action"] == "continue"),
+                "expected_cost_usd": total_expected_cost,
+                "upper_bound_cost_usd": total_upper_bound_cost,
+                "pricing_complete": pricing_complete,
+                "missing_pricing_models": sorted(missing_pricing_models),
+            },
+            "execution_mode": arena.get("execution_mode", "full_pipeline"),
+        }
+
+    def continue_arena(
+        self,
+        *,
+        arena_id: str,
+        decisions: Optional[List[Dict[str, Any]]] = None,
+        cost_confirmation: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if not (cost_confirmation or {}).get("accepted"):
+            raise ValueError("Cost confirmation is required before continuation.")
+        preflight = self.continue_arena_preflight(arena_id=arena_id, decisions=decisions)
+        if not preflight["totals"]["pricing_complete"]:
+            raise ValueError(
+                "Missing pricing metadata for one or more remote models: "
+                + ", ".join(preflight["totals"]["missing_pricing_models"])
+            )
+
+        arena = self.claim_store.get_arena(arena_id)
+        if not arena:
+            raise ValueError("Arena not found.")
+
+        created_runs = []
+        continue_decisions = []
+        for claim_entry in preflight["claims"]:
+            continue_decisions.append(
+                {
+                    "claim_key": claim_entry["claim_key"],
+                    "selected_run_id": claim_entry.get("selected_run_id"),
+                    "action": claim_entry["action"],
+                }
+            )
+            if claim_entry["action"] != "continue":
+                continue
+            selected_run_id = claim_entry["selected_run_id"]
+            source_run = self.claim_store.get_run(selected_run_id)
+            if not source_run:
+                raise ValueError(f"Selected run not found: {selected_run_id}")
+            claim_record = self.claim_store.get_claim(source_run["claim_key"])
+            if not claim_record:
+                raise ValueError(f"Claim not found for selected run: {selected_run_id}")
+            claim_data = self.claim_store.load_claim_data_for_run(source_run) or source_run.get("claim_data") or {}
+            if not isinstance(claim_data, dict) or not claim_data:
+                raise ValueError(f"Saved stage output is unavailable for run {selected_run_id}.")
+            seeded_claim_data = self._claim_seed_for_continuation(
+                claim_data,
+                preflight["next_stage"],
+                selected_run_id,
+            )
+            new_run = self.claim_store.create_run(
+                claim_record=claim_record,
+                batch_tags=arena.get("batch_tags", []),
+                arena_id=arena_id,
+                execution_mode=arena.get("execution_mode", "full_pipeline"),
+                stop_after=preflight["next_stage"],
+                provider_snapshot=source_run.get("provider_snapshot") or {},
+                model_overrides=source_run.get("model_overrides") or {},
+                search_config=source_run.get("search_config") or self.default_search_config(),
+                bibliometric_config=source_run.get("bibliometric_config") or self.default_bibliometric_config(),
+                cost_estimate=claim_entry.get("estimate"),
+                cost_confirmation=cost_confirmation,
+                transport_batch_id=arena_id,
+                review_type=source_run.get("review_type", "regular"),
+                status=start_status_for_stage(preflight["next_stage"]),
+                source="arena_continue",
+                seed_from_run_id=selected_run_id,
+            )
+            self.claim_store.materialize_run_to_queue(
+                new_run,
+                status=start_status_for_stage(preflight["next_stage"]),
+                seeded_claim_data=seeded_claim_data,
+            )
+            created_runs.append(new_run)
+
+        updated_arena = self.claim_store.append_arena_stage_history(
+            arena,
+            stage=preflight["next_stage"],
+            run_ids=[run["run_id"] for run in created_runs],
+            continue_decisions=continue_decisions,
+            source="continue",
+        )
+        return {
+            "arena_id": arena_id,
+            "batch_id": arena_id,
+            "created_runs": [self.claim_store.build_run_summary(run) for run in created_runs],
+            "preflight": preflight,
+            "execution_mode": updated_arena.get("execution_mode", "full_pipeline"),
+            "stop_after": preflight["next_stage"],
+            "skipped_claims": [item["claim_key"] for item in preflight["claims"] if item["action"] == "skip"],
         }
 
     @staticmethod

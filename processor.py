@@ -14,6 +14,7 @@ from app.services.llm.types import empty_usage, merge_usage, normalize_usage
 from app.services.llm.validators import OutputValidationError, validate_query_list
 from app.services.paper_analyzer import PaperAnalyzer
 from app.services.evidence_scorer import EvidenceScorer
+from app.services.stage_execution import normalize_stop_after
 import time
 from app.config import settings
 import os.path
@@ -212,6 +213,26 @@ class ValsciProcessor:
             snapshot = claim_data.get("provider_snapshot") or {}
         return self.gateway_factory.get_gateway(snapshot)
 
+    @staticmethod
+    def _stop_after_stage(claim_data: Optional[Dict[str, Any]]) -> str:
+        if not isinstance(claim_data, dict):
+            return "final_report"
+        return normalize_stop_after(claim_data.get("stop_after"))
+
+    async def _finalize_stage_checkpoint(
+        self,
+        claim_data: Dict[str, Any],
+        batch_id: str,
+        claim_id: str,
+        completed_stage: str,
+    ) -> None:
+        claim_data["status"] = "processed"
+        claim_data["completed_stage"] = completed_stage
+        claim_data["is_stage_checkpoint"] = completed_stage != "final_report"
+        if completed_stage != "final_report":
+            claim_data["report"] = None
+        await self._save_processed_claim(claim_data, batch_id, claim_id)
+
     async def _attach_report_debug(self, batch_id: str, claim_id: str, claim_data: Dict, report: Dict) -> Dict:
         self._ensure_claim_usage(claim_data)
         ai_service = self._get_ai_service(claim_data)
@@ -335,6 +356,77 @@ class ValsciProcessor:
             if await async_os.path.exists(batch_dir):
                 await self.async_rmtree(batch_dir)
 
+    @staticmethod
+    def _prepare_waiting_reuse_claim_data(
+        baseline_claim_data: Dict[str, Any],
+    ) -> Tuple[str, Dict[str, Any]]:
+        if baseline_claim_data.get("raw_papers"):
+            next_status = "ready_for_analysis"
+        elif baseline_claim_data.get("semantic_scholar_queries"):
+            next_status = "ready_for_search"
+        else:
+            next_status = "queued"
+
+        seeded_claim_data = json.loads(json.dumps(baseline_claim_data))
+        seeded_claim_data["processed_papers"] = []
+        seeded_claim_data["non_relevant_papers"] = []
+        seeded_claim_data["report"] = None
+        seeded_claim_data["usage"] = empty_usage()
+        seeded_claim_data["usage_by_stage"] = {}
+        seeded_claim_data["status"] = next_status
+        seeded_claim_data["completed_stage"] = None
+        seeded_claim_data["is_stage_checkpoint"] = False
+        return next_status, seeded_claim_data
+
+    def _materialize_waiting_reuse_run(
+        self,
+        waiting_run: Dict[str, Any],
+        baseline_claim_data: Dict[str, Any],
+    ) -> str:
+        next_status, seeded_claim_data = self._prepare_waiting_reuse_claim_data(baseline_claim_data)
+        waiting_run = dict(waiting_run)
+        waiting_run["status"] = next_status
+        self.claim_store.save_run(waiting_run)
+        self.claim_store.materialize_run_to_queue(
+            waiting_run,
+            status=next_status,
+            seeded_claim_data=seeded_claim_data,
+        )
+        return next_status
+
+    def _load_saved_claim_data_for_run(self, run_record: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not run_record:
+            return None
+        transport = run_record.get("transport") or {}
+        batch_id = transport.get("batch_id")
+        claim_id = transport.get("claim_id")
+        if not batch_id or not claim_id:
+            return None
+
+        saved_file_path = self.claim_store.saved_jobs_dir / batch_id / f"{claim_id}.txt"
+        if not saved_file_path.exists():
+            return None
+
+        try:
+            with saved_file_path.open("r", encoding="utf-8") as handle:
+                claim_data = json.load(handle)
+        except Exception as exc:
+            logger.warning(
+                "Could not read saved baseline artifact for run %s at %s: %s",
+                run_record.get("run_id"),
+                saved_file_path,
+                exc,
+            )
+            return None
+
+        if not isinstance(claim_data, dict):
+            logger.warning(
+                "Saved baseline artifact for run %s did not contain a JSON object.",
+                run_record.get("run_id"),
+            )
+            return None
+        return claim_data
+
     async def _seed_waiting_reuse_runs(self, batch_id: str, claim_id: str, baseline_claim_data: Dict[str, Any]) -> None:
         baseline_run = self.claim_store.find_run_by_legacy(batch_id, claim_id)
         if not baseline_run:
@@ -348,28 +440,56 @@ class ValsciProcessor:
         if not waiting_runs:
             return
 
-        if baseline_claim_data.get("raw_papers"):
-            next_status = "ready_for_analysis"
-        elif baseline_claim_data.get("semantic_scholar_queries"):
-            next_status = "ready_for_search"
-        else:
-            next_status = "queued"
+        for waiting_run in waiting_runs:
+            next_status = self._materialize_waiting_reuse_run(
+                waiting_run,
+                baseline_claim_data,
+            )
+            logger.info(
+                "Seeded waiting reuse run %s from baseline %s with status %s.",
+                waiting_run.get("run_id"),
+                baseline_run.get("run_id"),
+                next_status,
+            )
+
+    def recover_waiting_reuse_runs(self) -> int:
+        waiting_runs = [
+            run
+            for run in self.claim_store.list_runs()
+            if run.get("status") == "waiting_for_baseline" and run.get("reuse_from_run_id")
+        ]
+        if not waiting_runs:
+            return 0
+
+        baseline_cache: Dict[str, Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]] = {}
+        recovered_count = 0
 
         for waiting_run in waiting_runs:
-            seeded_claim_data = json.loads(json.dumps(baseline_claim_data))
-            seeded_claim_data["processed_papers"] = []
-            seeded_claim_data["non_relevant_papers"] = []
-            seeded_claim_data["report"] = None
-            seeded_claim_data["usage"] = empty_usage()
-            seeded_claim_data["usage_by_stage"] = {}
-            seeded_claim_data["status"] = next_status
-            waiting_run["status"] = next_status
-            self.claim_store.save_run(waiting_run)
-            self.claim_store.materialize_run_to_queue(
-                waiting_run,
-                status=next_status,
-                seeded_claim_data=seeded_claim_data,
+            baseline_run_id = waiting_run.get("reuse_from_run_id")
+            if not baseline_run_id:
+                continue
+
+            if baseline_run_id not in baseline_cache:
+                baseline_run = self.claim_store.get_run(baseline_run_id)
+                baseline_claim_data = self._load_saved_claim_data_for_run(baseline_run)
+                baseline_cache[baseline_run_id] = (baseline_run, baseline_claim_data)
+
+            baseline_run, baseline_claim_data = baseline_cache[baseline_run_id]
+            if not baseline_run or not baseline_claim_data:
+                continue
+            if baseline_claim_data.get("status") != "processed":
+                continue
+
+            next_status = self._materialize_waiting_reuse_run(waiting_run, baseline_claim_data)
+            recovered_count += 1
+            logger.info(
+                "Recovered waiting reuse run %s from saved baseline %s with status %s.",
+                waiting_run.get("run_id"),
+                baseline_run_id,
+                next_status,
             )
+
+        return recovered_count
 
     def calculate_tokens_in_window(self):
         """Calculate token usage within the current window."""
@@ -409,6 +529,8 @@ class ValsciProcessor:
             claim_data = self.claims_in_memory[(batch_id, claim_id)]
             claim_data['semantic_scholar_queries'] = queries
             self._add_claim_usage(claim_data, LLMTask.QUERY_GENERATION, usage)
+            claim_data['completed_stage'] = None
+            claim_data['is_stage_checkpoint'] = False
 
             if not queries:
                 # Query generation returned empty results -- do not advance to search
@@ -431,6 +553,16 @@ class ValsciProcessor:
                 }
                 claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
                 await self._save_processed_claim(claim_data, batch_id, claim_id)
+                self._clear_claim_stage_retry(batch_id, claim_id, LLMTask.QUERY_GENERATION)
+                return
+
+            if self._stop_after_stage(claim_data) == LLMTask.QUERY_GENERATION:
+                await self._finalize_stage_checkpoint(
+                    claim_data,
+                    batch_id,
+                    claim_id,
+                    LLMTask.QUERY_GENERATION,
+                )
                 self._clear_claim_stage_retry(batch_id, claim_id, LLMTask.QUERY_GENERATION)
                 return
 
@@ -679,6 +811,8 @@ class ValsciProcessor:
             return
             
         self._ensure_claim_paper_lists(claim_data)
+        claim_data["completed_stage"] = None
+        claim_data["is_stage_checkpoint"] = False
         processed_ids, non_relevant_ids, inaccessible_ids, failed_ids = self._paper_status_ids(claim_data)
 
         # Analyze raw papers
@@ -762,6 +896,24 @@ class ValsciProcessor:
                 logger.error(f"Error processing raw paper: {e}")
                 continue
 
+        processed_ids, non_relevant_ids, inaccessible_ids, failed_ids = self._paper_status_ids(claim_data)
+        all_papers_processed = all(
+            str(paper['corpusId']) in processed_ids or
+            str(paper['corpusId']) in non_relevant_ids or
+            str(paper['corpusId']) in inaccessible_ids or
+            str(paper['corpusId']) in failed_ids
+            for paper in claim_data.get('raw_papers', [])
+            if paper.get('corpusId')
+        )
+        if self._stop_after_stage(claim_data) == LLMTask.PAPER_ANALYSIS and all_papers_processed:
+            await self._finalize_stage_checkpoint(
+                claim_data,
+                batch_id,
+                claim_id,
+                LLMTask.PAPER_ANALYSIS,
+            )
+            return
+
         # Score papers that need scoring
         for paper in claim_data['processed_papers']:
             if paper['score'] == -1:
@@ -794,6 +946,14 @@ class ValsciProcessor:
 
         if all_papers_scored and all_papers_processed:
             print(f"All papers scored and processed for claim {claim_id}")
+            if self._stop_after_stage(claim_data) == LLMTask.VENUE_SCORING:
+                await self._finalize_stage_checkpoint(
+                    claim_data,
+                    batch_id,
+                    claim_id,
+                    LLMTask.VENUE_SCORING,
+                )
+                return
             if claim_id not in self.claims_final_reporting_in_progress:
                 try:
                     print(f"Checking status for final report for claim {claim_id}")
@@ -1100,6 +1260,9 @@ class ValsciProcessor:
                 self._add_claim_usage(claim_data, LLMTask.FINAL_REPORT, usage)
                 claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
 
+            claim_data["completed_stage"] = LLMTask.FINAL_REPORT
+            claim_data["is_stage_checkpoint"] = False
+
             # Save the final processed claim
             await self._save_processed_claim(claim_data, batch_id, claim_id)
 
@@ -1116,6 +1279,8 @@ class ValsciProcessor:
             claim_data = self.claims_in_memory.get((batch_id, claim_id))
             if claim_data:
                 claim_data["status"] = "processed"
+                claim_data["completed_stage"] = LLMTask.FINAL_REPORT
+                claim_data["is_stage_checkpoint"] = False
                 fallback_report = {
                     "relevantPapers": [],
                     "nonRelevantPapers": self.claim_processor._format_non_relevant_papers(
@@ -1257,6 +1422,9 @@ async def main():
                         os.remove(os.path.join(batch_dir, filename))
 
         processor = ValsciProcessor()
+        recovered_waiting_runs = processor.recover_waiting_reuse_runs()
+        if recovered_waiting_runs:
+            logger.info("Recovered %s waiting reuse runs during startup.", recovered_waiting_runs)
         logger.info("Started monitoring queued_jobs directory")
 
         while True:

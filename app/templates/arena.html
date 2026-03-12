@@ -54,7 +54,17 @@
                             <option value="full_pipeline">Full Pipeline</option>
                             <option value="reuse_retrieval">Reuse Query Generation</option>
                         </select>
+                        <div id="executionModeNotice" class="helper-text" aria-live="polite"></div>
                     </div>
+                </div>
+                <div class="form-row">
+                    <label for="stopAfter">Stop After</label>
+                    <select id="stopAfter">
+                        <option value="query_generation">Query Generation</option>
+                        <option value="paper_analysis">Paper Analysis</option>
+                        <option value="venue_scoring">Venue Scoring</option>
+                        <option value="final_report" selected>Final Report</option>
+                    </select>
                 </div>
                 <div class="form-row">
                     <label for="claimInput">Claim</label>
@@ -114,6 +124,7 @@
         const stagedClaims = [];
         let preflightPayload = null;
         let candidateCounter = 0;
+        let executionModeWasAutoAdjusted = false;
 
         const stageConfig = [
             ['query_generation', 'Query Generation Model'],
@@ -138,6 +149,7 @@
         function providerModelNames(provider) {
             const models = Array.isArray(provider?.models) ? provider.models : [];
             return models
+                .filter(model => model && model.enabled !== false)
                 .map(model => String(model.model_name || '').trim())
                 .filter(Boolean);
         }
@@ -154,6 +166,32 @@
                 num_queries: parseInt(document.getElementById('numQueries').value || '5', 10),
                 results_per_query: parseInt(document.getElementById('resultsPerQuery').value || '5', 10),
             };
+        }
+
+        function syncExecutionModeSelection() {
+            const executionMode = document.getElementById('executionMode');
+            const stopAfter = document.getElementById('stopAfter');
+            const notice = document.getElementById('executionModeNotice');
+            const reuseOption = executionMode.querySelector('option[value="reuse_retrieval"]');
+            const stoppingAfterQueryGeneration = stopAfter.value === 'query_generation';
+            let autoAdjusted = false;
+
+            if (reuseOption) {
+                reuseOption.disabled = stoppingAfterQueryGeneration;
+            }
+
+            if (stoppingAfterQueryGeneration) {
+                if (executionMode.value === 'reuse_retrieval') {
+                    executionMode.value = 'full_pipeline';
+                    autoAdjusted = true;
+                }
+                executionModeWasAutoAdjusted = executionModeWasAutoAdjusted || autoAdjusted;
+                notice.textContent = 'Reuse Query Generation is unavailable when stopping after Query Generation. Full Pipeline will be used.';
+                return;
+            }
+
+            executionModeWasAutoAdjusted = false;
+            notice.textContent = 'Reuse Query Generation shares the first candidate\'s query-generation and retrieval outputs with later candidates to avoid repeating early-stage work.';
         }
 
         function setCandidateModelOptions(card) {
@@ -300,6 +338,9 @@
                 alert('Add claims and at least one candidate first.');
                 return;
             }
+            syncExecutionModeSelection();
+            const requestedExecutionMode = document.getElementById('executionMode').value;
+            const requestedStopAfter = document.getElementById('stopAfter').value;
             const response = await fetch('/api/v1/claims/preflight', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -307,7 +348,8 @@
                     claims: stagedClaims,
                     candidates,
                     search_config: searchConfig(),
-                    execution_mode: document.getElementById('executionMode').value,
+                    execution_mode: requestedExecutionMode,
+                    stop_after: requestedStopAfter,
                     duplicate_strategy: document.getElementById('duplicateStrategy').value,
                 }),
             });
@@ -327,6 +369,9 @@
             if (!data.totals.pricing_complete) {
                 warnings.push(`<div class="status-card error-card"><strong>Pricing metadata missing.</strong> Add costs for: ${escapeHtml(data.totals.missing_pricing_models.join(', '))} before submitting.</div>`);
             }
+            if (executionModeWasAutoAdjusted || requestedExecutionMode !== data.execution_mode || requestedStopAfter !== data.stop_after) {
+                warnings.push(`<div class="status-card info-card"><strong>Execution settings adjusted.</strong> Reuse Query Generation cannot be used when stopping after Query Generation, so Full Pipeline will be used instead.</div>`);
+            }
 
             document.getElementById('preflightPanel').classList.remove('hidden');
             document.getElementById('preflightPanel').innerHTML = `
@@ -337,6 +382,7 @@
                 <p><strong>Candidates:</strong> ${data.totals.candidate_count}</p>
                 <p><strong>Runs to create:</strong> ${data.totals.run_count}</p>
                 <p><strong>Execution mode:</strong> ${escapeHtml(data.execution_mode)}</p>
+                <p><strong>Stop after:</strong> ${escapeHtml(data.stop_after)}</p>
                 <p><strong>Batch tags:</strong> ${escapeHtml(parseBatchTags().join(', ') || 'none')}</p>
                 ${renderClaimPlanTable(data)}
                 ${renderCostTable(data)}
@@ -346,6 +392,7 @@
         }
 
         async function submitArena() {
+            syncExecutionModeSelection();
             const response = await fetch('/api/v1/arenas', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -355,6 +402,7 @@
                     candidates: collectCandidates(),
                     batch_tags: parseBatchTags(),
                     execution_mode: document.getElementById('executionMode').value,
+                    stop_after: document.getElementById('stopAfter').value,
                     duplicate_strategy: document.getElementById('duplicateStrategy').value,
                     search_config: searchConfig(),
                     cost_confirmation: {
@@ -427,12 +475,21 @@
         });
         document.getElementById('confirmCostBtn').addEventListener('click', () => submitArena().catch(error => alert(error.message)));
 
-        ['arenaTitle', 'batchTags', 'duplicateStrategy', 'executionMode', 'numQueries', 'resultsPerQuery'].forEach(id => {
+        ['arenaTitle', 'batchTags', 'duplicateStrategy', 'numQueries', 'resultsPerQuery'].forEach(id => {
             document.getElementById(id).addEventListener('change', invalidatePreflight);
+        });
+        document.getElementById('executionMode').addEventListener('change', () => {
+            syncExecutionModeSelection();
+            invalidatePreflight();
+        });
+        document.getElementById('stopAfter').addEventListener('change', () => {
+            syncExecutionModeSelection();
+            invalidatePreflight();
         });
 
         addCandidateCard();
         addCandidateCard();
+        syncExecutionModeSelection();
         renderClaims();
     </script>
 </body>

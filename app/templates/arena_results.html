@@ -11,7 +11,7 @@
         <header class="page-header">
             <div>
                 <h1>Arena Results</h1>
-                <p class="subtext">Side-by-side rating, cost, and settings review.</p>
+                <p class="subtext">Review current-stage outputs, pick winners, and continue stage by stage.</p>
             </div>
             <div class="nav-links">
                 <a href="/arena" class="nav-link">New Arena</a>
@@ -19,11 +19,14 @@
             </div>
         </header>
         <div id="arenaMeta" class="panel"></div>
+        <section id="continuationPanel" class="panel hidden"></section>
         <div id="arenaClaims"></div>
     </div>
 
     <script>
         const arenaId = '{{ arena_id }}';
+        let arenaData = null;
+        let continuationPreflight = null;
 
         function escapeHtml(value) {
             return String(value ?? '')
@@ -34,50 +37,215 @@
                 .replace(/'/g, '&#39;');
         }
 
-        function reportHref(run) {
-            if (!run.transport_batch_id || !run.transport_claim_id) return '#';
-            return run.report_available
-                ? `/results?batch_id=${encodeURIComponent(run.transport_batch_id)}&claim_id=${encodeURIComponent(run.transport_claim_id)}`
-                : `/progress?batch_id=${encodeURIComponent(run.transport_batch_id)}&claim_id=${encodeURIComponent(run.transport_claim_id)}`;
+        function stageLabel(stage) {
+            const labels = {
+                query_generation: 'Query Generation',
+                paper_analysis: 'Paper Analysis',
+                venue_scoring: 'Venue Scoring',
+                final_report: 'Final Report',
+            };
+            return labels[stage] || stage || 'Unknown';
         }
 
-        function modelSummary(run) {
-            const taskModels = ((run.effective_models || {}).task_models || {});
-            return Object.entries(taskModels)
-                .map(([task, model]) => `${task}: ${model}`)
-                .join(' | ');
+        function nextStage(stage) {
+            const ordered = ['query_generation', 'paper_analysis', 'venue_scoring', 'final_report'];
+            const index = ordered.indexOf(stage);
+            return index >= 0 && index < ordered.length - 1 ? ordered[index + 1] : null;
         }
 
-        async function loadArena() {
-            const response = await fetch(`/api/v1/arenas/${encodeURIComponent(arenaId)}`);
-            const data = await response.json();
-            if (!response.ok) throw new Error(data.error || 'Failed to load arena.');
+        function reviewHref(run, claimKey) {
+            if (run.report_available && run.transport_batch_id && run.transport_claim_id) {
+                return `/results?batch_id=${encodeURIComponent(run.transport_batch_id)}&claim_id=${encodeURIComponent(run.transport_claim_id)}`;
+            }
+            if (run.is_stage_checkpoint) {
+                return run.arena_id
+                    ? `/arena_results?arena_id=${encodeURIComponent(run.arena_id)}`
+                    : `/claims/${encodeURIComponent(claimKey)}`;
+            }
+            if (run.transport_batch_id && run.transport_claim_id) {
+                return `/progress?batch_id=${encodeURIComponent(run.transport_batch_id)}&claim_id=${encodeURIComponent(run.transport_claim_id)}`;
+            }
+            return `/claims/${encodeURIComponent(claimKey)}`;
+        }
 
-            document.getElementById('arenaMeta').innerHTML = `
-                <h2>${escapeHtml(data.title || data.arena_id)}</h2>
-                <p><strong>Execution mode:</strong> ${escapeHtml(data.execution_mode)}</p>
-                <p><strong>Candidates:</strong> ${data.candidates.length}</p>
-                <p><strong>Claims:</strong> ${data.claim_groups.length}</p>
-                <p><strong>Batch tags:</strong> ${escapeHtml((data.batch_tags || []).join(', ') || 'none')}</p>
+        function reviewLinkLabel(run) {
+            if (run.report_available) return 'Open report';
+            if (run.is_stage_checkpoint) return 'Open stage review';
+            return 'Open progress';
+        }
+
+        function renderQueryReview(run) {
+            const queries = run.claim_data?.semantic_scholar_queries || [];
+            return `
+                <p><strong>Queries:</strong> ${queries.length}</p>
+                <ul>${queries.map(query => `<li>${escapeHtml(query)}</li>`).join('') || '<li>No queries generated.</li>'}</ul>
             `;
+        }
 
-            const claimsHtml = data.claim_groups.map(group => `
-                <section class="panel">
-                    <h2>${escapeHtml(group.text)}</h2>
+        function renderPaperAnalysisReview(run) {
+            const claimData = run.claim_data || {};
+            const processed = claimData.processed_papers || [];
+            const nonRelevant = claimData.non_relevant_papers || [];
+            const inaccessible = claimData.inaccessible_papers || [];
+            return `
+                <p><strong>Relevant papers:</strong> ${processed.length}</p>
+                <p><strong>Non-relevant:</strong> ${nonRelevant.length}</p>
+                <p><strong>Inaccessible:</strong> ${inaccessible.length}</p>
+                <p><strong>Preview:</strong> ${escapeHtml(processed.slice(0, 3).map(item => item.paper?.title || item.paper?.corpusId || 'Paper').join(' | ') || 'None')}</p>
+            `;
+        }
+
+        function renderVenueReview(run) {
+            const scored = (run.claim_data?.processed_papers || []).filter(item => item.score !== undefined);
+            return `
+                <p><strong>Scored papers:</strong> ${scored.length}</p>
+                <p><strong>Preview:</strong> ${escapeHtml(scored.slice(0, 3).map(item => `${item.paper?.title || item.paper?.corpusId || 'Paper'} (${item.score ?? 'n/a'})`).join(' | ') || 'None')}</p>
+            `;
+        }
+
+        function renderFinalReview(run) {
+            return `
+                <p><strong>Rating:</strong> ${escapeHtml(run.rating_label)}${run.claimRating !== null && run.claimRating !== undefined ? ` (${run.claimRating})` : ''}</p>
+                <p><strong>Explanation:</strong> ${escapeHtml(run.report?.explanation || run.claim_data?.report?.explanation || 'No explanation available.')}</p>
+            `;
+        }
+
+        function renderStageReview(run) {
+            if (arenaData.current_stage === 'query_generation') return renderQueryReview(run);
+            if (arenaData.current_stage === 'paper_analysis') return renderPaperAnalysisReview(run);
+            if (arenaData.current_stage === 'venue_scoring') return renderVenueReview(run);
+            return renderFinalReview(run);
+        }
+
+        function canContinueArena() {
+            return Boolean(arenaData && nextStage(arenaData.current_stage));
+        }
+
+        function clearContinuationPreflight() {
+            continuationPreflight = null;
+            const preflight = document.getElementById('continuationPreflight');
+            if (preflight) preflight.remove();
+            const continueBtn = document.getElementById('continueArenaBtn');
+            if (continueBtn) continueBtn.disabled = true;
+        }
+
+        function collectDecisions() {
+            return (arenaData?.claim_groups || []).map(group => {
+                const container = document.querySelector(`[data-claim-group="${group.claim_key}"]`);
+                const skipInput = container?.querySelector('[data-skip-claim]');
+                const selectedRun = container?.querySelector('input[type="radio"]:checked');
+                return {
+                    claim_key: group.claim_key,
+                    skip_claim: Boolean(skipInput?.checked),
+                    selected_run_id: skipInput?.checked ? null : (selectedRun?.value || null),
+                };
+            });
+        }
+
+        function renderContinuationPanel() {
+            const panel = document.getElementById('continuationPanel');
+            if (!canContinueArena()) {
+                panel.classList.add('hidden');
+                panel.innerHTML = '';
+                return;
+            }
+            panel.classList.remove('hidden');
+            panel.innerHTML = `
+                <h2>Continue Arena</h2>
+                <p><strong>Current stage:</strong> ${escapeHtml(stageLabel(arenaData.current_stage))}</p>
+                <p><strong>Next stage:</strong> ${escapeHtml(stageLabel(nextStage(arenaData.current_stage)))}</p>
+                <div class="inline-actions">
+                    <button type="button" id="preflightContinuationBtn" class="secondary-button">Estimate Next Stage</button>
+                    <button type="button" id="continueArenaBtn" class="primary-button" disabled>Continue Arena</button>
+                </div>
+            `;
+            document.getElementById('preflightContinuationBtn').addEventListener('click', () => preflightContinuation().catch(error => alert(error.message)));
+            document.getElementById('continueArenaBtn').addEventListener('click', () => continueArena().catch(error => alert(error.message)));
+        }
+
+        function renderContinuationPreflight(data) {
+            const warnings = [];
+            if (!data.totals.pricing_complete) {
+                warnings.push(`<div class="status-card error-card"><strong>Pricing metadata missing.</strong> Add costs for: ${escapeHtml(data.totals.missing_pricing_models.join(', '))} before continuing.</div>`);
+            }
+            const existing = document.getElementById('continuationPreflight');
+            if (existing) existing.remove();
+            const panel = document.getElementById('continuationPanel');
+            const block = document.createElement('div');
+            block.id = 'continuationPreflight';
+            block.innerHTML = `
+                ${warnings.join('')}
+                <p><strong>Claims selected:</strong> ${data.totals.run_count}</p>
+                <p><strong>Expected total:</strong> $${data.totals.expected_cost_usd.toFixed(4)}</p>
+                <p><strong>Upper bound:</strong> $${data.totals.upper_bound_cost_usd.toFixed(4)}</p>
+            `;
+            panel.appendChild(block);
+            document.getElementById('continueArenaBtn').disabled = !data.totals.pricing_complete;
+        }
+
+        async function preflightContinuation() {
+            const response = await fetch(`/api/v1/arenas/${encodeURIComponent(arenaId)}/continue/preflight`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ decisions: collectDecisions() }),
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Failed to estimate continuation.');
+            continuationPreflight = data;
+            renderContinuationPreflight(data);
+        }
+
+        async function continueArena() {
+            if (!continuationPreflight) {
+                alert('Estimate the next stage first.');
+                return;
+            }
+            const response = await fetch(`/api/v1/arenas/${encodeURIComponent(arenaId)}/continue`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    decisions: collectDecisions(),
+                    cost_confirmation: {
+                        accepted: true,
+                        expected_cost_usd: continuationPreflight.totals.expected_cost_usd,
+                        upper_bound_cost_usd: continuationPreflight.totals.upper_bound_cost_usd,
+                    },
+                }),
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Failed to continue arena.');
+            window.location.href = `/arena_results?arena_id=${encodeURIComponent(data.arena_id)}`;
+        }
+
+        function renderClaimGroups() {
+            const claimsHtml = (arenaData.claim_groups || []).map(group => `
+                <section class="panel" data-claim-group="${escapeHtml(group.claim_key)}">
+                    <div class="panel-header-row">
+                        <h2>${escapeHtml(group.text)}</h2>
+                        <label class="checkbox-row">
+                            <input type="checkbox" data-skip-claim>
+                            <span>Skip this claim in the next stage</span>
+                        </label>
+                    </div>
                     <div class="comparison-grid">
-                        ${group.runs.map(run => `
+                        ${(group.runs || []).map((run, index) => `
                             <article class="comparison-card">
+                                ${canContinueArena() ? `
+                                    <label class="checkbox-row">
+                                        <input type="radio" name="winner-${escapeHtml(group.claim_key)}" value="${escapeHtml(run.run_id)}" ${index === 0 && group.runs.length === 1 ? 'checked' : ''}>
+                                        <span>Select winner</span>
+                                    </label>
+                                ` : ''}
                                 <h3>${escapeHtml(run.provider_label || run.provider_type || run.default_model || run.run_id)}</h3>
                                 <p><strong>Status:</strong> ${escapeHtml(run.status)}</p>
-                                <p><strong>Rating:</strong> ${escapeHtml(run.rating_label)}${run.claimRating !== null && run.claimRating !== undefined ? ` (${run.claimRating})` : ''}</p>
+                                <p><strong>Stage:</strong> ${escapeHtml(run.completed_stage_label || stageLabel(arenaData.current_stage))}</p>
                                 <p><strong>Execution:</strong> ${escapeHtml(run.execution_mode)}</p>
+                                <p><strong>Stop after:</strong> ${escapeHtml(run.stop_after)}</p>
                                 <p><strong>Expected Cost:</strong> $${(((run.cost_estimate || {}).expected || {}).cost_usd || 0).toFixed(4)}</p>
                                 <p><strong>Actual Cost:</strong> $${((run.usage || {}).cost_usd || 0).toFixed(4)}</p>
-                                <p><strong>Issues:</strong> ${run.issues_count || 0}</p>
-                                <p><strong>Models:</strong> ${escapeHtml(modelSummary(run) || 'provider defaults')}</p>
-                                <p><strong>Search:</strong> ${escapeHtml(JSON.stringify(run.search_config || {}))}</p>
-                                <p><strong>Batch Tags:</strong> ${escapeHtml((run.batch_tags || []).join(', ') || 'none')}</p>
-                                <p><a href="${reportHref(run)}">${run.report_available ? 'Open report' : 'Open progress'}</a></p>
+                                <p><strong>Models:</strong> ${escapeHtml(Object.entries((run.effective_models || {}).task_models || {}).map(([task, model]) => `${task}: ${model}`).join(' | ') || 'provider defaults')}</p>
+                                ${renderStageReview(run)}
+                                <p><a href="${reviewHref(run, group.claim_key)}">${reviewLinkLabel(run)}</a></p>
                                 <p><a href="/claims/${encodeURIComponent(group.claim_key)}">Claim detail</a></p>
                             </article>
                         `).join('')}
@@ -86,6 +254,36 @@
             `).join('');
 
             document.getElementById('arenaClaims').innerHTML = claimsHtml || '<div class="panel">No arena results found.</div>';
+            document.querySelectorAll('[data-skip-claim], input[type="radio"]').forEach(input => {
+                input.addEventListener('change', clearContinuationPreflight);
+            });
+            document.querySelectorAll('[data-skip-claim]').forEach(input => {
+                input.addEventListener('change', (event) => {
+                    const group = event.target.closest('[data-claim-group]');
+                    group.querySelectorAll('input[type="radio"]').forEach(radio => {
+                        radio.disabled = event.target.checked;
+                    });
+                });
+            });
+        }
+
+        async function loadArena() {
+            const response = await fetch(`/api/v1/arenas/${encodeURIComponent(arenaId)}`);
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Failed to load arena.');
+            arenaData = data;
+
+            document.getElementById('arenaMeta').innerHTML = `
+                <h2>${escapeHtml(data.title || data.arena_id)}</h2>
+                <p><strong>Execution mode:</strong> ${escapeHtml(data.execution_mode)}</p>
+                <p><strong>Current stage:</strong> ${escapeHtml(stageLabel(data.current_stage))}</p>
+                <p><strong>Candidates in round:</strong> ${data.claim_groups.reduce((sum, group) => Math.max(sum, group.runs.length), 0)}</p>
+                <p><strong>Claims in round:</strong> ${(data.claim_groups || []).length}</p>
+                <p><strong>Batch tags:</strong> ${escapeHtml((data.batch_tags || []).join(', ') || 'none')}</p>
+            `;
+
+            renderContinuationPanel();
+            renderClaimGroups();
         }
 
         loadArena().catch(error => {

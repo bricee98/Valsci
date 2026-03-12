@@ -10,6 +10,7 @@ from app import create_app
 from app.api import routes as routes_module
 from app.config.settings import Config
 from app.services.claim_store import ClaimStore, claim_key_for_text
+from app.services.llm.types import empty_usage
 from app.services.provider_catalog import ProviderCatalog
 
 
@@ -39,6 +40,74 @@ def create_test_client(monkeypatch, tmp_path: Path):
     app.config["STATE_DIR"] = str(state_dir)
     app.config["PROVIDER_CATALOG_PATH"] = str(provider_catalog_path)
     return app.test_client(), saved_jobs_dir, queued_jobs_dir, state_dir, provider_catalog_path
+
+
+def seed_stage_checkpoint_run(
+    store: ClaimStore,
+    saved_jobs_dir: Path,
+    *,
+    arena_id: str,
+    claim_text: str,
+    provider_snapshot: dict,
+    stop_after: str = "query_generation",
+):
+    claim_record, _ = store.get_or_create_claim(claim_text, batch_tags=[arena_id])
+    run_record = store.create_run(
+        claim_record=claim_record,
+        batch_tags=[arena_id],
+        arena_id=arena_id,
+        execution_mode="full_pipeline",
+        stop_after=stop_after,
+        provider_snapshot=provider_snapshot,
+        cost_confirmation={"accepted": True},
+        transport_batch_id=arena_id,
+        review_type="regular",
+        status="processed",
+        source="arena",
+        completed_stage=stop_after,
+        is_stage_checkpoint=(stop_after != "final_report"),
+    )
+    claim_data = {
+        "text": claim_text,
+        "status": "processed",
+        "batch_id": arena_id,
+        "claim_id": run_record["run_id"],
+        "run_id": run_record["run_id"],
+        "claim_key": claim_record["claim_key"],
+        "arena_id": arena_id,
+        "review_type": "regular",
+        "execution_mode": "full_pipeline",
+        "stop_after": stop_after,
+        "completed_stage": stop_after,
+        "is_stage_checkpoint": stop_after != "final_report",
+        "provider_snapshot": provider_snapshot,
+        "model_overrides": {},
+        "search_config": {"num_queries": 5, "results_per_query": 5},
+        "bibliometric_config": {"use_bibliometrics": True},
+        "usage": empty_usage(),
+        "usage_by_stage": {},
+        "semantic_scholar_queries": ["query one", "query two"],
+    }
+    if stop_after in {"paper_analysis", "venue_scoring", "final_report"}:
+        claim_data["raw_papers"] = [{"corpusId": 1, "title": "Paper A"}]
+        claim_data["processed_papers"] = [
+            {
+                "paper": {"corpusId": 1, "title": "Paper A"},
+                "relevance": 0.8,
+                "excerpts": ["Excerpt"],
+                "explanations": ["Explanation"],
+                "score": 0.6 if stop_after in {"venue_scoring", "final_report"} else -1,
+                "score_status": "completed" if stop_after in {"venue_scoring", "final_report"} else "pending",
+            }
+        ]
+        claim_data["non_relevant_papers"] = []
+        claim_data["inaccessible_papers"] = []
+        claim_data["failed_papers"] = []
+    claim_path = saved_jobs_dir / arena_id / f"{run_record['run_id']}.txt"
+    claim_path.parent.mkdir(parents=True, exist_ok=True)
+    claim_path.write_text(json.dumps(claim_data, indent=2), encoding="utf-8")
+    store.ingest_transport_artifact(arena_id, run_record["run_id"])
+    return store.get_run(run_record["run_id"])
 
 
 def test_claim_key_normalization_collapses_case_and_whitespace():
@@ -161,6 +230,26 @@ def test_reuse_retrieval_preflight_only_charges_query_generation_once(monkeypatc
     assert baseline_run["estimate"]["expected"]["stages"]["query_generation"]["cost_usd"] > 0
     assert reused_run["estimate"]["expected"]["stages"]["query_generation"]["cost_usd"] == 0
     assert reused_run["estimate"]["expected"]["stages"]["query_generation"]["skipped"] is True
+
+
+def test_preflight_stop_after_skips_later_stages(monkeypatch, tmp_path):
+    client, _, _, _, _ = create_test_client(monkeypatch, tmp_path)
+
+    response = client.post(
+        "/api/v1/claims/preflight",
+        json={
+            "claims": ["Creatine improves short-term memory."],
+            "stop_after": "paper_analysis",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    stages = payload["candidates"][0]["runs"][0]["estimate"]["expected"]["stages"]
+    assert payload["stop_after"] == "paper_analysis"
+    assert stages["query_generation"]["skipped"] is False
+    assert stages["venue_scoring"]["skipped"] is True
+    assert stages["final_report"]["skipped"] is True
 
 
 def test_create_runs_persists_state_and_queue_file(monkeypatch, tmp_path):
@@ -299,6 +388,39 @@ def test_create_arena_supports_multiple_provider_snapshots(monkeypatch, tmp_path
     assert providers == {"default", "openrouter-alt"}
 
 
+def test_create_arena_persists_stage_history_for_stop_after(monkeypatch, tmp_path):
+    client, saved_jobs_dir, queued_jobs_dir, state_dir, provider_catalog_path = create_test_client(monkeypatch, tmp_path)
+
+    response = client.post(
+        "/api/v1/arenas",
+        json={
+            "title": "Query Stage Arena",
+            "claims": ["Creatine improves short-term memory."],
+            "candidates": [{"provider_id": "default"}],
+            "execution_mode": "reuse_retrieval",
+            "stop_after": "query_generation",
+            "cost_confirmation": {"accepted": True},
+        },
+    )
+
+    assert response.status_code == 202
+    payload = response.get_json()
+    assert payload["execution_mode"] == "full_pipeline"
+    assert payload["stop_after"] == "query_generation"
+
+    store = ClaimStore(
+        state_dir=str(state_dir),
+        saved_jobs_dir=str(saved_jobs_dir),
+        queued_jobs_dir=str(queued_jobs_dir),
+        trace_dir=str(saved_jobs_dir),
+    )
+    arena = store.get_arena(payload["arena_id"])
+    assert arena["current_stage"] == "query_generation"
+    assert arena["stage_history"][-1]["stage"] == "query_generation"
+    run = store.get_run(payload["created_runs"][0]["run_id"])
+    assert run["stop_after"] == "query_generation"
+
+
 def test_create_arena_can_compare_same_provider_with_different_candidate_labels(monkeypatch, tmp_path):
     client, saved_jobs_dir, queued_jobs_dir, state_dir, provider_catalog_path = create_test_client(monkeypatch, tmp_path)
 
@@ -383,6 +505,132 @@ def test_reuse_retrieval_only_queues_baseline_run_initially(monkeypatch, tmp_pat
     queued_claim_files = [path for path in queued_files if path.name != "claims.txt"]
     assert len(queued_claim_files) == 1
 
+
+def test_batch_state_counts_stage_checkpoint_as_completed(monkeypatch, tmp_path):
+    client, saved_jobs_dir, queued_jobs_dir, state_dir, provider_catalog_path = create_test_client(monkeypatch, tmp_path)
+    store = ClaimStore(
+        state_dir=str(state_dir),
+        saved_jobs_dir=str(saved_jobs_dir),
+        queued_jobs_dir=str(queued_jobs_dir),
+        trace_dir=str(saved_jobs_dir),
+    )
+    arena = store.create_arena(title="Checkpoint Arena", batch_tags=["checkpoint-batch"], current_stage="query_generation")
+    run = seed_stage_checkpoint_run(
+        store,
+        saved_jobs_dir,
+        arena_id=arena["arena_id"],
+        claim_text="Creatine improves memory.",
+        provider_snapshot=ProviderCatalog(str(provider_catalog_path)).build_snapshot("default"),
+        stop_after="query_generation",
+    )
+    arena["claim_keys"] = [run["claim_key"]]
+    store.append_arena_stage_history(
+        arena,
+        stage="query_generation",
+        run_ids=[run["run_id"]],
+        source="initial_submit",
+    )
+
+    batch_state = store.build_batch_state(arena["arena_id"])
+
+    assert batch_state["status"] == "completed"
+    assert batch_state["processed_claims"] == 1
+    assert batch_state["claims"][0]["checkpoint_complete"] is True
+
+
+def test_continue_arena_endpoints_create_seeded_next_stage_runs(monkeypatch, tmp_path):
+    client, saved_jobs_dir, queued_jobs_dir, state_dir, provider_catalog_path = create_test_client(monkeypatch, tmp_path)
+    store = ClaimStore(
+        state_dir=str(state_dir),
+        saved_jobs_dir=str(saved_jobs_dir),
+        queued_jobs_dir=str(queued_jobs_dir),
+        trace_dir=str(saved_jobs_dir),
+    )
+    arena = store.create_arena(
+        title="Checkpoint Arena",
+        batch_tags=["checkpoint-batch"],
+        execution_mode="full_pipeline",
+        current_stage="query_generation",
+        candidates=[
+            {"candidate_id": "candidate-0", "provider_id": "default", "label": "Baseline"},
+            {"candidate_id": "candidate-1", "provider_id": "default", "label": "Alt"},
+        ],
+    )
+    default_snapshot = ProviderCatalog(str(provider_catalog_path)).build_snapshot("default")
+    claim_one_run_a = seed_stage_checkpoint_run(
+        store,
+        saved_jobs_dir,
+        arena_id=arena["arena_id"],
+        claim_text="Creatine improves memory.",
+        provider_snapshot={**default_snapshot, "label": "Baseline"},
+        stop_after="query_generation",
+    )
+    claim_one_run_b = seed_stage_checkpoint_run(
+        store,
+        saved_jobs_dir,
+        arena_id=arena["arena_id"],
+        claim_text="Creatine improves memory.",
+        provider_snapshot={**default_snapshot, "label": "Alt"},
+        stop_after="query_generation",
+    )
+    claim_two_run = seed_stage_checkpoint_run(
+        store,
+        saved_jobs_dir,
+        arena_id=arena["arena_id"],
+        claim_text="Vitamin D reduces falls.",
+        provider_snapshot={**default_snapshot, "label": "Baseline"},
+        stop_after="query_generation",
+    )
+    arena["claim_keys"] = [claim_one_run_a["claim_key"], claim_two_run["claim_key"]]
+    store.append_arena_stage_history(
+        arena,
+        stage="query_generation",
+        run_ids=[claim_one_run_a["run_id"], claim_one_run_b["run_id"], claim_two_run["run_id"]],
+        source="initial_submit",
+    )
+
+    preflight_response = client.post(
+        f"/api/v1/arenas/{arena['arena_id']}/continue/preflight",
+        json={
+            "decisions": [
+                {"claim_key": claim_one_run_a["claim_key"], "selected_run_id": claim_one_run_b["run_id"]},
+                {"claim_key": claim_two_run["claim_key"], "skip_claim": True},
+            ]
+        },
+    )
+
+    assert preflight_response.status_code == 200
+    preflight_payload = preflight_response.get_json()
+    assert preflight_payload["next_stage"] == "paper_analysis"
+    assert preflight_payload["totals"]["run_count"] == 1
+
+    continue_response = client.post(
+        f"/api/v1/arenas/{arena['arena_id']}/continue",
+        json={
+            "decisions": [
+                {"claim_key": claim_one_run_a["claim_key"], "selected_run_id": claim_one_run_b["run_id"]},
+                {"claim_key": claim_two_run["claim_key"], "skip_claim": True},
+            ],
+            "cost_confirmation": {"accepted": True},
+        },
+    )
+
+    assert continue_response.status_code == 202
+    continue_payload = continue_response.get_json()
+    assert len(continue_payload["created_runs"]) == 1
+    created_run = continue_payload["created_runs"][0]
+    assert created_run["stop_after"] == "paper_analysis"
+    assert created_run["seed_from_run_id"] == claim_one_run_b["run_id"]
+
+    queued_path = queued_jobs_dir / arena["arena_id"] / f"{created_run['run_id']}.txt"
+    queued_payload = json.loads(queued_path.read_text(encoding="utf-8"))
+    assert queued_payload["status"] == "ready_for_search"
+    assert queued_payload["seed_from_run_id"] == claim_one_run_b["run_id"]
+    assert queued_payload["stop_after"] == "paper_analysis"
+
+    updated_arena = store.get_arena(arena["arena_id"])
+    assert updated_arena["current_stage"] == "paper_analysis"
+    assert updated_arena["stage_history"][-1]["stage"] == "paper_analysis"
 
 def test_migration_route_imports_legacy_saved_claim(monkeypatch, tmp_path):
     client, saved_jobs_dir, queued_jobs_dir, state_dir, provider_catalog_path = create_test_client(monkeypatch, tmp_path)

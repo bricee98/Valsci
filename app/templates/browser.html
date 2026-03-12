@@ -51,10 +51,21 @@
         }
 
         function latestRunLink(latestRun) {
-            if (!latestRun || !latestRun.transport_batch_id || !latestRun.transport_claim_id) return '#';
+            if (!latestRun) return '#';
+            if (latestRun.is_stage_checkpoint) {
+                return latestRun.arena_id
+                    ? `/arena_results?arena_id=${encodeURIComponent(latestRun.arena_id)}`
+                    : `/claims/${encodeURIComponent(latestRun.claim_key)}`;
+            }
+            if (!latestRun.transport_batch_id || !latestRun.transport_claim_id) return '#';
             return latestRun.report_available
                 ? `/results?batch_id=${encodeURIComponent(latestRun.transport_batch_id)}&claim_id=${encodeURIComponent(latestRun.transport_claim_id)}`
                 : `/progress?batch_id=${encodeURIComponent(latestRun.transport_batch_id)}&claim_id=${encodeURIComponent(latestRun.transport_claim_id)}`;
+        }
+
+        function latestRunLinkLabel(latestRun) {
+            if (latestRun?.is_stage_checkpoint) return 'Stage Review';
+            return latestRun?.report_available ? 'Latest Report' : 'Latest Progress';
         }
 
         async function loadClaims() {
@@ -74,7 +85,7 @@
                     ` : '<p class="helper-text">No runs yet.</p>'}
                     <div class="inline-actions">
                         <a href="/claims/${encodeURIComponent(claim.claim_key)}" class="primary-button">Open Claim</a>
-                        ${claim.latest_run ? `<a href="${latestRunLink(claim.latest_run)}" class="secondary-button">${claim.latest_run.report_available ? 'Latest Report' : 'Latest Progress'}</a>` : ''}
+                        ${claim.latest_run ? `<a href="${latestRunLink(claim.latest_run)}" class="secondary-button">${latestRunLinkLabel(claim.latest_run)}</a>` : ''}
                     </div>
                 </article>
             `).join('') || '<div class="panel helper-text">No claims found.</div>';

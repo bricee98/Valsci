@@ -189,6 +189,7 @@
         function providerModelNames(provider) {
             const models = Array.isArray(provider?.models) ? provider.models : [];
             return models
+                .filter(model => model && model.enabled !== false)
                 .map(model => String(model.model_name || '').trim())
                 .filter(Boolean);
         }

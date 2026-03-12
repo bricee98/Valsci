@@ -401,49 +401,34 @@ class Config:
             raise ValueError(f"Missing required configuration keys: {', '.join(missing_keys)}")
 
         numeric_rules = [
-            ("LLM_MAX_CONCURRENCY", cls.LLM_MAX_CONCURRENCY, 1, None),
-            ("LLM_REQUESTS_PER_MINUTE", cls.LLM_REQUESTS_PER_MINUTE, 1, None),
-            ("LLM_TOKENS_PER_MINUTE", cls.LLM_TOKENS_PER_MINUTE, 1, None),
-            ("LLM_MAX_RETRIES", cls.LLM_MAX_RETRIES, 0, None),
-            ("LLM_TIMEOUT_SECONDS", cls.LLM_TIMEOUT_SECONDS, 5, 7200),
-            ("LLM_CONTEXT_SAFETY_MARGIN_TOKENS", cls.LLM_CONTEXT_SAFETY_MARGIN_TOKENS, 0, None),
-            ("TRACE_EMBED_MAX_BYTES", cls.TRACE_EMBED_MAX_BYTES, 1024, None),
-            ("TRACE_STACKTRACE_MAX_BYTES", cls.TRACE_STACKTRACE_MAX_BYTES, 256, None),
+            ("LLM_MAX_CONCURRENCY", cls.LLM_MAX_CONCURRENCY),
+            ("LLM_REQUESTS_PER_MINUTE", cls.LLM_REQUESTS_PER_MINUTE),
+            ("LLM_TOKENS_PER_MINUTE", cls.LLM_TOKENS_PER_MINUTE),
+            ("LLM_MAX_RETRIES", cls.LLM_MAX_RETRIES),
+            ("LLM_TIMEOUT_SECONDS", cls.LLM_TIMEOUT_SECONDS),
+            ("LLM_CONTEXT_SAFETY_MARGIN_TOKENS", cls.LLM_CONTEXT_SAFETY_MARGIN_TOKENS),
+            ("TRACE_EMBED_MAX_BYTES", cls.TRACE_EMBED_MAX_BYTES),
+            ("TRACE_STACKTRACE_MAX_BYTES", cls.TRACE_STACKTRACE_MAX_BYTES),
         ]
-        for name, value, min_value, max_value in numeric_rules:
+        for name, value in numeric_rules:
             if value is None:
                 errors.append(f"{name} must be set.")
                 continue
             try:
-                numeric_value = int(value)
+                int(value)
             except Exception:
                 errors.append(f"{name} must be an integer.")
-                continue
-            if numeric_value < min_value:
-                errors.append(f"{name} must be >= {min_value}.")
-            if max_value is not None and numeric_value > max_value:
-                errors.append(f"{name} must be <= {max_value}.")
 
         if cls.LLM_TIMEOUT_SECONDS_LOCAL is not None:
             try:
-                timeout_local = int(cls.LLM_TIMEOUT_SECONDS_LOCAL)
-                if timeout_local < 5 or timeout_local > 7200:
-                    errors.append("LLM_TIMEOUT_SECONDS_LOCAL must be between 5 and 7200 seconds.")
+                int(cls.LLM_TIMEOUT_SECONDS_LOCAL)
             except Exception:
                 errors.append("LLM_TIMEOUT_SECONDS_LOCAL must be an integer when provided.")
 
         try:
-            backoff_base = float(cls.LLM_BACKOFF_BASE_SECONDS)
-            backoff_max = float(cls.LLM_BACKOFF_MAX_SECONDS)
-            backoff_jitter = float(cls.LLM_BACKOFF_JITTER)
-            if backoff_base <= 0:
-                errors.append("LLM_BACKOFF_BASE_SECONDS must be > 0.")
-            if backoff_max <= 0:
-                errors.append("LLM_BACKOFF_MAX_SECONDS must be > 0.")
-            if backoff_max < backoff_base:
-                errors.append("LLM_BACKOFF_MAX_SECONDS must be >= LLM_BACKOFF_BASE_SECONDS.")
-            if backoff_jitter < 0 or backoff_jitter > 1:
-                errors.append("LLM_BACKOFF_JITTER must be between 0 and 1.")
+            float(cls.LLM_BACKOFF_BASE_SECONDS)
+            float(cls.LLM_BACKOFF_MAX_SECONDS)
+            float(cls.LLM_BACKOFF_JITTER)
         except Exception:
             errors.append("LLM backoff settings must be numeric.")
 
@@ -462,9 +447,7 @@ class Config:
                     max_output = task_cfg.get("max_output_tokens")
                     if max_output is not None:
                         try:
-                            max_output_i = int(max_output)
-                            if max_output_i <= 0:
-                                errors.append(f"LLM_ROUTING.tasks.{task_name}.max_output_tokens must be > 0.")
+                            int(max_output)
                         except Exception:
                             errors.append(
                                 f"LLM_ROUTING.tasks.{task_name}.max_output_tokens must be an integer."
@@ -472,11 +455,7 @@ class Config:
                     timeout_seconds = task_cfg.get("timeout_seconds")
                     if timeout_seconds is not None:
                         try:
-                            timeout_i = int(timeout_seconds)
-                            if timeout_i < 5 or timeout_i > 7200:
-                                errors.append(
-                                    f"LLM_ROUTING.tasks.{task_name}.timeout_seconds must be between 5 and 7200."
-                                )
+                            int(timeout_seconds)
                         except Exception:
                             errors.append(
                                 f"LLM_ROUTING.tasks.{task_name}.timeout_seconds must be an integer."

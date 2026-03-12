@@ -13,6 +13,14 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from app.config.settings import Config
 from app.services.llm.types import empty_usage
+from app.services.stage_execution import (
+    checkpoint_complete,
+    continue_stage_for_run,
+    normalize_stop_after,
+    review_value_for_stage,
+    stage_label,
+    is_stage_checkpoint as stage_is_checkpoint,
+)
 
 
 WHITESPACE_RE = re.compile(r"\s+")
@@ -211,6 +219,7 @@ class ClaimStore:
         batch_tags: Optional[Iterable[str]] = None,
         arena_id: Optional[str] = None,
         execution_mode: str = "full_pipeline",
+        stop_after: str = "final_report",
         provider_snapshot: Optional[Dict[str, Any]] = None,
         model_overrides: Optional[Dict[str, str]] = None,
         search_config: Optional[Dict[str, Any]] = None,
@@ -224,10 +233,14 @@ class ClaimStore:
         source: str = "submit",
         legacy_lookup: Optional[Dict[str, str]] = None,
         initial_claim_data: Optional[Dict[str, Any]] = None,
+        completed_stage: Optional[str] = None,
+        is_stage_checkpoint: Optional[bool] = None,
+        seed_from_run_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         run_id = transport_claim_id or uuid.uuid4().hex[:12]
         created_at = utc_now_iso()
         provider_snapshot = dict(provider_snapshot or {})
+        stop_after = normalize_stop_after(stop_after)
         if provider_snapshot.get("default_model") and not provider_snapshot.get("task_defaults"):
             provider_snapshot["task_defaults"] = {"default": provider_snapshot["default_model"]}
         run_record = {
@@ -241,6 +254,14 @@ class ClaimStore:
             "review_type": review_type,
             "source": source,
             "execution_mode": execution_mode,
+            "stop_after": stop_after,
+            "completed_stage": completed_stage,
+            "is_stage_checkpoint": (
+                bool(is_stage_checkpoint)
+                if is_stage_checkpoint is not None
+                else stage_is_checkpoint(stop_after)
+            ),
+            "seed_from_run_id": seed_from_run_id,
             "batch_tags": _dedupe_str_list(batch_tags or []),
             "arena_id": arena_id,
             "provider_snapshot": provider_snapshot,
@@ -276,6 +297,8 @@ class ClaimStore:
         arena_record["updated_at"] = utc_now_iso()
         arena_record["claim_keys"] = _dedupe_str_list(arena_record.get("claim_keys", []))
         arena_record["run_ids"] = _dedupe_str_list(arena_record.get("run_ids", []))
+        arena_record["current_stage"] = normalize_stop_after(arena_record.get("current_stage"))
+        arena_record["stage_history"] = list(arena_record.get("stage_history") or [])
         _atomic_write_json(self._arena_path(arena_record["arena_id"]), arena_record)
         return arena_record
 
@@ -285,9 +308,11 @@ class ClaimStore:
         title: str,
         batch_tags: Optional[Iterable[str]] = None,
         execution_mode: str = "full_pipeline",
+        current_stage: str = "final_report",
         candidates: Optional[List[Dict[str, Any]]] = None,
         claim_keys: Optional[Iterable[str]] = None,
         run_ids: Optional[Iterable[str]] = None,
+        stage_history: Optional[List[Dict[str, Any]]] = None,
         source: str = "arena_submit",
     ) -> Dict[str, Any]:
         created_at = utc_now_iso()
@@ -298,11 +323,39 @@ class ClaimStore:
             "updated_at": created_at,
             "batch_tags": _dedupe_str_list(batch_tags or []),
             "execution_mode": execution_mode,
+            "current_stage": normalize_stop_after(current_stage),
             "candidates": list(candidates or []),
             "claim_keys": _dedupe_str_list(claim_keys or []),
             "run_ids": _dedupe_str_list(run_ids or []),
+            "stage_history": list(stage_history or []),
             "source": source,
         }
+        return self.save_arena(arena_record)
+
+    def append_arena_stage_history(
+        self,
+        arena_record: Dict[str, Any],
+        *,
+        stage: str,
+        run_ids: Iterable[str],
+        continue_decisions: Optional[List[Dict[str, Any]]] = None,
+        source: str,
+    ) -> Dict[str, Any]:
+        arena_record = dict(arena_record)
+        history = list(arena_record.get("stage_history") or [])
+        normalized_run_ids = _dedupe_str_list(run_ids)
+        history.append(
+            {
+                "stage": normalize_stop_after(stage),
+                "run_ids": normalized_run_ids,
+                "continue_decisions": list(continue_decisions or []),
+                "source": source,
+                "created_at": utc_now_iso(),
+            }
+        )
+        arena_record["current_stage"] = normalize_stop_after(stage)
+        arena_record["stage_history"] = history
+        arena_record["run_ids"] = _dedupe_str_list([*(arena_record.get("run_ids", [])), *normalized_run_ids])
         return self.save_arena(arena_record)
 
     def get_arena(self, arena_id: str) -> Optional[Dict[str, Any]]:
@@ -311,8 +364,12 @@ class ClaimStore:
             return None
         arena = _read_json(path)
         run_map = {run["run_id"]: run for run in self.list_runs() if run.get("arena_id") == arena_id}
+        stage_history = list(arena.get("stage_history") or [])
+        current_run_ids = list(arena.get("run_ids", []))
+        if stage_history:
+            current_run_ids = list(stage_history[-1].get("run_ids") or current_run_ids)
         claim_groups: Dict[str, Dict[str, Any]] = {}
-        for run_id in arena.get("run_ids", []):
+        for run_id in current_run_ids:
             run = run_map.get(run_id) or self.get_run(run_id)
             if not run:
                 continue
@@ -325,11 +382,13 @@ class ClaimStore:
                     "runs": [],
                 },
             )
-            claim_entry["runs"].append(self.build_run_summary(run))
+            claim_entry["runs"].append(self.hydrate_run(run))
         arena["claim_groups"] = sorted(
             claim_groups.values(),
             key=lambda item: (item.get("text", ""), item.get("claim_key", "")),
         )
+        arena["current_stage"] = normalize_stop_after(arena.get("current_stage"))
+        arena["stage_history"] = stage_history
         return arena
 
     @staticmethod
@@ -359,6 +418,8 @@ class ClaimStore:
         usage = report.get("usage_summary") or run_record.get("usage") or empty_usage()
         transport = run_record.get("transport") or {}
         provider_snapshot = run_record.get("provider_snapshot") or {}
+        stop_after = normalize_stop_after(run_record.get("stop_after"))
+        completed_stage = run_record.get("completed_stage")
         return {
             "run_id": run_record.get("run_id"),
             "claim_key": run_record.get("claim_key"),
@@ -368,6 +429,12 @@ class ClaimStore:
             "batch_tags": run_record.get("batch_tags", []),
             "arena_id": run_record.get("arena_id"),
             "execution_mode": run_record.get("execution_mode", "full_pipeline"),
+            "stop_after": stop_after,
+            "completed_stage": completed_stage,
+            "completed_stage_label": stage_label(completed_stage),
+            "is_stage_checkpoint": bool(run_record.get("is_stage_checkpoint")),
+            "seed_from_run_id": run_record.get("seed_from_run_id"),
+            "continue_to_stage": continue_stage_for_run(run_record),
             "source": run_record.get("source"),
             "provider_id": provider_snapshot.get("provider_id"),
             "provider_label": provider_snapshot.get("label"),
@@ -383,6 +450,7 @@ class ClaimStore:
             "claimRating": report.get("claimRating"),
             "rating_label": self.rating_label(report.get("claimRating")),
             "report_available": bool(run_record.get("report_available")),
+            "checkpoint_complete": checkpoint_complete(run_record),
             "usage": usage,
             "usage_by_stage": run_record.get("usage_by_stage") or {},
             "issues_count": len((report.get("issues") or [])),
@@ -393,6 +461,32 @@ class ClaimStore:
             "updated_at": run_record.get("updated_at"),
             "location": run_record.get("location"),
         }
+
+    def hydrate_run(self, run_record: Dict[str, Any]) -> Dict[str, Any]:
+        summary = self.build_run_summary(run_record)
+        claim_data = run_record.get("claim_data") or self.load_claim_data_for_run(run_record) or {}
+        report = claim_data.get("report") if isinstance(claim_data, dict) else None
+        report_available = isinstance(report, dict) and bool(report)
+        summary["claim_id"] = summary.get("transport_claim_id") or summary["run_id"]
+        summary["report_available"] = bool(summary.get("report_available") or report_available)
+        summary["claim_location"] = run_record.get("location") or (
+            "saved_jobs" if summary.get("status") == "processed" else "queued_jobs"
+        )
+        summary["location"] = summary["claim_location"]
+        summary["report"] = report if isinstance(report, dict) else (run_record.get("report") or {})
+        summary["claim_data"] = (
+            claim_data
+            if isinstance(claim_data, dict) and claim_data
+            else {
+                "text": summary.get("text", ""),
+                "status": summary.get("status", "unknown"),
+                "report": summary.get("report", {}),
+                "claim_id": summary["claim_id"],
+                "batch_id": summary.get("transport_batch_id"),
+            }
+        )
+        summary["review_value"] = review_value_for_stage(summary["claim_data"], summary.get("completed_stage"))
+        return summary
 
     @staticmethod
     def rating_label(rating: Optional[int]) -> str:
@@ -474,6 +568,10 @@ class ClaimStore:
             "arena_id": run_record.get("arena_id"),
             "review_type": run_record.get("review_type", "regular"),
             "execution_mode": run_record.get("execution_mode", "full_pipeline"),
+            "stop_after": run_record.get("stop_after", "final_report"),
+            "completed_stage": run_record.get("completed_stage"),
+            "is_stage_checkpoint": bool(run_record.get("is_stage_checkpoint")),
+            "seed_from_run_id": run_record.get("seed_from_run_id"),
             "provider_snapshot": run_record.get("provider_snapshot") or {},
             "model_overrides": run_record.get("model_overrides") or {},
             "search_config": run_record.get("search_config") or {},
@@ -498,6 +596,10 @@ class ClaimStore:
             payload["bibliometric_config"] = run_record.get("bibliometric_config") or {}
             payload["usage"] = run_record.get("usage") or empty_usage()
             payload["usage_by_stage"] = run_record.get("usage_by_stage") or {}
+            payload["stop_after"] = run_record.get("stop_after", "final_report")
+            payload["completed_stage"] = run_record.get("completed_stage")
+            payload["is_stage_checkpoint"] = bool(run_record.get("is_stage_checkpoint"))
+            payload["seed_from_run_id"] = run_record.get("seed_from_run_id")
 
         _atomic_write_json(claim_file, payload)
         run_record = dict(run_record)
@@ -533,6 +635,12 @@ class ClaimStore:
         run["bibliometric_config"] = claim_data.get("bibliometric_config") or run.get("bibliometric_config") or {}
         run["model_overrides"] = claim_data.get("model_overrides") or run.get("model_overrides") or {}
         run["provider_snapshot"] = claim_data.get("provider_snapshot") or run.get("provider_snapshot") or {}
+        run["stop_after"] = claim_data.get("stop_after") or run.get("stop_after") or "final_report"
+        run["completed_stage"] = claim_data.get("completed_stage") or run.get("completed_stage")
+        run["is_stage_checkpoint"] = bool(
+            claim_data.get("is_stage_checkpoint", run.get("is_stage_checkpoint", False))
+        )
+        run["seed_from_run_id"] = claim_data.get("seed_from_run_id") or run.get("seed_from_run_id")
         run["claim_data"] = claim_data
         run["location"] = location
         run.setdefault("artifact_paths", {})
@@ -582,37 +690,14 @@ class ClaimStore:
         oldest = None
         newest = None
 
-        def hydrate_run(run: Dict[str, Any]) -> Dict[str, Any]:
-            summary = self.build_run_summary(run)
-            claim_data = run.get("claim_data") or self.load_claim_data_for_run(run) or {}
-            report = claim_data.get("report") if isinstance(claim_data, dict) else None
-            report_available = isinstance(report, dict) and bool(report)
-            summary["claim_id"] = summary.get("transport_claim_id") or summary["run_id"]
-            summary["report_available"] = bool(summary.get("report_available") or report_available)
-            summary["claim_location"] = run.get("location") or ("saved_jobs" if summary["report_available"] else "queued_jobs")
-            summary["location"] = summary["claim_location"]
-            summary["report"] = report if isinstance(report, dict) else (run.get("report") or {})
-            summary["claim_data"] = (
-                claim_data
-                if isinstance(claim_data, dict) and claim_data
-                else {
-                    "text": summary.get("text", ""),
-                    "status": summary.get("status", "unknown"),
-                    "report": summary.get("report", {}),
-                    "claim_id": summary["claim_id"],
-                    "batch_id": summary.get("transport_batch_id"),
-                }
-            )
-            return summary
-
         for run in selected_runs:
-            summary = hydrate_run(run)
+            summary = self.hydrate_run(run)
             claims.append(summary)
             status = summary.get("status", "unknown") or "unknown"
             counts_by_status[status] = counts_by_status.get(status, 0) + 1
             location = summary.get("claim_location", "unknown")
             counts_by_location[location] = counts_by_location.get(location, 0) + 1
-            if summary["report_available"]:
+            if summary.get("checkpoint_complete"):
                 processed_claims += 1
             if status != "processed" and current_claim_id is None:
                 current_claim_id = summary["claim_id"]
@@ -637,7 +722,7 @@ class ClaimStore:
             "updated_at": newest,
             "claims": claims,
             "errors": [],
-            "all_runs": [hydrate_run(run) for run in tagged_runs],
+            "all_runs": [self.hydrate_run(run) for run in tagged_runs],
         }
 
     def build_claim_detail(self, claim_key: str) -> Optional[Dict[str, Any]]:
@@ -734,6 +819,7 @@ class ClaimStore:
                         claim_record=claim_record,
                         batch_tags=[batch_dir.name],
                         execution_mode=claim_data.get("execution_mode", "full_pipeline"),
+                        stop_after=claim_data.get("stop_after", "final_report"),
                         provider_snapshot=claim_data.get("provider_snapshot") or {},
                         model_overrides=claim_data.get("model_overrides") or {},
                         search_config=claim_data.get("search_config") or {},
@@ -745,6 +831,9 @@ class ClaimStore:
                         source="migration",
                         legacy_lookup={"batch_id": batch_dir.name, "claim_id": claim_file.stem},
                         initial_claim_data=claim_data,
+                        completed_stage=claim_data.get("completed_stage"),
+                        is_stage_checkpoint=bool(claim_data.get("is_stage_checkpoint", False)),
+                        seed_from_run_id=claim_data.get("seed_from_run_id"),
                     )
                     run_record["claim_data"] = claim_data
                     run_record["report"] = claim_data.get("report")
@@ -775,6 +864,10 @@ class ClaimStore:
         run_record = dict(run_record)
         report = run_record.get("report")
         run_record["report_available"] = isinstance(report, dict) and bool(report)
+        run_record.setdefault("stop_after", "final_report")
+        run_record.setdefault("completed_stage", None)
+        run_record.setdefault("is_stage_checkpoint", False)
+        run_record.setdefault("seed_from_run_id", None)
         if not run_record.get("location"):
             claim_path = self.resolve_report_path(run_record)
             if claim_path:

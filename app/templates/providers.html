@@ -124,8 +124,12 @@
                 <div class="panel subtle-panel">
                     <div class="panel-header-row">
                         <h3>Models</h3>
-                        <button type="button" id="addModelBtn" class="secondary-button small-button">Add Model</button>
+                        <div class="inline-actions">
+                            <button type="button" id="importOllamaBtn" class="secondary-button small-button">Import from Ollama</button>
+                            <button type="button" id="addModelBtn" class="secondary-button small-button">Add Model</button>
+                        </div>
                     </div>
+                    <p id="ollamaImportHint" class="helper-text">Available for providers using `ollama` directly or via Local Backend.</p>
                     <div id="modelRows"></div>
                 </div>
 
@@ -176,12 +180,38 @@
                     <input type="checkbox" data-model-field="supports_json_mode" checked>
                     <span>Supports JSON mode</span>
                 </label>
+                <label class="checkbox-row">
+                    <input type="checkbox" data-model-field="enabled" checked>
+                    <span>Enabled in selectors</span>
+                </label>
             </div>
         </article>
     </template>
 
+    <div id="ollamaImportModal" class="modal hidden">
+        <div class="modal-card">
+            <h2>Import Ollama Models</h2>
+            <p class="helper-text">Review discovered models, filter the list, then merge selected entries into the editor. Nothing is saved until you save the provider.</p>
+            <div class="form-row">
+                <label for="ollamaSearch">Filter</label>
+                <input type="text" id="ollamaSearch" placeholder="Search discovered models">
+            </div>
+            <div class="inline-actions">
+                <button type="button" id="ollamaSelectVisibleBtn" class="secondary-button small-button">Select Visible</button>
+                <button type="button" id="ollamaClearVisibleBtn" class="secondary-button small-button">Clear Visible</button>
+            </div>
+            <div id="ollamaImportStatus" class="helper-text"></div>
+            <div id="ollamaImportList" class="panel subtle-panel"></div>
+            <div class="inline-actions">
+                <button type="button" id="ollamaImportConfirmBtn" class="primary-button">Merge Selected</button>
+                <button type="button" id="ollamaImportCancelBtn" class="secondary-button">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         let selectedProviderId = null;
+        let discoveredOllamaModels = [];
 
         function escapeHtml(value) {
             return String(value ?? '')
@@ -205,6 +235,22 @@
             return mapping;
         }
 
+        function isOllamaBackedProvider() {
+            const providerType = document.getElementById('providerType').value;
+            const localBackend = document.getElementById('providerLocalBackend').value;
+            return providerType === 'ollama' || localBackend === 'ollama';
+        }
+
+        function updateOllamaImportState() {
+            const button = document.getElementById('importOllamaBtn');
+            const hint = document.getElementById('ollamaImportHint');
+            const enabled = isOllamaBackedProvider();
+            button.disabled = !enabled;
+            hint.textContent = enabled
+                ? 'Discover models from the Ollama host and merge selected entries into this provider.'
+                : 'Switch Provider Type to `ollama` or set Local Backend to `ollama` to enable discovery.';
+        }
+
         function addModelRow(model = {}) {
             const template = document.getElementById('modelRowTemplate');
             const fragment = template.content.cloneNode(true);
@@ -217,6 +263,7 @@
             row.querySelector('[data-model-field="output_cost_per_million"]').value = model.output_cost_per_million ?? 0;
             row.querySelector('[data-model-field="supports_temperature"]').checked = model.supports_temperature ?? true;
             row.querySelector('[data-model-field="supports_json_mode"]').checked = model.supports_json_mode ?? true;
+            row.querySelector('[data-model-field="enabled"]').checked = model.enabled ?? true;
             document.getElementById('modelRows').appendChild(row);
         }
 
@@ -230,7 +277,80 @@
                 output_cost_per_million: parseFloat(row.querySelector('[data-model-field="output_cost_per_million"]').value || '0'),
                 supports_temperature: row.querySelector('[data-model-field="supports_temperature"]').checked,
                 supports_json_mode: row.querySelector('[data-model-field="supports_json_mode"]').checked,
+                enabled: row.querySelector('[data-model-field="enabled"]').checked,
             })).filter(model => model.model_name);
+        }
+
+        function mergeDiscoveredModels(incomingModels) {
+            const merged = new Map();
+            serializeModels().forEach(model => {
+                merged.set(model.model_name, model);
+            });
+            incomingModels.forEach(model => {
+                if (!merged.has(model.model_name)) {
+                    merged.set(model.model_name, {
+                        model_name: model.model_name,
+                        label: model.label || model.model_name,
+                        context_window_tokens: model.context_window_tokens ?? 8192,
+                        max_output_tokens_default: model.max_output_tokens_default ?? 1024,
+                        input_cost_per_million: model.input_cost_per_million ?? 0,
+                        output_cost_per_million: model.output_cost_per_million ?? 0,
+                        supports_temperature: model.supports_temperature ?? true,
+                        supports_json_mode: model.supports_json_mode ?? true,
+                        enabled: model.enabled ?? true,
+                    });
+                }
+            });
+            document.getElementById('modelRows').innerHTML = '';
+            Array.from(merged.values()).forEach(addModelRow);
+            if (!merged.size) addModelRow();
+        }
+
+        function visibleDiscoveredModels() {
+            const filter = document.getElementById('ollamaSearch').value.trim().toLowerCase();
+            return discoveredOllamaModels.filter(model => {
+                const haystack = [
+                    model.model_name,
+                    model.label,
+                    model.discovery_metadata?.size,
+                    model.discovery_metadata?.modified,
+                ].join(' ').toLowerCase();
+                return !filter || haystack.includes(filter);
+            });
+        }
+
+        function renderOllamaImportList() {
+            const models = visibleDiscoveredModels();
+            document.getElementById('ollamaImportStatus').textContent = `${models.length} matching model(s), ${discoveredOllamaModels.filter(model => model.selected).length} selected.`;
+            document.getElementById('ollamaImportList').innerHTML = models.map((model, index) => `
+                <label class="checkbox-row">
+                    <input type="checkbox" data-ollama-model="${escapeHtml(model.model_name)}" ${model.selected ? 'checked' : ''}>
+                    <span>${escapeHtml(model.model_name)}${model.discovery_metadata?.size ? ` (${escapeHtml(model.discovery_metadata.size)})` : ''}${model.discovery_metadata?.modified ? ` - ${escapeHtml(model.discovery_metadata.modified)}` : ''}</span>
+                </label>
+            `).join('') || '<div class="helper-text">No discovered models match the current filter.</div>';
+        }
+
+        function closeOllamaImportModal() {
+            document.getElementById('ollamaImportModal').classList.add('hidden');
+        }
+
+        async function openOllamaImportModal() {
+            if (!isOllamaBackedProvider()) {
+                throw new Error('This provider is not configured for Ollama.');
+            }
+            const response = await fetch('/api/v1/providers/ollama/discover', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    provider_id: selectedProviderId || undefined,
+                }),
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Failed to discover Ollama models.');
+            discoveredOllamaModels = (data.models || []).map(model => ({ ...model, selected: true }));
+            document.getElementById('ollamaSearch').value = '';
+            renderOllamaImportList();
+            document.getElementById('ollamaImportModal').classList.remove('hidden');
         }
 
         function resetEditor() {
@@ -254,6 +374,7 @@
             document.getElementById('taskDefaultFinalReport').value = '';
             document.getElementById('modelRows').innerHTML = '';
             addModelRow();
+            updateOllamaImportState();
         }
 
         function populateEditor(provider) {
@@ -279,6 +400,7 @@
             document.getElementById('modelRows').innerHTML = '';
             (provider.models || []).forEach(addModelRow);
             if (!(provider.models || []).length) addModelRow();
+            updateOllamaImportState();
         }
 
         async function loadProviders() {
@@ -292,7 +414,7 @@
                     <p><strong>Type:</strong> ${escapeHtml(provider.provider_type)}</p>
                     <p><strong>Default model:</strong> ${escapeHtml(provider.default_model || '')}</p>
                     <p><strong>Task defaults:</strong> ${escapeHtml(Object.entries(provider.task_defaults || {}).map(([task, model]) => `${task}: ${model}`).join(' | ') || 'none')}</p>
-                    <p><strong>Models:</strong> ${(provider.models || []).length}</p>
+                    <p><strong>Models:</strong> ${(provider.models || []).filter(model => model.enabled !== false).length} enabled / ${(provider.models || []).length} total</p>
                     <div class="inline-actions">
                         <button type="button" class="secondary-button small-button" data-edit="${escapeHtml(provider.provider_id)}">Edit</button>
                         <button type="button" class="danger-button small-button" data-delete="${escapeHtml(provider.provider_id)}">Delete</button>
@@ -356,6 +478,39 @@
             event.target.closest('.model-row').remove();
             if (!document.querySelector('.model-row')) addModelRow();
         });
+        document.getElementById('providerType').addEventListener('change', updateOllamaImportState);
+        document.getElementById('providerLocalBackend').addEventListener('change', updateOllamaImportState);
+        document.getElementById('importOllamaBtn').addEventListener('click', () => {
+            openOllamaImportModal().catch(error => alert(error.message));
+        });
+        document.getElementById('ollamaSearch').addEventListener('input', renderOllamaImportList);
+        document.getElementById('ollamaImportList').addEventListener('change', (event) => {
+            const modelName = event.target.getAttribute('data-ollama-model');
+            if (!modelName) return;
+            const target = discoveredOllamaModels.find(model => model.model_name === modelName);
+            if (target) {
+                target.selected = event.target.checked;
+            }
+            renderOllamaImportList();
+        });
+        document.getElementById('ollamaSelectVisibleBtn').addEventListener('click', () => {
+            visibleDiscoveredModels().forEach(model => {
+                model.selected = true;
+            });
+            renderOllamaImportList();
+        });
+        document.getElementById('ollamaClearVisibleBtn').addEventListener('click', () => {
+            visibleDiscoveredModels().forEach(model => {
+                model.selected = false;
+            });
+            renderOllamaImportList();
+        });
+        document.getElementById('ollamaImportConfirmBtn').addEventListener('click', () => {
+            const selected = discoveredOllamaModels.filter(model => model.selected);
+            mergeDiscoveredModels(selected);
+            closeOllamaImportModal();
+        });
+        document.getElementById('ollamaImportCancelBtn').addEventListener('click', closeOllamaImportModal);
         document.getElementById('saveProviderBtn').addEventListener('click', () => saveProvider().catch(error => alert(error.message)));
         document.getElementById('resetProviderBtn').addEventListener('click', resetEditor);
 

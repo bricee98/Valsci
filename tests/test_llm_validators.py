@@ -27,6 +27,22 @@ def test_validate_query_generation_payload_rejects_wrong_count():
         validate_query_generation_payload(payload, expected_query_count=2)
 
 
+def test_validate_query_generation_payload_truncates_extra_explanations():
+    payload = {
+        "explanations": [
+            "reason one",
+            "reason two",
+            "reason three",
+        ],
+        "queries": ["query one", "query two"],
+    }
+
+    validated = validate_query_generation_payload(payload, expected_query_count=2)
+
+    assert validated["queries"] == payload["queries"]
+    assert validated["explanations"] == ["reason one", "reason two"]
+
+
 def test_validate_query_list_sanitizes_wrapped_lines():
     queries = ["1. Query: insulin resistance aging", "- metformin mortality cohort study"]
     validated = validate_query_list(queries, expected_count=2)
