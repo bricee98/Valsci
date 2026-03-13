@@ -670,3 +670,15 @@ def test_migration_route_imports_legacy_saved_claim(monkeypatch, tmp_path):
     run = store.find_run_by_legacy("legacy-batch", "legacy-claim")
     assert run is not None
     assert run["text"] == "Legacy claim text"
+
+
+def test_arena_page_surfaces_reuse_retrieval_baseline_warning(monkeypatch, tmp_path):
+    client, _, _, _, _ = create_test_client(monkeypatch, tmp_path)
+
+    response = client.get("/arena")
+
+    assert response.status_code == 200
+    page = response.get_data(as_text=True)
+    assert "reuseRetrievalBanner" in page
+    assert "Candidate order matters in Reuse Query Generation" in page
+    assert "Candidate 1 (" in page

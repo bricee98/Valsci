@@ -55,6 +55,7 @@
                             <option value="reuse_retrieval">Reuse Query Generation</option>
                         </select>
                         <div id="executionModeNotice" class="helper-text" aria-live="polite"></div>
+                        <div id="reuseRetrievalBanner" class="status-card warning-card hidden" aria-live="polite"></div>
                     </div>
                 </div>
                 <div class="form-row">
@@ -187,11 +188,90 @@
                 }
                 executionModeWasAutoAdjusted = executionModeWasAutoAdjusted || autoAdjusted;
                 notice.textContent = 'Reuse Query Generation is unavailable when stopping after Query Generation. Full Pipeline will be used.';
+                updateReuseRetrievalUI();
                 return;
             }
 
             executionModeWasAutoAdjusted = false;
+            if (executionMode.value !== 'reuse_retrieval') {
+                notice.textContent = 'Full Pipeline runs each candidate independently through the selected stop stage.';
+                updateReuseRetrievalUI();
+                return;
+            }
             notice.textContent = 'Reuse Query Generation shares the first candidate\'s query-generation and retrieval outputs with later candidates to avoid repeating early-stage work.';
+            updateReuseRetrievalUI();
+        }
+
+        function currentExecutionMode() {
+            return document.getElementById('executionMode').value;
+        }
+
+        function candidateDisplayName(card) {
+            const customLabel = card.querySelector('[data-label-input]').value.trim();
+            if (customLabel) {
+                return customLabel;
+            }
+            const providerId = card.querySelector('[data-provider-select]').value;
+            const provider = getProvider(providerId);
+            return provider?.label || providerId || 'this candidate';
+        }
+
+        function updateReuseRetrievalUI() {
+            const executionMode = currentExecutionMode();
+            const stopAfter = document.getElementById('stopAfter').value;
+            const banner = document.getElementById('reuseRetrievalBanner');
+            const cards = Array.from(document.querySelectorAll('[data-candidate-id]'));
+            const reuseEnabled = executionMode === 'reuse_retrieval' && stopAfter !== 'query_generation';
+
+            if (!reuseEnabled) {
+                banner.classList.add('hidden');
+                banner.innerHTML = '';
+            } else if (cards.length <= 1) {
+                banner.classList.remove('hidden');
+                banner.innerHTML = `
+                    <strong>Reuse mode is selected, but it has no effect with only one candidate.</strong>
+                    <span>Add a second candidate to compare against the shared baseline.</span>
+                `;
+            } else {
+                const baselineName = candidateDisplayName(cards[0]);
+                banner.classList.remove('hidden');
+                banner.innerHTML = `
+                    <strong>Candidate order matters in Reuse Query Generation.</strong>
+                    <span><strong>Candidate 1 (${escapeHtml(baselineName)}) is the baseline.</strong> Its query-generation and retrieval outputs will be reused by every later candidate.</span>
+                    <span>If you mix providers or models, only the baseline candidate controls those early-stage outputs.</span>
+                `;
+            }
+
+            cards.forEach((card, index) => {
+                const title = card.querySelector('[data-candidate-title]');
+                const badge = card.querySelector('[data-candidate-badge]');
+                const hint = card.querySelector('[data-candidate-role-hint]');
+                const displayName = candidateDisplayName(card);
+
+                title.textContent = `Candidate ${index + 1}`;
+                card.classList.remove('candidate-baseline-card', 'candidate-reuse-card');
+
+                if (!reuseEnabled) {
+                    badge.classList.add('hidden');
+                    badge.textContent = '';
+                    hint.textContent = `${displayName} runs independently through the selected stage.`;
+                    return;
+                }
+
+                badge.classList.remove('hidden');
+                if (index === 0) {
+                    badge.textContent = 'Baseline';
+                    badge.className = 'badge warning-badge';
+                    hint.textContent = `${displayName} generates the shared queries and retrieval set that every later candidate will reuse.`;
+                    card.classList.add('candidate-baseline-card');
+                    return;
+                }
+
+                badge.textContent = 'Reuses Baseline';
+                badge.className = 'badge neutral-badge';
+                hint.textContent = `${displayName} skips early query/retrieval work and starts from Candidate 1's shared baseline outputs.`;
+                card.classList.add('candidate-reuse-card');
+            });
         }
 
         function setCandidateModelOptions(card) {
@@ -211,7 +291,13 @@
             return `
                 <div class="panel subtle-panel candidate-card" data-candidate-id="${candidateId}">
                     <div class="panel-header-row">
-                        <h3>Candidate</h3>
+                        <div class="candidate-header-copy">
+                            <div class="inline-actions candidate-title-row">
+                                <h3 data-candidate-title>Candidate</h3>
+                                <span class="badge neutral-badge hidden" data-candidate-badge></span>
+                            </div>
+                            <p class="helper-text candidate-role-hint" data-candidate-role-hint></p>
+                        </div>
                         <button type="button" class="danger-button small-button" data-remove-candidate>Remove</button>
                     </div>
                     <div class="form-row grid-two">
@@ -245,6 +331,7 @@
             const card = wrapper.firstElementChild;
             document.getElementById('candidateList').appendChild(card);
             setCandidateModelOptions(card);
+            updateReuseRetrievalUI();
         }
 
         function invalidatePreflight() {
@@ -366,6 +453,14 @@
             if (data.totals.reused_existing_count) {
                 warnings.push(`<div class="status-card info-card"><strong>Existing claims will be reused.</strong> ${data.totals.reused_existing_count} unique claim(s) will open existing history instead of queueing new arena runs.</div>`);
             }
+            if (data.execution_mode === 'reuse_retrieval') {
+                if (data.totals.candidate_count > 1 && data.candidates.length) {
+                    const baseline = data.candidates[0];
+                    warnings.push(`<div class="status-card warning-card"><strong>Candidate order matters.</strong> Candidate 1 (<strong>${escapeHtml(baseline.label || baseline.provider_id)}</strong>) is the baseline. Its query-generation and retrieval outputs will be reused by ${Math.max(data.totals.candidate_count - 1, 0)} later candidate(s).</div>`);
+                } else {
+                    warnings.push(`<div class="status-card info-card"><strong>Reuse mode currently has no effect.</strong> Add at least two candidates if you want later runs to reuse a shared baseline.</div>`);
+                }
+            }
             if (!data.totals.pricing_complete) {
                 warnings.push(`<div class="status-card error-card"><strong>Pricing metadata missing.</strong> Add costs for: ${escapeHtml(data.totals.missing_pricing_models.join(', '))} before submitting.</div>`);
             }
@@ -437,12 +532,17 @@
             if (event.target.matches('[data-provider-select]')) {
                 setCandidateModelOptions(card);
             }
+            updateReuseRetrievalUI();
             invalidatePreflight();
         });
-        document.getElementById('candidateList').addEventListener('input', () => invalidatePreflight());
+        document.getElementById('candidateList').addEventListener('input', () => {
+            updateReuseRetrievalUI();
+            invalidatePreflight();
+        });
         document.getElementById('candidateList').addEventListener('click', (event) => {
             if (!event.target.closest('[data-remove-candidate]')) return;
             event.target.closest('[data-candidate-id]').remove();
+            updateReuseRetrievalUI();
             invalidatePreflight();
         });
         document.getElementById('addCandidateBtn').addEventListener('click', () => {
@@ -459,7 +559,13 @@
                 alert('Pricing metadata is incomplete for one or more models.');
                 return;
             }
+            const reuseNote = preflightPayload.execution_mode === 'reuse_retrieval'
+                ? (preflightPayload.totals.candidate_count > 1 && preflightPayload.candidates.length
+                    ? `<div class="status-card warning-card"><strong>Baseline candidate:</strong> Candidate 1 (<strong>${escapeHtml(preflightPayload.candidates[0].label || preflightPayload.candidates[0].provider_id)}</strong>) will supply the shared query-generation and retrieval outputs for later candidates.</div>`
+                    : `<div class="status-card info-card"><strong>Reuse mode note:</strong> With one candidate, reuse mode has no practical effect.</div>`)
+                : '';
             document.getElementById('costModalBody').innerHTML = `
+                ${reuseNote}
                 <p><strong>Unique claims:</strong> ${preflightPayload.totals.unique_claim_count}</p>
                 <p><strong>Runs to create:</strong> ${preflightPayload.totals.run_count}</p>
                 <p><strong>Expected total:</strong> $${preflightPayload.totals.expected_cost_usd.toFixed(4)}</p>

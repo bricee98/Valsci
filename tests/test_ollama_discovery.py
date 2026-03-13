@@ -1,9 +1,28 @@
 import subprocess
+import sys
+import types
 
 import pytest
 
+sys.modules.setdefault("ijson", types.SimpleNamespace())
+sys.modules.setdefault(
+    "openai",
+    types.SimpleNamespace(
+        OpenAI=object,
+        AsyncOpenAI=object,
+        AsyncAzureOpenAI=object,
+    ),
+)
+
+from app import create_app
+from app.config.settings import Config
 from app.services.ollama_discovery import discover_ollama_models, parse_ollama_list_output
 from app.services.provider_catalog import ProviderCatalog
+
+
+class TestConfig(Config):
+    TESTING = True
+    REQUIRE_PASSWORD = False
 
 
 def test_parse_ollama_list_output_extracts_models():
@@ -65,3 +84,20 @@ def test_merge_models_preserves_existing_manual_metadata():
     assert preserved["label"] == "Curated Llama"
     assert preserved["enabled"] is False
     assert preserved["context_window_tokens"] == 32768
+
+
+def test_providers_page_renders_responsive_editor(monkeypatch, tmp_path):
+    catalog_path = tmp_path / "provider_catalog.json"
+    monkeypatch.setattr(Config, "PROVIDER_CATALOG_PATH", str(catalog_path), raising=False)
+    monkeypatch.setattr(TestConfig, "PROVIDER_CATALOG_PATH", str(catalog_path), raising=False)
+
+    app = create_app(TestConfig)
+    client = app.test_client()
+
+    response = client.get("/providers")
+
+    assert response.status_code == 200
+    page = response.get_data(as_text=True)
+    assert "Find provider" in page
+    assert "Connection" in page
+    assert "Discover Ollama Models" in page
