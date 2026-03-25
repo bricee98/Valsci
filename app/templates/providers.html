@@ -1,128 +1,57 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Provider Catalog</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
-</head>
-<body class="providers-page">
-    <div class="container wide-container">
-        <header class="page-header">
-            <div>
-                <h1>Providers and Models</h1>
-                <p class="subtext">Manage provider snapshots and per-model pricing used by submission, reruns, and arenas.</p>
-            </div>
-            <div class="nav-links">
-                <a href="/" class="nav-link">Home</a>
-                <a href="/arena" class="nav-link">Arena</a>
-                <a href="/browser" class="nav-link">Claims</a>
-            </div>
-        </header>
+{% extends "base.html" %}
 
-        <div id="pageFeedback" class="status-card info-card hidden" role="status" aria-live="polite"></div>
+{% block content %}
+    <div id="pageFeedback" class="status-card info-card hidden"></div>
 
-        <div class="grid-two providers-layout">
-            <section class="panel provider-catalog-panel">
-                <div class="panel-header-row">
-                    <div>
-                        <h2>Catalog</h2>
-                        <p class="helper-text provider-section-hint">Pick a provider to edit, or start a fresh one.</p>
-                    </div>
-                    <span id="providerCountPill" class="badge neutral-badge">0 providers</span>
+    <section class="dashboard-grid provider-shell">
+        <article class="panel provider-sidebar">
+            <div class="panel-header">
+                <div>
+                    <h2 class="panel-title">Providers</h2>
+                    <p class="panel-subtitle">Enable providers and configure connections.</p>
                 </div>
+                <a href="{{ url_for('api.guidebook_page') }}#providers" class="help-link" title="Guidebook: Providers">?</a>
+            </div>
+            <div id="providerList" class="record-list"></div>
+        </article>
 
-                <div class="provider-catalog-toolbar">
-                    <div class="form-row provider-search-row">
-                        <label for="providerSearch">Find provider</label>
-                        <input type="text" id="providerSearch" placeholder="Search by label, id, type, backend, or model">
-                    </div>
-                    <button type="button" id="newProviderBtn" class="secondary-button small-button">New Provider</button>
-                </div>
-
-                <div id="providerList" class="provider-list"></div>
-            </section>
-
-            <section class="panel provider-editor-panel" id="providerEditor">
-                <div class="panel-header-row editor-heading-row">
-                    <div>
-                        <div class="inline-actions editor-title-row">
-                            <h2 id="editorTitle">New Provider</h2>
-                            <span id="editorDirtyBadge" class="badge warning-badge hidden">Unsaved changes</span>
-                        </div>
-                        <p id="editorSubtitle" class="helper-text provider-section-hint">
-                            Create a provider snapshot. The form adapts to the provider type you select.
-                        </p>
-                    </div>
+        <article class="panel provider-editor" id="providerEditor">
+            <div class="panel-header">
+                <div>
                     <div class="inline-actions">
-                        <span id="editorProviderTypeBadge" class="badge neutral-badge">openai</span>
-                        <button type="button" id="resetProviderBtn" class="secondary-button small-button">Reset</button>
+                        <h2 class="panel-title" id="editorTitle">Select a provider</h2>
+                        <span id="editorDirtyBadge" class="badge warning-badge hidden">Unsaved changes</span>
                     </div>
+                    <p class="panel-subtitle" id="editorSubtitle">Choose a provider type from the sidebar to configure it.</p>
                 </div>
+            </div>
 
-                <div class="status-card info-card provider-editor-status">
-                    <strong id="providerModeTitle">OpenAI or compatible API</strong>
-                    <span id="providerModeHint">Use an API key and optionally override the base URL if you are pointing at a compatible gateway.</span>
-                    <div id="providerRequirementChips" class="provider-chip-row"></div>
-                </div>
+            <input type="hidden" id="providerType" value="openai">
+            <input type="hidden" id="providerId" value="">
+            <input type="hidden" id="providerDefaultModel" value="">
 
-                <section class="field-section">
-                    <div class="field-section-header">
+            <div class="section-stack">
+                <section class="panel panel-muted">
+                    <div class="panel-header">
                         <div>
-                            <h3>Identity</h3>
-                            <p class="helper-text provider-section-hint">How this provider appears in selectors, reruns, and arena candidates.</p>
+                            <h3 class="panel-title">Connection</h3>
+                            <p class="panel-subtitle" id="connectionHint">Connection details for this provider type.</p>
                         </div>
                     </div>
                     <div class="grid-two">
-                        <div class="form-row">
-                            <label for="providerId">Provider ID</label>
-                            <input type="text" id="providerId" placeholder="Optional; autogenerated when blank">
-                            <p id="providerIdHint" class="helper-text">Leave blank to autogenerate a stable ID for a new provider.</p>
-                        </div>
                         <div class="form-row">
                             <label for="providerLabel">Label</label>
-                            <input type="text" id="providerLabel" placeholder="Display label">
-                            <p class="helper-text">Used in the UI. If blank, the provider ID is still stored and used internally.</p>
+                            <input type="text" id="providerLabel" placeholder="Display name">
                         </div>
-                    </div>
-                    <div class="grid-two">
-                        <div class="form-row">
-                            <label for="providerType">Provider Type</label>
-                            <select id="providerType">
-                                <option value="openai">openai</option>
-                                <option value="openrouter">openrouter</option>
-                                <option value="local">local</option>
-                                <option value="ollama">ollama</option>
-                                <option value="llamacpp">llamacpp</option>
-                                <option value="azure-openai">azure-openai</option>
-                                <option value="azure-inference">azure-inference</option>
-                            </select>
-                        </div>
-                        <div class="form-row">
-                            <label for="providerDefaultModel">Default Model</label>
-                            <input type="text" id="providerDefaultModel" placeholder="e.g. gpt-4o">
-                            <p class="helper-text">Fallback model used when no task-specific override is set.</p>
-                        </div>
-                    </div>
-                </section>
-
-                <section class="field-section">
-                    <div class="field-section-header">
-                        <div>
-                            <h3>Connection</h3>
-                            <p id="connectionHint" class="helper-text provider-section-hint">
-                                Connection settings update as you change provider type.
-                            </p>
-                        </div>
-                    </div>
-                    <div class="grid-two">
                         <div class="form-row" id="providerApiKeyGroup">
                             <label for="providerApiKey">API Key</label>
-                            <input type="text" id="providerApiKey" placeholder="Stored in the repo-local catalog">
+                            <input type="text" id="providerApiKey" placeholder="Stored in the repo-local provider catalog">
                         </div>
+                    </div>
+                    <div class="grid-two">
                         <div class="form-row" id="providerBaseUrlGroup">
-                            <label for="providerBaseUrl">Base URL</label>
-                            <input type="text" id="providerBaseUrl" placeholder="Optional base URL">
+                            <label for="providerBaseUrl">Base URL (optional)</label>
+                            <input type="text" id="providerBaseUrl" placeholder="Only needed for non-default endpoints">
                         </div>
                     </div>
                     <div class="grid-two">
@@ -133,38 +62,19 @@
                                 <option value="ollama">ollama</option>
                                 <option value="llamacpp">llamacpp</option>
                             </select>
-                            <p class="helper-text">Choose the local backend if this provider uses a local router.</p>
                         </div>
                     </div>
-                </section>
-
-                <section class="field-section hidden" id="openrouterSection">
-                    <div class="field-section-header">
-                        <div>
-                            <h3>OpenRouter Headers</h3>
-                            <p class="helper-text provider-section-hint">Optional metadata sent as `HTTP-Referer` and `X-Title` headers.</p>
-                        </div>
-                    </div>
-                    <div class="grid-two">
+                    <div class="grid-two hidden" id="openrouterSection">
                         <div class="form-row">
                             <label for="providerHttpReferer">HTTP Referer</label>
-                            <input type="text" id="providerHttpReferer" placeholder="Optional OpenRouter referer">
+                            <input type="text" id="providerHttpReferer" placeholder="Optional referer sent to OpenRouter">
                         </div>
                         <div class="form-row">
                             <label for="providerSiteName">Site Name</label>
-                            <input type="text" id="providerSiteName" placeholder="Optional OpenRouter title">
+                            <input type="text" id="providerSiteName" placeholder="Optional title sent to OpenRouter">
                         </div>
                     </div>
-                </section>
-
-                <section class="field-section hidden" id="azureOpenAiSection">
-                    <div class="field-section-header">
-                        <div>
-                            <h3>Azure OpenAI</h3>
-                            <p class="helper-text provider-section-hint">Used only for `azure-openai` providers.</p>
-                        </div>
-                    </div>
-                    <div class="grid-two">
+                    <div class="grid-two hidden" id="azureOpenAiSection">
                         <div class="form-row">
                             <label for="providerAzureOpenAiEndpoint">Azure OpenAI Endpoint</label>
                             <input type="text" id="providerAzureOpenAiEndpoint" placeholder="https://your-resource.openai.azure.com">
@@ -174,16 +84,7 @@
                             <input type="text" id="providerAzureOpenAiApiVersion" placeholder="2024-06-01">
                         </div>
                     </div>
-                </section>
-
-                <section class="field-section hidden" id="azureInferenceSection">
-                    <div class="field-section-header">
-                        <div>
-                            <h3>Azure AI Inference</h3>
-                            <p class="helper-text provider-section-hint">Used only for `azure-inference` providers.</p>
-                        </div>
-                    </div>
-                    <div class="grid-two">
+                    <div class="grid-two hidden" id="azureInferenceSection">
                         <div class="form-row">
                             <label for="providerAzureAiInferenceEndpoint">Azure AI Inference Endpoint</label>
                             <input type="text" id="providerAzureAiInferenceEndpoint" placeholder="https://your-endpoint.inference.ai.azure.com">
@@ -191,70 +92,67 @@
                     </div>
                 </section>
 
-                <section class="field-section">
-                    <div class="field-section-header">
+                <section class="panel panel-muted hidden" id="ollamaDiscoverySection">
+                    <div class="panel-header">
                         <div>
-                            <h3>Task Defaults</h3>
-                            <p class="helper-text provider-section-hint">Optional per-stage model overrides. Leave blank to use the provider default model.</p>
+                            <h3 class="panel-title">Discover Models</h3>
+                            <p class="panel-subtitle">Discover available models from this Ollama endpoint.</p>
                         </div>
                     </div>
-                    <div class="provider-task-grid">
+                    <div class="grid-two">
                         <div class="form-row">
-                            <label for="taskDefaultQueryGeneration">Query Generation</label>
-                            <input type="text" id="taskDefaultQueryGeneration" placeholder="Optional task default">
+                            <label for="discoveryBaseUrl">Alternate URL</label>
+                            <input type="text" id="discoveryBaseUrl" placeholder="http://localhost:11434">
                         </div>
                         <div class="form-row">
-                            <label for="taskDefaultPaperAnalysis">Paper Analysis</label>
-                            <input type="text" id="taskDefaultPaperAnalysis" placeholder="Optional task default">
+                            <label for="discoveryApiKey">Optional API Key</label>
+                            <input type="text" id="discoveryApiKey" placeholder="Only if your gateway expects bearer auth">
                         </div>
-                        <div class="form-row">
-                            <label for="taskDefaultVenueScoring">Venue Scoring</label>
-                            <input type="text" id="taskDefaultVenueScoring" placeholder="Optional task default">
-                        </div>
-                        <div class="form-row">
-                            <label for="taskDefaultFinalReport">Final Report</label>
-                            <input type="text" id="taskDefaultFinalReport" placeholder="Optional task default">
-                        </div>
+                    </div>
+                    <div class="inline-actions">
+                        <button type="button" class="secondary-button small-button" id="discoverProviderBtn">Discover From Provider URL</button>
+                        <button type="button" class="secondary-button small-button" id="discoverUrlBtn">Probe Alternate URL</button>
                     </div>
                 </section>
 
-                <div class="panel subtle-panel">
-                    <div class="panel-header-row provider-model-toolbar">
+                <input type="hidden" id="taskDefaultQueryGeneration" value="">
+                <input type="hidden" id="taskDefaultPaperAnalysis" value="">
+                <input type="hidden" id="taskDefaultVenueScoring" value="">
+                <input type="hidden" id="taskDefaultFinalReport" value="">
+
+                <section class="panel panel-muted">
+                    <div class="panel-header">
                         <div>
-                            <h3>Models</h3>
-                            <p class="helper-text provider-section-hint">Models listed here power selectors, pricing estimates, and capability overrides.</p>
+                            <h3 class="panel-title">Models</h3>
+                            <p class="panel-subtitle">Model entries for selectors, pricing, and capabilities.</p>
                         </div>
                         <div class="inline-actions">
-                            <span id="modelSummary" class="badge neutral-badge">0 configured</span>
-                            <button type="button" id="importOllamaBtn" class="secondary-button small-button">Discover Ollama Models</button>
-                            <button type="button" id="addModelBtn" class="secondary-button small-button">Add Model</button>
+                            <span id="modelCountBadge" class="badge neutral-badge">0 models</span>
+                            <button type="button" class="secondary-button small-button" id="addModelBtn">Add Model</button>
                         </div>
                     </div>
-                    <p id="ollamaImportHint" class="helper-text">Available for providers using `ollama` directly or via Local Backend.</p>
-                    <div id="modelRows" class="provider-model-stack"></div>
-                </div>
+                    <div id="modelRows" class="record-list"></div>
+                </section>
 
-                <div class="provider-actions-bar">
-                    <button type="button" id="saveProviderBtn" class="primary-button">Save Provider</button>
-                    <span id="saveProviderStatus" class="helper-text">Changes are stored only in this repo's provider catalog.</span>
-                </div>
-            </section>
-        </div>
-    </div>
-
-    <template id="modelRowTemplate">
-        <article class="panel subtle-panel model-row">
-            <div class="panel-header-row">
-                <div class="model-row-heading">
-                    <h4 data-model-title>New model</h4>
-                    <p class="helper-text model-row-summary" data-model-summary>Set the model name, limits, pricing, and feature support.</p>
-                </div>
                 <div class="inline-actions">
-                    <span class="badge error-badge hidden" data-model-duplicate>Duplicate name</span>
-                    <button type="button" class="danger-button small-button" data-remove-model>Remove</button>
+                    <button type="button" class="primary-button" id="saveProviderBtn">Save Provider</button>
+                    <button type="button" class="ghost-button" id="resetProviderBtn">Reset</button>
+                    <button type="button" class="danger-button hidden" id="deleteProviderBtn">Delete Provider</button>
                 </div>
             </div>
-            <div class="provider-model-grid">
+        </article>
+    </section>
+
+    <template id="modelRowTemplate">
+        <article class="record-card model-row">
+            <div class="panel-header">
+                <div>
+                    <h3 class="panel-title" data-model-title>New model</h3>
+                    <p class="panel-subtitle" data-model-summary>Set the model name, limits, pricing, and feature support.</p>
+                </div>
+                <button type="button" class="danger-button small-button" data-remove-model>Remove</button>
+            </div>
+            <div class="grid-three">
                 <div class="form-row">
                     <label>Model Name</label>
                     <input type="text" data-model-field="model_name" placeholder="gpt-4o">
@@ -272,13 +170,15 @@
                     <input type="number" data-model-field="max_output_tokens_default" min="1" value="1024">
                 </div>
                 <div class="form-row">
-                    <label>Input / 1M Tokens</label>
-                    <input type="number" data-model-field="input_cost_per_million" min="0" step="0.0001" value="0">
+                    <label>Input Cost ($ / 1M tokens)</label>
+                    <input type="number" data-model-field="input_cost_per_million" min="0" step="0.0001" value="0" placeholder="For cost estimation">
                 </div>
                 <div class="form-row">
-                    <label>Output / 1M Tokens</label>
-                    <input type="number" data-model-field="output_cost_per_million" min="0" step="0.0001" value="0">
+                    <label>Output Cost ($ / 1M tokens)</label>
+                    <input type="number" data-model-field="output_cost_per_million" min="0" step="0.0001" value="0" placeholder="For cost estimation">
                 </div>
+            </div>
+            <div class="inline-actions">
                 <label class="checkbox-row">
                     <input type="checkbox" data-model-field="supports_temperature" checked>
                     <span>Supports temperature</span>
@@ -296,801 +196,38 @@
     </template>
 
     <div id="ollamaImportModal" class="modal hidden">
-        <div class="modal-card provider-import-modal">
-            <div class="panel-header-row">
+        <div class="modal-card">
+            <div class="panel-header">
                 <div>
-                    <h2>Import Ollama Models</h2>
-                    <p class="helper-text provider-section-hint">Discover models from the Ollama host, filter them, then merge the selected entries into this editor. Nothing is saved until you save the provider.</p>
+                    <h2 class="panel-title">Import Discovered Models</h2>
+                    <p class="panel-subtitle">Select models to merge or replace. Nothing is saved until you save the provider.</p>
                 </div>
                 <span id="ollamaImportCount" class="badge neutral-badge">0 selected</span>
             </div>
-            <div class="form-row">
-                <label for="ollamaSearch">Filter</label>
-                <input type="text" id="ollamaSearch" placeholder="Search discovered models">
+            <div class="grid-two">
+                <div class="form-row">
+                    <label for="ollamaSearch">Filter</label>
+                    <input type="text" id="ollamaSearch" placeholder="Search discovered models">
+                </div>
+                <div class="form-row">
+                    <label>Discovery Source</label>
+                    <div id="ollamaSourceLabel" class="helper-text"></div>
+                </div>
             </div>
             <div class="inline-actions">
-                <button type="button" id="ollamaSelectVisibleBtn" class="secondary-button small-button">Select Visible</button>
-                <button type="button" id="ollamaClearVisibleBtn" class="secondary-button small-button">Clear Visible</button>
+                <button type="button" class="secondary-button small-button" id="ollamaSelectVisibleBtn">Select Visible</button>
+                <button type="button" class="secondary-button small-button" id="ollamaClearVisibleBtn">Clear Visible</button>
             </div>
-            <div id="ollamaImportStatus" class="helper-text" aria-live="polite"></div>
-            <div id="ollamaImportList" class="panel subtle-panel provider-import-list"></div>
+            <div id="ollamaImportStatus" class="helper-text"></div>
+            <div id="ollamaImportList" class="record-list"></div>
             <div class="inline-actions">
-                <button type="button" id="ollamaImportConfirmBtn" class="primary-button">Merge Selected</button>
-                <button type="button" id="ollamaImportCancelBtn" class="secondary-button">Cancel</button>
+                <button type="button" class="primary-button" id="ollamaAddModelsBtn">Add Models</button>
+                <button type="button" class="ghost-button" id="ollamaImportCancelBtn">Cancel</button>
             </div>
         </div>
     </div>
-
-    <script>
-        const providerTypeMeta = {
-            "openai": {
-                badge: "openai",
-                title: "OpenAI or compatible API",
-                hint: "Use an API key and optionally override the base URL if you are pointing at a compatible gateway.",
-                connectionHint: "API key is usually required. Base URL is optional unless you are targeting a compatible non-default endpoint.",
-                chips: ["API key", "Optional base URL", "Task defaults", "Model pricing"],
-                defaultModelPlaceholder: "e.g. gpt-4o",
-                baseUrlPlaceholder: "Optional base URL",
-                hideApiKey: false,
-                hideBaseUrl: false,
-                showLocalBackend: false,
-                showOpenRouter: false,
-                showAzureOpenAi: false,
-                showAzureInference: false
-            },
-            "openrouter": {
-                badge: "openrouter",
-                title: "OpenRouter",
-                hint: "OpenRouter uses an API key, a base URL, and can optionally send referer metadata headers.",
-                connectionHint: "OpenRouter typically uses `https://openrouter.ai/api/v1`. Referer and site name are optional, but useful.",
-                chips: ["API key", "Base URL", "Optional referer", "Optional site title"],
-                defaultModelPlaceholder: "e.g. openai/gpt-4o-mini",
-                baseUrlPlaceholder: "https://openrouter.ai/api/v1",
-                hideApiKey: false,
-                hideBaseUrl: false,
-                showLocalBackend: false,
-                showOpenRouter: true,
-                showAzureOpenAi: false,
-                showAzureInference: false
-            },
-            "local": {
-                badge: "local",
-                title: "Local router",
-                hint: "Use a local OpenAI-compatible gateway, or route through Ollama or llama.cpp with the backend selector.",
-                connectionHint: "Base URL is usually required for local gateways. API keys are optional and often ignored.",
-                chips: ["Base URL", "Optional API key", "Local backend", "Model capabilities"],
-                defaultModelPlaceholder: "e.g. llama3.2",
-                baseUrlPlaceholder: "http://localhost:11434/v1 or another local URL",
-                hideApiKey: false,
-                hideBaseUrl: false,
-                showLocalBackend: true,
-                showOpenRouter: false,
-                showAzureOpenAi: false,
-                showAzureInference: false
-            },
-            "ollama": {
-                badge: "ollama",
-                title: "Direct Ollama host",
-                hint: "Ollama uses a local host directly. API keys are not required, and model discovery is available from this page.",
-                connectionHint: "Set a base URL only if your Ollama host is not using the default local endpoint.",
-                chips: ["Default model", "Optional base URL", "Ollama discovery", "Local pricing usually zero"],
-                defaultModelPlaceholder: "e.g. llama3.2",
-                baseUrlPlaceholder: "http://localhost:11434/v1",
-                hideApiKey: true,
-                hideBaseUrl: false,
-                showLocalBackend: false,
-                showOpenRouter: false,
-                showAzureOpenAi: false,
-                showAzureInference: false
-            },
-            "llamacpp": {
-                badge: "llamacpp",
-                title: "Direct llama.cpp server",
-                hint: "llama.cpp connects to a local server directly. API keys are not required.",
-                connectionHint: "Point the base URL at your llama.cpp OpenAI-compatible endpoint.",
-                chips: ["Base URL", "Default model", "Model pricing", "Capability flags"],
-                defaultModelPlaceholder: "e.g. local-model",
-                baseUrlPlaceholder: "http://localhost:8080/v1",
-                hideApiKey: true,
-                hideBaseUrl: false,
-                showLocalBackend: false,
-                showOpenRouter: false,
-                showAzureOpenAi: false,
-                showAzureInference: false
-            },
-            "azure-openai": {
-                badge: "azure-openai",
-                title: "Azure OpenAI",
-                hint: "Azure OpenAI uses an API key, endpoint, and API version instead of a generic base URL.",
-                connectionHint: "Use the Azure endpoint and API version fields below. Base URL is not used for this provider type.",
-                chips: ["API key", "Azure endpoint", "API version", "Task defaults"],
-                defaultModelPlaceholder: "e.g. gpt-4o",
-                baseUrlPlaceholder: "Not used for Azure OpenAI",
-                hideApiKey: false,
-                hideBaseUrl: true,
-                showLocalBackend: false,
-                showOpenRouter: false,
-                showAzureOpenAi: true,
-                showAzureInference: false
-            },
-            "azure-inference": {
-                badge: "azure-inference",
-                title: "Azure AI Inference",
-                hint: "Azure AI Inference uses an API key and endpoint dedicated to inference deployments.",
-                connectionHint: "Use the inference endpoint field below. Base URL is not used for this provider type.",
-                chips: ["API key", "Inference endpoint", "Task defaults", "Model pricing"],
-                defaultModelPlaceholder: "e.g. gpt-4o",
-                baseUrlPlaceholder: "Not used for Azure AI Inference",
-                hideApiKey: false,
-                hideBaseUrl: true,
-                showLocalBackend: false,
-                showOpenRouter: false,
-                showAzureOpenAi: false,
-                showAzureInference: true
-            }
-        };
-
-        let providerCatalogCache = [];
-        let selectedProviderId = null;
-        let discoveredOllamaModels = [];
-        let initialEditorSnapshot = null;
-        let saveInFlight = false;
-        let discoveryInFlight = false;
-
-        function byId(id) {
-            return document.getElementById(id);
-        }
-
-        function escapeHtml(value) {
-            return String(value ?? "")
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;")
-                .replace(/"/g, "&quot;")
-                .replace(/'/g, "&#39;");
-        }
-
-        function providerMeta() {
-            return providerTypeMeta[byId("providerType").value] || providerTypeMeta.openai;
-        }
-
-        function taskDefaultsFromEditor() {
-            const mapping = {
-                query_generation: byId("taskDefaultQueryGeneration").value.trim(),
-                paper_analysis: byId("taskDefaultPaperAnalysis").value.trim(),
-                venue_scoring: byId("taskDefaultVenueScoring").value.trim(),
-                final_report: byId("taskDefaultFinalReport").value.trim(),
-            };
-            Object.keys(mapping).forEach(key => {
-                if (!mapping[key]) {
-                    delete mapping[key];
-                }
-            });
-            return mapping;
-        }
-
-        function isOllamaBackedProvider() {
-            const providerType = byId("providerType").value;
-            const localBackend = byId("providerLocalBackend").value;
-            return providerType === "ollama" || localBackend === "ollama";
-        }
-
-        function toneClass(tone) {
-            if (tone === "error") {
-                return "error-card";
-            }
-            if (tone === "warning") {
-                return "warning-card";
-            }
-            return "info-card";
-        }
-
-        function showPageFeedback(message, tone = "info", title = "") {
-            const feedback = byId("pageFeedback");
-            feedback.className = `status-card ${toneClass(tone)}`;
-            feedback.innerHTML = `
-                ${title ? `<strong>${escapeHtml(title)}</strong>` : ""}
-                <span>${escapeHtml(message)}</span>
-            `;
-            feedback.classList.remove("hidden");
-        }
-
-        function clearPageFeedback() {
-            byId("pageFeedback").classList.add("hidden");
-            byId("pageFeedback").innerHTML = "";
-        }
-
-        function safeInteger(value, fallback) {
-            const parsed = parseInt(value, 10);
-            return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-        }
-
-        function safeFloat(value, fallback) {
-            const parsed = parseFloat(value);
-            return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
-        }
-
-        function serializeModels() {
-            return Array.from(document.querySelectorAll(".model-row")).map(row => ({
-                model_name: row.querySelector('[data-model-field="model_name"]').value.trim(),
-                label: row.querySelector('[data-model-field="label"]').value.trim() || row.querySelector('[data-model-field="model_name"]').value.trim(),
-                context_window_tokens: safeInteger(row.querySelector('[data-model-field="context_window_tokens"]').value, 8192),
-                max_output_tokens_default: safeInteger(row.querySelector('[data-model-field="max_output_tokens_default"]').value, 1024),
-                input_cost_per_million: safeFloat(row.querySelector('[data-model-field="input_cost_per_million"]').value, 0),
-                output_cost_per_million: safeFloat(row.querySelector('[data-model-field="output_cost_per_million"]').value, 0),
-                supports_temperature: row.querySelector('[data-model-field="supports_temperature"]').checked,
-                supports_json_mode: row.querySelector('[data-model-field="supports_json_mode"]').checked,
-                enabled: row.querySelector('[data-model-field="enabled"]').checked,
-            })).filter(model => model.model_name);
-        }
-
-        function serializeProviderPayload() {
-            return {
-                provider_id: byId("providerId").value.trim() || undefined,
-                label: byId("providerLabel").value.trim(),
-                provider_type: byId("providerType").value,
-                api_key: byId("providerApiKey").value,
-                base_url: byId("providerBaseUrl").value.trim(),
-                default_model: byId("providerDefaultModel").value.trim(),
-                local_backend: byId("providerLocalBackend").value,
-                http_referer: byId("providerHttpReferer").value.trim(),
-                site_name: byId("providerSiteName").value.trim(),
-                azure_openai_endpoint: byId("providerAzureOpenAiEndpoint").value.trim(),
-                azure_openai_api_version: byId("providerAzureOpenAiApiVersion").value.trim() || "2024-06-01",
-                azure_ai_inference_endpoint: byId("providerAzureAiInferenceEndpoint").value.trim(),
-                task_defaults: taskDefaultsFromEditor(),
-                models: serializeModels(),
-            };
-        }
-
-        function snapshotEditorState() {
-            return JSON.stringify(serializeProviderPayload());
-        }
-
-        function duplicateModelNames() {
-            const counts = new Map();
-            serializeModels().forEach(model => {
-                const key = model.model_name.toLowerCase();
-                counts.set(key, (counts.get(key) || 0) + 1);
-            });
-            return new Set(Array.from(counts.entries())
-                .filter(([, count]) => count > 1)
-                .map(([name]) => name));
-        }
-
-        function updateModelRowPresentation(row, duplicateNames) {
-            const modelName = row.querySelector('[data-model-field="model_name"]').value.trim();
-            const label = row.querySelector('[data-model-field="label"]').value.trim();
-            const enabled = row.querySelector('[data-model-field="enabled"]').checked;
-            const contextWindow = safeInteger(row.querySelector('[data-model-field="context_window_tokens"]').value, 8192);
-            const maxOutput = safeInteger(row.querySelector('[data-model-field="max_output_tokens_default"]').value, 1024);
-            const duplicate = modelName && duplicateNames.has(modelName.toLowerCase());
-
-            row.querySelector("[data-model-title]").textContent = label || modelName || "New model";
-            row.querySelector("[data-model-summary]").textContent = modelName
-                ? `${modelName} | context ${contextWindow.toLocaleString()} | output ${maxOutput.toLocaleString()} | ${enabled ? "enabled" : "hidden"}`
-                : "Set the model name, limits, pricing, and feature support.";
-            row.querySelector("[data-model-duplicate]").classList.toggle("hidden", !duplicate);
-            row.classList.toggle("model-row-duplicate", Boolean(duplicate));
-        }
-
-        function updateModelSummary() {
-            const models = serializeModels();
-            const duplicateNames = duplicateModelNames();
-            const enabledCount = models.filter(model => model.enabled !== false).length;
-            const summary = models.length
-                ? `${models.length} configured, ${enabledCount} enabled`
-                : "0 configured";
-            byId("modelSummary").textContent = summary;
-            document.querySelectorAll(".model-row").forEach(row => updateModelRowPresentation(row, duplicateNames));
-        }
-
-        function updateDirtyState() {
-            const dirty = initialEditorSnapshot !== null && initialEditorSnapshot !== snapshotEditorState();
-            byId("editorDirtyBadge").classList.toggle("hidden", !dirty);
-            byId("saveProviderStatus").textContent = saveInFlight
-                ? "Saving provider..."
-                : dirty
-                    ? "Unsaved changes are local until you click Save Provider."
-                    : "Changes are stored only in this repo's provider catalog.";
-        }
-
-        function updateSaveButtonState() {
-            byId("saveProviderBtn").disabled = saveInFlight;
-            byId("saveProviderBtn").textContent = saveInFlight ? "Saving..." : "Save Provider";
-        }
-
-        function updateOllamaImportState() {
-            const button = byId("importOllamaBtn");
-            const hint = byId("ollamaImportHint");
-            const enabled = isOllamaBackedProvider();
-            button.disabled = !enabled || discoveryInFlight;
-            button.textContent = discoveryInFlight ? "Discovering..." : "Discover Ollama Models";
-            hint.textContent = enabled
-                ? "Discover models from the configured Ollama host and merge selected entries into this provider."
-                : "Use provider type `ollama` or set Local Backend to `ollama` to enable discovery.";
-        }
-
-        function updateProviderContext() {
-            const meta = providerMeta();
-            byId("editorProviderTypeBadge").textContent = meta.badge;
-            byId("providerModeTitle").textContent = meta.title;
-            byId("providerModeHint").textContent = meta.hint;
-            byId("connectionHint").textContent = meta.connectionHint;
-            byId("providerDefaultModel").placeholder = meta.defaultModelPlaceholder;
-            byId("providerBaseUrl").placeholder = meta.baseUrlPlaceholder;
-            byId("providerRequirementChips").innerHTML = meta.chips
-                .map(item => `<span class="provider-chip">${escapeHtml(item)}</span>`)
-                .join("");
-
-            byId("providerApiKeyGroup").classList.toggle("hidden", Boolean(meta.hideApiKey));
-            byId("providerBaseUrlGroup").classList.toggle("hidden", Boolean(meta.hideBaseUrl));
-            byId("providerLocalBackendGroup").classList.toggle("hidden", !meta.showLocalBackend);
-            byId("openrouterSection").classList.toggle("hidden", !meta.showOpenRouter);
-            byId("azureOpenAiSection").classList.toggle("hidden", !meta.showAzureOpenAi);
-            byId("azureInferenceSection").classList.toggle("hidden", !meta.showAzureInference);
-
-            updateOllamaImportState();
-        }
-
-        function setEditorMode() {
-            const editing = Boolean(selectedProviderId);
-            byId("providerId").readOnly = editing;
-            byId("providerIdHint").textContent = editing
-                ? "Provider ID is fixed after creation. Use Reset to start a new provider."
-                : "Leave blank to autogenerate a stable ID for a new provider.";
-            byId("editorSubtitle").textContent = editing
-                ? "Editing an existing provider snapshot. Save writes back to the repo-local catalog."
-                : "Create a provider snapshot. The form adapts to the provider type you select.";
-        }
-
-        function addModelRow(model = {}) {
-            const template = byId("modelRowTemplate");
-            const fragment = template.content.cloneNode(true);
-            const row = fragment.querySelector(".model-row");
-            row.querySelector('[data-model-field="model_name"]').value = model.model_name || "";
-            row.querySelector('[data-model-field="label"]').value = model.label || "";
-            row.querySelector('[data-model-field="context_window_tokens"]').value = model.context_window_tokens || 8192;
-            row.querySelector('[data-model-field="max_output_tokens_default"]').value = model.max_output_tokens_default || 1024;
-            row.querySelector('[data-model-field="input_cost_per_million"]').value = model.input_cost_per_million ?? 0;
-            row.querySelector('[data-model-field="output_cost_per_million"]').value = model.output_cost_per_million ?? 0;
-            row.querySelector('[data-model-field="supports_temperature"]').checked = model.supports_temperature ?? true;
-            row.querySelector('[data-model-field="supports_json_mode"]').checked = model.supports_json_mode ?? true;
-            row.querySelector('[data-model-field="enabled"]').checked = model.enabled ?? true;
-            byId("modelRows").appendChild(row);
-            updateModelSummary();
-        }
-
-        function resetEditor() {
-            selectedProviderId = null;
-            byId("editorTitle").textContent = "New Provider";
-            byId("providerId").value = "";
-            byId("providerLabel").value = "";
-            byId("providerType").value = "openai";
-            byId("providerApiKey").value = "";
-            byId("providerBaseUrl").value = "";
-            byId("providerDefaultModel").value = "";
-            byId("providerLocalBackend").value = "";
-            byId("providerHttpReferer").value = "";
-            byId("providerSiteName").value = "";
-            byId("providerAzureOpenAiEndpoint").value = "";
-            byId("providerAzureOpenAiApiVersion").value = "2024-06-01";
-            byId("providerAzureAiInferenceEndpoint").value = "";
-            byId("taskDefaultQueryGeneration").value = "";
-            byId("taskDefaultPaperAnalysis").value = "";
-            byId("taskDefaultVenueScoring").value = "";
-            byId("taskDefaultFinalReport").value = "";
-            byId("modelRows").innerHTML = "";
-            addModelRow();
-            setEditorMode();
-            updateProviderContext();
-            initialEditorSnapshot = snapshotEditorState();
-            updateDirtyState();
-            renderProviderList();
-        }
-
-        function populateEditor(provider, { scrollIntoView = true } = {}) {
-            selectedProviderId = provider.provider_id;
-            byId("editorTitle").textContent = `Edit ${provider.label || provider.provider_id}`;
-            byId("providerId").value = provider.provider_id || "";
-            byId("providerLabel").value = provider.label || "";
-            byId("providerType").value = provider.provider_type || "openai";
-            byId("providerApiKey").value = provider.api_key || "";
-            byId("providerBaseUrl").value = provider.base_url || "";
-            byId("providerDefaultModel").value = provider.default_model || "";
-            byId("providerLocalBackend").value = provider.local_backend || "";
-            byId("providerHttpReferer").value = provider.http_referer || "";
-            byId("providerSiteName").value = provider.site_name || "";
-            byId("providerAzureOpenAiEndpoint").value = provider.azure_openai_endpoint || "";
-            byId("providerAzureOpenAiApiVersion").value = provider.azure_openai_api_version || "2024-06-01";
-            byId("providerAzureAiInferenceEndpoint").value = provider.azure_ai_inference_endpoint || "";
-            const taskDefaults = provider.task_defaults || {};
-            byId("taskDefaultQueryGeneration").value = taskDefaults.query_generation || "";
-            byId("taskDefaultPaperAnalysis").value = taskDefaults.paper_analysis || "";
-            byId("taskDefaultVenueScoring").value = taskDefaults.venue_scoring || "";
-            byId("taskDefaultFinalReport").value = taskDefaults.final_report || "";
-            byId("modelRows").innerHTML = "";
-            (provider.models || []).forEach(addModelRow);
-            if (!(provider.models || []).length) {
-                addModelRow();
-            }
-            setEditorMode();
-            updateProviderContext();
-            initialEditorSnapshot = snapshotEditorState();
-            updateDirtyState();
-            renderProviderList();
-            if (scrollIntoView) {
-                byId("providerEditor").scrollIntoView({ behavior: "smooth", block: "start" });
-            }
-        }
-
-        function providerSearchMatches(provider, query) {
-            if (!query) {
-                return true;
-            }
-            const haystack = [
-                provider.label,
-                provider.provider_id,
-                provider.provider_type,
-                provider.local_backend,
-                provider.default_model,
-                ...(provider.models || []).map(model => model.model_name || ""),
-            ].join(" ").toLowerCase();
-            return haystack.includes(query);
-        }
-
-        function renderProviderList() {
-            const query = byId("providerSearch").value.trim().toLowerCase();
-            const visibleProviders = providerCatalogCache.filter(provider => providerSearchMatches(provider, query));
-            byId("providerCountPill").textContent = `${providerCatalogCache.length} provider${providerCatalogCache.length === 1 ? "" : "s"}`;
-            byId("providerList").innerHTML = visibleProviders.map(provider => {
-                const active = provider.provider_id === selectedProviderId;
-                const enabledModelCount = (provider.models || []).filter(model => model.enabled !== false).length;
-                const totalModelCount = (provider.models || []).length;
-                return `
-                    <article class="panel subtle-panel provider-card ${active ? "active" : ""}" data-select-provider="${escapeHtml(provider.provider_id)}" tabindex="0">
-                        <div class="panel-header-row">
-                            <div>
-                                <h3>${escapeHtml(provider.label || provider.provider_id)}</h3>
-                                <p class="provider-card-id">${escapeHtml(provider.provider_id)}</p>
-                            </div>
-                            <div class="provider-card-badges">
-                                <span class="badge neutral-badge">${escapeHtml(provider.provider_type || "unknown")}</span>
-                                ${provider.local_backend ? `<span class="badge neutral-badge">${escapeHtml(provider.local_backend)}</span>` : ""}
-                            </div>
-                        </div>
-                        <p class="provider-card-meta"><strong>Default:</strong> ${escapeHtml(provider.default_model || "unset")}</p>
-                        <p class="provider-card-meta"><strong>Task defaults:</strong> ${escapeHtml(Object.entries(provider.task_defaults || {}).map(([task, model]) => `${task}: ${model}`).join(" | ") || "none")}</p>
-                        <p class="provider-card-meta"><strong>Models:</strong> ${enabledModelCount} enabled / ${totalModelCount} total</p>
-                        <div class="inline-actions">
-                            <button type="button" class="secondary-button small-button" data-edit="${escapeHtml(provider.provider_id)}">Edit</button>
-                            <button type="button" class="danger-button small-button" data-delete="${escapeHtml(provider.provider_id)}">Delete</button>
-                        </div>
-                    </article>
-                `;
-            }).join("") || '<div class="helper-text">No providers match the current filter.</div>';
-        }
-
-        function visibleDiscoveredModels() {
-            const filter = byId("ollamaSearch").value.trim().toLowerCase();
-            return discoveredOllamaModels.filter(model => {
-                const haystack = [
-                    model.model_name,
-                    model.label,
-                    model.discovery_metadata?.size,
-                    model.discovery_metadata?.modified,
-                ].join(" ").toLowerCase();
-                return !filter || haystack.includes(filter);
-            });
-        }
-
-        function renderOllamaImportList(messageOverride = "") {
-            const models = visibleDiscoveredModels();
-            const selectedCount = discoveredOllamaModels.filter(model => model.selected).length;
-            byId("ollamaImportCount").textContent = `${selectedCount} selected`;
-            byId("ollamaImportStatus").textContent = messageOverride || `${models.length} matching model(s), ${selectedCount} selected.`;
-            byId("ollamaImportList").innerHTML = models.map(model => `
-                <label class="checkbox-row provider-import-row">
-                    <input type="checkbox" data-ollama-model="${escapeHtml(model.model_name)}" ${model.selected ? "checked" : ""}>
-                    <span>
-                        <strong>${escapeHtml(model.model_name)}</strong>
-                        ${model.discovery_metadata?.size ? `<span class="provider-import-meta">${escapeHtml(model.discovery_metadata.size)}</span>` : ""}
-                        ${model.discovery_metadata?.modified ? `<span class="provider-import-meta">${escapeHtml(model.discovery_metadata.modified)}</span>` : ""}
-                    </span>
-                </label>
-            `).join("") || '<div class="helper-text">No discovered models match the current filter.</div>';
-        }
-
-        function closeOllamaImportModal() {
-            byId("ollamaImportModal").classList.add("hidden");
-        }
-
-        async function openOllamaImportModal() {
-            if (!isOllamaBackedProvider()) {
-                throw new Error("This provider is not configured for Ollama.");
-            }
-            discoveryInFlight = true;
-            updateOllamaImportState();
-            byId("ollamaImportStatus").textContent = "Discovering models from Ollama...";
-            try {
-                const response = await fetch("/api/v1/providers/ollama/discover", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        provider_id: selectedProviderId || undefined,
-                    }),
-                });
-                const data = await response.json();
-                if (!response.ok) {
-                    throw new Error(data.error || "Failed to discover Ollama models.");
-                }
-                discoveredOllamaModels = (data.models || []).map(model => ({ ...model, selected: true }));
-                byId("ollamaSearch").value = "";
-                renderOllamaImportList();
-                byId("ollamaImportModal").classList.remove("hidden");
-            } finally {
-                discoveryInFlight = false;
-                updateOllamaImportState();
-            }
-        }
-
-        async function loadProviders() {
-            const response = await fetch("/api/v1/providers");
-            const data = await response.json();
-            if (!response.ok) {
-                throw new Error(data.error || "Failed to load providers.");
-            }
-            providerCatalogCache = data.providers || [];
-            renderProviderList();
-        }
-
-        async function saveProvider() {
-            const duplicates = Array.from(duplicateModelNames());
-            if (duplicates.length) {
-                throw new Error(`Model names must be unique. Duplicates: ${duplicates.join(", ")}`);
-            }
-
-            const previousProviderId = selectedProviderId;
-            saveInFlight = true;
-            updateSaveButtonState();
-            updateDirtyState();
-
-            const payload = serializeProviderPayload();
-            const method = selectedProviderId ? "PUT" : "POST";
-            const url = selectedProviderId
-                ? `/api/v1/providers/${encodeURIComponent(selectedProviderId)}`
-                : "/api/v1/providers";
-            try {
-                const response = await fetch(url, {
-                    method,
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload),
-                });
-                const data = await response.json();
-
-                if (!response.ok) {
-                    throw new Error(data.error || "Failed to save provider.");
-                }
-
-                await loadProviders();
-                populateEditor(data, { scrollIntoView: false });
-                showPageFeedback(
-                    previousProviderId
-                        ? `Saved ${data.label || data.provider_id}.`
-                        : `Created ${data.label || data.provider_id}.`,
-                    "info",
-                    "Provider saved"
-                );
-            } finally {
-                saveInFlight = false;
-                updateSaveButtonState();
-                updateDirtyState();
-            }
-        }
-
-        async function deleteProvider(providerId) {
-            if (!confirm("Delete this provider snapshot?")) {
-                return;
-            }
-            const response = await fetch(`/api/v1/providers/${encodeURIComponent(providerId)}`, { method: "DELETE" });
-            const data = await response.json();
-            if (!response.ok) {
-                throw new Error(data.error || "Failed to delete provider.");
-            }
-            if (selectedProviderId === providerId) {
-                resetEditor();
-            }
-            await loadProviders();
-            showPageFeedback(`Deleted ${providerId}.`, "warning", "Provider removed");
-        }
-
-        byId("newProviderBtn").addEventListener("click", () => {
-            clearPageFeedback();
-            resetEditor();
-            byId("providerEditor").scrollIntoView({ behavior: "smooth", block: "start" });
-        });
-
-        byId("providerSearch").addEventListener("input", renderProviderList);
-
-        byId("providerList").addEventListener("click", event => {
-            const deleteButton = event.target.closest("[data-delete]");
-            if (deleteButton) {
-                deleteProvider(deleteButton.dataset.delete).catch(error => showPageFeedback(error.message, "error", "Delete failed"));
-                return;
-            }
-
-            const editButton = event.target.closest("[data-edit]");
-            if (editButton) {
-                const provider = providerCatalogCache.find(item => item.provider_id === editButton.dataset.edit);
-                if (provider) {
-                    clearPageFeedback();
-                    populateEditor(provider);
-                }
-                return;
-            }
-
-            const card = event.target.closest("[data-select-provider]");
-            if (!card) {
-                return;
-            }
-            const provider = providerCatalogCache.find(item => item.provider_id === card.dataset.selectProvider);
-            if (provider) {
-                clearPageFeedback();
-                populateEditor(provider);
-            }
-        });
-
-        byId("providerList").addEventListener("keydown", event => {
-            if (event.key !== "Enter" && event.key !== " ") {
-                return;
-            }
-            const card = event.target.closest("[data-select-provider]");
-            if (!card) {
-                return;
-            }
-            event.preventDefault();
-            const provider = providerCatalogCache.find(item => item.provider_id === card.dataset.selectProvider);
-            if (provider) {
-                clearPageFeedback();
-                populateEditor(provider);
-            }
-        });
-
-        byId("addModelBtn").addEventListener("click", () => {
-            addModelRow();
-            updateDirtyState();
-        });
-
-        byId("modelRows").addEventListener("click", event => {
-            if (!event.target.closest("[data-remove-model]")) {
-                return;
-            }
-            event.target.closest(".model-row").remove();
-            if (!document.querySelector(".model-row")) {
-                addModelRow();
-            } else {
-                updateModelSummary();
-            }
-            updateDirtyState();
-        });
-
-        byId("modelRows").addEventListener("input", () => {
-            updateModelSummary();
-            updateDirtyState();
-        });
-
-        byId("modelRows").addEventListener("change", () => {
-            updateModelSummary();
-            updateDirtyState();
-        });
-
-        byId("providerEditor").addEventListener("input", event => {
-            if (event.target.closest(".model-row")) {
-                return;
-            }
-            updateDirtyState();
-        });
-
-        byId("providerEditor").addEventListener("change", event => {
-            if (event.target.id === "providerType" || event.target.id === "providerLocalBackend") {
-                updateProviderContext();
-            }
-            if (!event.target.closest(".model-row")) {
-                updateDirtyState();
-            }
-        });
-
-        byId("importOllamaBtn").addEventListener("click", () => {
-            openOllamaImportModal().catch(error => showPageFeedback(error.message, "error", "Discovery failed"));
-        });
-
-        byId("ollamaSearch").addEventListener("input", () => renderOllamaImportList());
-
-        byId("ollamaImportList").addEventListener("change", event => {
-            const modelName = event.target.getAttribute("data-ollama-model");
-            if (!modelName) {
-                return;
-            }
-            const target = discoveredOllamaModels.find(model => model.model_name === modelName);
-            if (target) {
-                target.selected = event.target.checked;
-            }
-            renderOllamaImportList();
-        });
-
-        byId("ollamaSelectVisibleBtn").addEventListener("click", () => {
-            visibleDiscoveredModels().forEach(model => {
-                model.selected = true;
-            });
-            renderOllamaImportList();
-        });
-
-        byId("ollamaClearVisibleBtn").addEventListener("click", () => {
-            visibleDiscoveredModels().forEach(model => {
-                model.selected = false;
-            });
-            renderOllamaImportList();
-        });
-
-        byId("ollamaImportConfirmBtn").addEventListener("click", () => {
-            const existingNames = new Set(serializeModels().map(model => model.model_name));
-            const selectedModels = discoveredOllamaModels.filter(model => model.selected);
-            const newModels = selectedModels.filter(model => !existingNames.has(model.model_name));
-            const skipped = selectedModels.length - newModels.length;
-
-            if (selectedModels.length === 0) {
-                renderOllamaImportList("No models selected.");
-                return;
-            }
-
-            const merged = new Map();
-            serializeModels().forEach(model => merged.set(model.model_name, model));
-            newModels.forEach(model => {
-                merged.set(model.model_name, {
-                    model_name: model.model_name,
-                    label: model.label || model.model_name,
-                    context_window_tokens: model.context_window_tokens ?? 8192,
-                    max_output_tokens_default: model.max_output_tokens_default ?? 1024,
-                    input_cost_per_million: model.input_cost_per_million ?? 0,
-                    output_cost_per_million: model.output_cost_per_million ?? 0,
-                    supports_temperature: model.supports_temperature ?? true,
-                    supports_json_mode: model.supports_json_mode ?? true,
-                    enabled: model.enabled ?? true,
-                });
-            });
-
-            byId("modelRows").innerHTML = "";
-            Array.from(merged.values()).forEach(addModelRow);
-            if (!merged.size) {
-                addModelRow();
-            }
-            closeOllamaImportModal();
-            updateDirtyState();
-            showPageFeedback(
-                skipped > 0
-                    ? `Merged ${newModels.length} new Ollama model(s). Skipped ${skipped} existing model(s).`
-                    : `Merged ${newModels.length} Ollama model(s).`,
-                "info",
-                "Import complete"
-            );
-        });
-
-        byId("ollamaImportCancelBtn").addEventListener("click", closeOllamaImportModal);
-
-        byId("saveProviderBtn").addEventListener("click", () => {
-            saveProvider().catch(error => showPageFeedback(error.message, "error", "Save failed"));
-        });
-
-        byId("resetProviderBtn").addEventListener("click", () => {
-            clearPageFeedback();
-            resetEditor();
-        });
-
-        resetEditor();
-        loadProviders().catch(error => {
-            showPageFeedback(error.message, "error", "Catalog load failed");
-            byId("providerList").innerHTML = `<div class="error-message">${escapeHtml(error.message)}</div>`;
-        });
-    </script>
-</body>
-</html>
+{% endblock %}
+
+{% block scripts %}
+    <script src="{{ url_for('static', filename='providers.js') }}"></script>
+{% endblock %}

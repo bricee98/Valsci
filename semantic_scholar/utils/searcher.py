@@ -148,7 +148,7 @@ class S2Searcher:
             logger.error(f"Error generating search queries: {str(e)}")
             raise
 
-    async def search_papers_for_claim(self, queries: List[str], results_per_query: int = 5) -> List[Dict]:
+    async def search_papers_for_claim(self, queries: List[str], results_per_query: int = 5, **kwargs) -> List[Dict]:
         """Search papers relevant to a claim."""
         papers = []
         seen_paper_ids = set()

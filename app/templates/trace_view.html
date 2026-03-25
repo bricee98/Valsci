@@ -12,6 +12,23 @@
             gap: 10px;
             margin-bottom: 16px;
         }
+        .help-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            background: rgba(15, 118, 110, 0.1);
+            color: #0f766e;
+            font-size: 0.82rem;
+            font-weight: 700;
+            text-decoration: none;
+        }
+        .help-link:hover {
+            background: #0f766e;
+            color: #fff;
+        }
         .trace-toolbar a,
         .trace-toolbar button {
             border: 1px solid #ccc;
@@ -191,6 +208,7 @@
             <a id="downloadIssues" href="#">Download Issues File</a>
             <button id="jumpToHighlight" type="button">Jump to Highlight</button>
             <button id="resumeClaim" class="primary" type="button" hidden>Resume Claim</button>
+            <a href="/guidebook#trace-view" class="help-link" title="Guidebook: Trace View">?</a>
         </div>
 
         <div id="statusMessage"></div>

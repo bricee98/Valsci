@@ -7,9 +7,15 @@ from collections import defaultdict
 from copy import deepcopy
 from typing import Any, Dict, Iterable, List, Optional
 
-from app.services.claim_store import ClaimStore, normalize_claim_text
+from app.services.claim_store import (
+    ClaimStore,
+    candidate_color_for_index,
+    candidate_prefix_for_index,
+    normalize_claim_text,
+)
 from app.services.cost_estimator import CostEstimator
 from app.services.provider_catalog import ProviderCatalog
+from app.services.prompt_store import default_prompt_provenance
 from app.services.stage_execution import (
     TASK_NAMES,
     next_stage,
@@ -83,9 +89,25 @@ class SubmissionService:
             provider_snapshot = self.provider_catalog.build_snapshot(provider_id)
             model_overrides = clean_model_overrides(candidate.get("model_overrides") if isinstance(candidate, dict) else {})
             label = candidate.get("label") if isinstance(candidate, dict) else None
+            candidate_index = candidate.get("candidate_index", index) if isinstance(candidate, dict) else index
+            try:
+                candidate_index = int(candidate_index)
+            except Exception:
+                candidate_index = index
+            candidate_prefix = (
+                candidate.get("candidate_prefix") if isinstance(candidate, dict) else None
+            ) or candidate_prefix_for_index(candidate_index)
+            candidate_color = (
+                candidate.get("candidate_color") if isinstance(candidate, dict) else None
+            ) or candidate_color_for_index(candidate_index)
             candidates.append(
                 {
-                    "candidate_id": f"candidate-{index}",
+                    "candidate_id": (
+                        candidate.get("candidate_id") if isinstance(candidate, dict) else None
+                    ) or f"candidate-{candidate_index}",
+                    "candidate_index": candidate_index,
+                    "candidate_prefix": candidate_prefix,
+                    "candidate_color": candidate_color,
                     "provider_id": provider_id,
                     "label": label or provider_snapshot.get("label") or provider_id,
                     "provider_snapshot": provider_snapshot,
@@ -426,6 +448,12 @@ class SubmissionService:
                     review_type=review_type,
                     status=start_status_for_stage(start_stage),
                     source="arena" if create_arena else "standard",
+                    candidate_id=candidate.get("candidate_id"),
+                    candidate_index=candidate.get("candidate_index"),
+                    candidate_prefix=candidate.get("candidate_prefix"),
+                    candidate_label=candidate.get("label"),
+                    candidate_color=candidate.get("candidate_color"),
+                    prompt_provenance=default_prompt_provenance(),
                 )
                 if execution_mode == "reuse_retrieval" and len(candidates) > 1:
                     if candidate_index == 0:
@@ -519,9 +547,25 @@ class SubmissionService:
                 "action": action,
                 "selected_run_id": decision["selected_run_id"],
             }
+            available_runs = [
+                self.claim_store.get_run(run_id)
+                for run_id in decision.get("available_run_ids", [])
+                if isinstance(run_id, str) and run_id.strip()
+            ]
+            available_runs = [run for run in available_runs if run]
             if decision["skip_claim"]:
                 claims_payload.append(claim_entry)
                 continue
+            incomplete_runs = [
+                run["run_id"]
+                for run in available_runs
+                if run.get("completed_stage") != current_stage
+            ]
+            if incomplete_runs:
+                raise ValueError(
+                    f"Claim {decision['claim_key']} still has candidates in progress at stage {current_stage}: "
+                    + ", ".join(incomplete_runs)
+                )
             selected_run_id = decision.get("selected_run_id")
             if not isinstance(selected_run_id, str) or not selected_run_id.strip():
                 raise ValueError(f"A winner must be selected for claim {decision['claim_key']} or the claim must be skipped.")
@@ -637,6 +681,12 @@ class SubmissionService:
                 status=start_status_for_stage(preflight["next_stage"]),
                 source="arena_continue",
                 seed_from_run_id=selected_run_id,
+                candidate_id=source_run.get("candidate_id"),
+                candidate_index=source_run.get("candidate_index"),
+                candidate_prefix=source_run.get("candidate_prefix"),
+                candidate_label=source_run.get("candidate_label"),
+                candidate_color=source_run.get("candidate_color"),
+                prompt_provenance=source_run.get("prompt_provenance") or default_prompt_provenance(),
             )
             self.claim_store.materialize_run_to_queue(
                 new_run,
@@ -667,6 +717,9 @@ class SubmissionService:
         snapshot = candidate["provider_snapshot"]
         return {
             "candidate_id": candidate.get("candidate_id"),
+            "candidate_index": candidate.get("candidate_index"),
+            "candidate_prefix": candidate.get("candidate_prefix"),
+            "candidate_color": candidate.get("candidate_color"),
             "provider_id": candidate.get("provider_id"),
             "label": candidate.get("label"),
             "provider_type": snapshot.get("provider_type"),

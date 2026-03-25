@@ -180,3 +180,6 @@ venv/
 codebase_dump.txt
 dump_project.py
 .claude/settings.local.json
+ui_overhaul_plan.txt
+
+state/

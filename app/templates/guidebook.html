@@ -1,0 +1,956 @@
+{% extends "base.html" %}
+
+{% block head_extra %}
+<style>
+    .guidebook-layout {
+        display: grid;
+        grid-template-columns: 240px 1fr;
+        gap: 24px;
+        align-items: start;
+    }
+    .guidebook-toc {
+        position: sticky;
+        top: 80px;
+        max-height: calc(100vh - 100px);
+        overflow-y: auto;
+        padding: 18px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--radius-lg);
+    }
+    .guidebook-toc h3 {
+        margin: 0 0 12px;
+        font-size: 0.95rem;
+        color: var(--ink);
+    }
+    .guidebook-toc ol {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: grid;
+        gap: 2px;
+    }
+    .guidebook-toc a {
+        display: block;
+        padding: 5px 10px;
+        border-radius: var(--radius-sm);
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--ink-muted);
+        text-decoration: none;
+    }
+    .guidebook-toc a:hover {
+        background: rgba(15, 118, 110, 0.08);
+        color: var(--ink);
+    }
+    .guidebook-body {
+        display: grid;
+        gap: 24px;
+    }
+    .guidebook-section h2 {
+        margin: 0 0 4px;
+    }
+    .guidebook-section h3 {
+        margin: 20px 0 8px;
+        font-size: 1.05rem;
+        color: var(--ink);
+    }
+    .guidebook-section h4 {
+        margin: 14px 0 6px;
+        font-size: 0.95rem;
+        color: var(--ink);
+    }
+    .guidebook-section p,
+    .guidebook-section li {
+        margin: 0 0 8px;
+        line-height: 1.7;
+        color: var(--ink);
+    }
+    .guidebook-section ul {
+        padding-left: 20px;
+        margin: 0 0 12px;
+    }
+    .guidebook-section .gb-tip {
+        margin: 12px 0;
+        padding: 12px 16px;
+        background: var(--info-bg, #eff6ff);
+        border: 1px solid var(--info-border, #bfdbfe);
+        border-radius: var(--radius-md);
+        font-size: 0.92rem;
+    }
+    .guidebook-section .gb-tip strong {
+        color: var(--brand);
+    }
+    .guidebook-section dl {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 6px 16px;
+        margin: 0 0 12px;
+    }
+    .guidebook-section dt {
+        font-weight: 700;
+        color: var(--ink);
+    }
+    .guidebook-section dd {
+        margin: 0;
+        color: var(--ink);
+        line-height: 1.6;
+    }
+    @media (max-width: 980px) {
+        .guidebook-layout {
+            grid-template-columns: 1fr;
+        }
+        .guidebook-toc {
+            position: static;
+            max-height: none;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="guidebook-layout">
+
+    <!-- ===== TABLE OF CONTENTS ===== -->
+    <aside class="guidebook-toc">
+        <h3>Contents</h3>
+        <ol>
+            <li><a href="#overview">What Is Valsci?</a></li>
+            <li><a href="#getting-started">Getting Started</a></li>
+            <li><a href="#concepts">Key Concepts</a></li>
+            <li><a href="#navigation">Navigation &amp; Layout</a></li>
+            <li><a href="#home">Home Page</a></li>
+            <li><a href="#claims-browser">Claims Browser</a></li>
+            <li><a href="#claim-detail">Claim Detail</a></li>
+            <li><a href="#results">Claim Report</a></li>
+            <li><a href="#batch-results">Batch Results</a></li>
+            <li><a href="#progress">Progress</a></li>
+            <li><a href="#arena-builder">Arena Builder</a></li>
+            <li><a href="#arenas-library">Arenas Library</a></li>
+            <li><a href="#arena-workspace">Arena Workspace</a></li>
+            <li><a href="#providers">Providers</a></li>
+            <li><a href="#migration">Migration</a></li>
+            <li><a href="#trace-view">Trace View</a></li>
+            <li><a href="#login">Login</a></li>
+        </ol>
+    </aside>
+
+    <!-- ===== MAIN CONTENT ===== -->
+    <div class="guidebook-body">
+
+        <!-- ============================================================ -->
+        <!-- SECTION: What Is Valsci?                                     -->
+        <!-- ============================================================ -->
+        <section class="panel guidebook-section" id="overview">
+            <h2 class="panel-title">What Is Valsci?</h2>
+            <p class="panel-subtitle">Automated scientific claim verification powered by LLMs and academic literature.</p>
+            <div class="panel-divider"></div>
+
+            <p>Valsci is a tool that evaluates scientific claims against published research. You give it a claim like "Creatine supplementation improves short-term memory" and it:</p>
+            <ul>
+                <li><strong>Generates search queries</strong> from the claim using an LLM.</li>
+                <li><strong>Retrieves academic papers</strong> from Semantic Scholar matching those queries.</li>
+                <li><strong>Analyzes each paper's relevance</strong> to the claim, extracting key excerpts and evidence.</li>
+                <li><strong>Scores paper reliability</strong> using bibliometric data (author H-index, citation counts, journal quality).</li>
+                <li><strong>Produces a final report</strong> with a verdict rating from "Contradicted" to "Highly Supported," backed by cited evidence.</li>
+            </ul>
+            <p>Every step is grounded in real published papers&mdash;not LLM imagination. The system records a detailed trace of every decision so you can audit exactly how it reached its conclusion.</p>
+
+            <h3>Two Ways to Evaluate</h3>
+            <p>Valsci offers two evaluation modes, each suited to different needs:</p>
+            <ul>
+                <li><strong>Quick Runs</strong> (Home page) &mdash; Submit one or more claims and evaluate them with a single provider and model. Fast and straightforward. Best when you trust a particular model or just want a quick answer.</li>
+                <li><strong>Arenas</strong> (Arena Builder) &mdash; Submit the same claims to multiple models simultaneously and compare their results side-by-side. Best when you want to understand how different LLMs assess the same evidence, or when you need high confidence in the verdict.</li>
+            </ul>
+
+            <h3>How Costs Work</h3>
+            <p>Every claim evaluation consumes LLM tokens (the units that language models charge for). The cost depends on:</p>
+            <ul>
+                <li><strong>The model</strong> &mdash; Different models have different per-token prices. These are configured per model on the Providers page (Input Cost and Output Cost per million tokens).</li>
+                <li><strong>The number of queries and papers</strong> &mdash; More search queries and more results per query mean more papers to analyze, which means more tokens.</li>
+                <li><strong>Bibliometric scoring</strong> &mdash; When enabled, adds an extra scoring stage per paper.</li>
+            </ul>
+            <p>Before every submission, you can click <strong>Estimate Cost</strong> to see a preflight calculation. The actual cost may differ slightly because token counts are estimates until the LLM responds. All costs are tracked per run and visible in reports, batch results, and arena workspaces.</p>
+
+            <div class="gb-tip">
+                <strong>Tip:</strong> If you're just exploring or testing, enable Mock Data Mode in your configuration. It uses synthetic paper data instead of real Semantic Scholar calls, so you can try every feature without incurring any cost.
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- SECTION: Getting Started                                     -->
+        <!-- ============================================================ -->
+        <section class="panel guidebook-section" id="getting-started">
+            <h2 class="panel-title">Getting Started</h2>
+            <p class="panel-subtitle">Your first claim evaluation in five steps.</p>
+            <div class="panel-divider"></div>
+
+            <h3>Step 1: Configure a Provider</h3>
+            <p>Go to the <strong>Providers</strong> page. You need at least one enabled provider with a valid API key and at least one enabled model. If you're using OpenAI, enter your API key, ensure a model like <code>gpt-4o</code> is listed and enabled, and save. See the <a href="#providers">Providers</a> section for full details.</p>
+
+            <h3>Step 2: Submit a Claim</h3>
+            <p>Go to the <strong>Home</strong> page. Select your provider and model from the dropdowns. Type a scientific claim (e.g., "Vitamin D supplementation reduces the severity of COVID-19") into the Claims textarea. Click <strong>Stage Claims</strong>.</p>
+
+            <h3>Step 3: Estimate and Queue</h3>
+            <p>Click <strong>Estimate Cost</strong> to see the projected token usage and dollar cost. If it looks reasonable, click <strong>Queue Run</strong>, approve the cost in the confirmation modal, and wait.</p>
+
+            <h3>Step 4: Monitor Progress</h3>
+            <p>You'll be redirected to the <strong>Progress</strong> page, which shows a real-time progress bar as your claim moves through the pipeline stages. When complete, you'll be sent to <strong>Batch Results</strong>.</p>
+
+            <h3>Step 5: Read the Report</h3>
+            <p>Click <strong>View Report</strong> on your claim in Batch Results. You'll see the overall verdict, supporting evidence with paper excerpts, non-relevant papers, and full cost/timing breakdowns. From here you can download the report, view the execution trace, or re-run the claim with different settings.</p>
+
+            <div class="gb-tip">
+                <strong>Tip:</strong> Once you're comfortable with single-model runs, try creating an <a href="#arena-builder">Arena</a> to compare how different models evaluate the same claims. It's the best way to build confidence in your results.
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- SECTION: Key Concepts                                        -->
+        <!-- ============================================================ -->
+        <section class="panel guidebook-section" id="concepts">
+            <h2 class="panel-title">Key Concepts</h2>
+            <p class="panel-subtitle">Core terminology used throughout Valsci.</p>
+            <div class="panel-divider"></div>
+
+            <dl>
+                <dt>Claim</dt>
+                <dd>A scientific assertion you want to verify, such as "Creatine supplementation improves short-term memory." Valsci evaluates claims by searching for published research and analyzing the evidence.</dd>
+
+                <dt>Run</dt>
+                <dd>A single evaluation of one claim by one provider and model combination. A claim can have many runs, each potentially using different models or settings, letting you compare how different LLMs assess the same claim.</dd>
+
+                <dt>Batch</dt>
+                <dd>A group of claims submitted together in one operation. Every submission from the Home page creates a batch, even if it contains only one claim.</dd>
+
+                <dt>Arena</dt>
+                <dd>A structured comparison where the same set of claims is evaluated by multiple provider/model candidates. Arenas progress through stages, letting you review intermediate results and decide which candidates advance.</dd>
+
+                <dt>Candidate</dt>
+                <dd>A specific provider + model combination participating in an arena. Each selected model becomes a named candidate with a consistent identity across all claims in the arena.</dd>
+
+                <dt>Provider</dt>
+                <dd>A connection to an LLM API service, such as OpenAI, Azure OpenAI, Ollama, or a local llama.cpp server. Each provider stores its credentials, base URL, and a list of available models.</dd>
+
+                <dt>Stage</dt>
+                <dd>One step in the claim evaluation pipeline. The four stages are:
+                    <ul>
+                        <li><strong>Query Generation</strong> &mdash; The LLM reads your claim and generates multiple targeted search queries designed to find relevant academic papers. For example, the claim "Creatine improves memory" might produce queries like "creatine supplementation cognitive function randomized trial" and "creatine monohydrate working memory neuroimaging."</li>
+                        <li><strong>Paper Analysis</strong> &mdash; Each query is sent to Semantic Scholar. Retrieved papers are then individually analyzed by the LLM, which reads the title, abstract, and metadata to determine relevance to the claim and extract supporting or contradicting excerpts.</li>
+                        <li><strong>Venue Scoring</strong> &mdash; When bibliometrics are enabled, each paper receives a reliability score based on the authors' H-indices, the paper's citation count, and the journal's impact. Higher-quality sources carry more weight in the final verdict.</li>
+                        <li><strong>Final Report</strong> &mdash; The LLM synthesizes all analyzed papers, their excerpts, and their reliability scores into a narrative report with an overall claim rating.</li>
+                    </ul>
+                </dd>
+
+                <dt>Semantic Scholar</dt>
+                <dd>The academic paper database that Valsci searches to find evidence for claims. It returns published papers, their authors, citation counts, and other metadata.</dd>
+
+                <dt>Bibliometrics</dt>
+                <dd>Quantitative measures of paper and author quality, including author H-index, citation count, and journal impact. When enabled, these scores weight evidence so that higher-quality sources carry more influence in the final verdict.</dd>
+
+                <dt>Mock Data Mode</dt>
+                <dd>A testing mode that uses synthetic paper data instead of calling Semantic Scholar. Useful for validating the full pipeline without consuming API quota. Indicated by a "Mock Data" badge in the navigation bar.</dd>
+
+                <dt>Trace</dt>
+                <dd>A detailed, step-by-step log of every LLM call, API request, and processing decision made during a run. Useful for debugging, auditing prompt behavior, and understanding token usage.</dd>
+
+                <dt>Claim Rating</dt>
+                <dd>The final verdict for a claim, expressed on an ordinal scale:
+                    <ul>
+                        <li><strong>0 &mdash; No Evidence</strong>: No relevant papers were found. The claim can't be assessed.</li>
+                        <li><strong>1 &mdash; Contradicted</strong>: The available evidence directly contradicts the claim.</li>
+                        <li><strong>2 &mdash; Likely False</strong>: The weight of evidence leans against the claim, though some ambiguity exists.</li>
+                        <li><strong>3 &mdash; Mixed Evidence</strong>: Papers both support and contradict the claim; no clear consensus.</li>
+                        <li><strong>4 &mdash; Likely True</strong>: The weight of evidence supports the claim, with minor caveats.</li>
+                        <li><strong>5 &mdash; Highly Supported</strong>: Strong, consistent evidence from multiple high-quality sources supports the claim.</li>
+                    </ul>
+                </dd>
+
+                <dt>Prompt Provenance</dt>
+                <dd>Valsci tracks exactly which prompt templates were used for each stage of every run, including file names and SHA-256 hashes. This ensures reproducibility: you can verify that two runs used identical prompts, or identify when a prompt change affected results.</dd>
+
+                <dt>Issues</dt>
+                <dd>Warnings or errors that occurred during processing, such as LLM timeouts, parsing failures, or context window overflows. Issues don't necessarily mean the evaluation failed&mdash;the system has retry and recovery logic&mdash;but they flag areas worth reviewing in the trace.</dd>
+            </dl>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- SECTION: Navigation & Layout                                 -->
+        <!-- ============================================================ -->
+        <section class="panel guidebook-section" id="navigation">
+            <h2 class="panel-title">Navigation &amp; Layout</h2>
+            <p class="panel-subtitle">How to get around the application.</p>
+            <div class="panel-divider"></div>
+
+            <h3>Top Navigation Bar</h3>
+            <p>The sticky bar at the top of every page contains:</p>
+            <ul>
+                <li><strong>VS / Valsci</strong> (brand lockup, far left) &mdash; Click to return to the Home page from anywhere.</li>
+                <li><strong>Home</strong> &mdash; The claim submission page (quick runs).</li>
+                <li><strong>Claims</strong> &mdash; The Claims Browser, where you search and browse all evaluated claims.</li>
+                <li><strong>Arenas</strong> &mdash; The Arenas Library, listing all multi-model comparisons.</li>
+                <li><strong>Providers</strong> &mdash; Provider configuration: API keys, models, and connection settings.</li>
+                <li><strong>Migration</strong> &mdash; Legacy batch import tool (only relevant if upgrading from an older Valsci version).</li>
+                <li><strong>Guidebook</strong> &mdash; This page.</li>
+            </ul>
+
+            <h3>Status Indicators</h3>
+            <ul>
+                <li><strong>Mock Data badge</strong> (top right) &mdash; A teal badge that appears when Mock Semantic Scholar mode is active. This means all paper retrieval uses synthetic data, not real Semantic Scholar results. Useful for testing.</li>
+                <li><strong>Logout button</strong> (top right) &mdash; Appears when password protection is enabled. Ends your session and redirects to the login page.</li>
+            </ul>
+
+            <h3>Page Structure</h3>
+            <p>Most pages follow a consistent layout:</p>
+            <ul>
+                <li><strong>Breadcrumbs</strong> &mdash; Appear on sub-pages (like Claim Detail) showing the navigation path. Click any breadcrumb to go back to that level.</li>
+                <li><strong>Page header</strong> &mdash; Title, optional subtitle, and optional action buttons (e.g., "Refresh" or "New Arena").</li>
+                <li><strong>Panels</strong> &mdash; Content is organized in bordered panel cards. Some pages use a two-column dashboard grid layout (e.g., Home, Providers, Claim Detail).</li>
+                <li><strong>Status cards</strong> &mdash; Colored alert banners (blue for info, yellow for warnings, red for errors, green for success) appear contextually to communicate system state.</li>
+                <li><strong>Modals</strong> &mdash; Cost confirmation dialogs and import modals overlay the page. They always require explicit approval (a checkbox) before proceeding with cost-incurring operations.</li>
+            </ul>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- SECTION: Home Page                                           -->
+        <!-- ============================================================ -->
+        <section class="panel guidebook-section" id="home">
+            <h2 class="panel-title">Home Page</h2>
+            <p class="panel-subtitle">Submit claims for evaluation using a single provider and model.</p>
+            <div class="panel-divider"></div>
+
+            <h3>Migration Alert</h3>
+            <p>If legacy batch folders exist from an older version of Valsci, a yellow warning banner appears at the top of the page. It shows how many legacy batches need attention and offers two actions:</p>
+            <ul>
+                <li><strong>Review Migration</strong> &mdash; Opens the Migration page so you can inspect each legacy batch before importing.</li>
+                <li><strong>Migrate All</strong> &mdash; Immediately imports all pending legacy batches into the canonical claim store.</li>
+            </ul>
+
+            <h3>Run Claims Panel</h3>
+            <p>The main panel on the left side of the page is where you configure and submit claims.</p>
+
+            <h4>Provider &amp; Model</h4>
+            <p>The <strong>Provider</strong> dropdown lists all enabled providers configured on the Providers page. Selecting a provider populates the <strong>Model</strong> dropdown with that provider's enabled models. These determine which LLM service and model will evaluate your claims.</p>
+
+            <h4>Existing Claim Handling</h4>
+            <p>The <strong>Existing Claim Handling</strong> dropdown controls what happens when you submit a claim that has already been evaluated:</p>
+            <ul>
+                <li><strong>Create New Run</strong> &mdash; Always creates a fresh evaluation, even if the same claim text already exists. Useful for comparing results across different models or settings.</li>
+                <li><strong>Open Existing Claim</strong> &mdash; If the claim already exists, navigates directly to the existing claim detail page instead of running it again.</li>
+            </ul>
+
+            <h4>Batch Tags</h4>
+            <p>An optional comma-separated list of tags to label this batch. Tags help you organize and identify batches later in the Claims Browser.</p>
+
+            <h4>Claims Input</h4>
+            <p>Enter claims in the <strong>Claims</strong> textarea, one claim per line. Alternatively, click <strong>Upload Claims</strong> to load claims from a <code>.txt</code> file (one claim per line).</p>
+
+            <h4>Stage Claims / Clear</h4>
+            <ul>
+                <li><strong>Stage Claims</strong> &mdash; Parses the textarea or uploaded file and moves the claims into the staging area below. Claims are not submitted yet; staging lets you review and edit before committing.</li>
+                <li><strong>Clear</strong> &mdash; Removes all claims from both the textarea and the staging area.</li>
+            </ul>
+
+            <h4>Staged Claims</h4>
+            <p>A list of claims ready to be submitted. You can review them here before proceeding. Staging is a safety step: it lets you verify claim text, remove duplicates, or catch paste errors before incurring any cost.</p>
+
+            <h4>Advanced Run Settings</h4>
+            <p>Click to expand the advanced settings panel:</p>
+            <ul>
+                <li><strong>Queries</strong> &mdash; The number of search queries the LLM will generate from each claim (default: 5). More queries cast a wider net but increase cost.</li>
+                <li><strong>Results / Query</strong> &mdash; How many papers to retrieve per search query (default: 5). Higher values find more papers but increase processing time.</li>
+                <li><strong>Use bibliometric scoring</strong> &mdash; When checked, papers are weighted by author H-index, citation count, and venue impact. Uncheck to treat all papers equally.</li>
+            </ul>
+
+            <h4>Cost Estimation &amp; Submission</h4>
+            <ul>
+                <li><strong>Estimate Cost</strong> &mdash; Sends a preflight request to calculate the estimated token usage and dollar cost for the staged claims. The result appears in the preflight panel below.</li>
+                <li><strong>Queue Run</strong> &mdash; Enabled after a successful cost estimate. Clicking it opens a confirmation modal showing the estimated cost. You must check the "I approve this estimated spend" checkbox before confirming. Once confirmed, claims are submitted for processing and you are redirected to the Progress page.</li>
+            </ul>
+
+            <h3>Sidebar Panels</h3>
+
+            <h4>Quick Links</h4>
+            <p>Two shortcut buttons:</p>
+            <ul>
+                <li><strong>New Arena</strong> &mdash; Opens the Arena Builder to create a multi-model comparison.</li>
+                <li><strong>View Arenas</strong> &mdash; Opens the Arenas Library.</li>
+            </ul>
+
+            <h4>Mock Claim Sets</h4>
+            <p>When Mock Data Mode is active, preset claim sets are shown as buttons. Clicking one loads its claims into the textarea for quick testing.</p>
+
+            <h4>Recent Arenas</h4>
+            <p>Shows the most recently created arenas. Click <strong>Open Library</strong> to see all arenas.</p>
+
+            <h4>Recent Claims</h4>
+            <p>Shows the most recently evaluated claims. Click <strong>Open Claims</strong> to open the full Claims Browser.</p>
+
+            <div class="gb-tip">
+                <strong>Tip:</strong> For best results, write claims as specific, testable scientific assertions rather than vague questions. "Omega-3 fatty acid supplementation reduces triglyceride levels in adults with hypertriglyceridemia" will produce much better results than "Is fish oil good for you?"
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- SECTION: Claims Browser                                      -->
+        <!-- ============================================================ -->
+        <section class="panel guidebook-section" id="claims-browser">
+            <h2 class="panel-title">Claims Browser</h2>
+            <p class="panel-subtitle">Search and browse all evaluated claims across every batch.</p>
+            <div class="panel-divider"></div>
+
+            <p>Navigate here using the <strong>Claims</strong> link in the top navigation bar.</p>
+
+            <h3>Search</h3>
+            <p>Type a keyword, phrase, or claim key into the search box.</p>
+            <ul>
+                <li><strong>Search</strong> &mdash; Executes the search and filters results. You can also press Enter.</li>
+                <li><strong>Clear</strong> &mdash; Resets the search and shows all claims.</li>
+            </ul>
+
+            <h3>Claims Count</h3>
+            <p>A summary strip shows the total number of claims matching the current search.</p>
+
+            <h3>Claim List</h3>
+            <p>Each result card shows the claim text, its status, and key metadata. Click <strong>Open Claim</strong> on any card to navigate to the Claim Detail page for that claim.</p>
+
+            <div class="gb-tip">
+                <strong>Tip:</strong> The Claims Browser searches across all batches and arenas. If you ran the same claim through multiple models or configurations, they'll all appear under the same claim key, making it easy to compare results.
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- SECTION: Claim Detail                                        -->
+        <!-- ============================================================ -->
+        <section class="panel guidebook-section" id="claim-detail">
+            <h2 class="panel-title">Claim Detail</h2>
+            <p class="panel-subtitle">View detailed results for a single claim and manage reruns.</p>
+            <div class="panel-divider"></div>
+
+            <p>You reach this page by clicking a claim from the Claims Browser, Batch Results, or Arena Workspace.</p>
+
+            <h3>Focused Run</h3>
+            <p>The hero section at the top displays the currently focused run's key information: claim text, rating, status, provider, model, cost, and timestamps. If a specific run was selected (e.g., from an arena), that run is shown. Otherwise, the most recent run is displayed.</p>
+            <ul>
+                <li><strong>Open Report</strong> / <strong>Open Arena Stage</strong> &mdash; Navigate to the full Claim Report page for this run.</li>
+                <li><strong>Open Trace</strong> &mdash; Open the Trace View to see every step of this run's processing.</li>
+            </ul>
+
+            <h3>Stage Output</h3>
+            <p>If the focused run has intermediate stage data (e.g., from an arena that stopped after a middle stage), it is displayed in this collapsible section.</p>
+
+            <h3>Alternative Runs</h3>
+            <p>A list of all other runs for this claim. Each card shows the provider, model, status, rating, and cost. Actions:</p>
+            <ul>
+                <li><strong>Focus Run</strong> &mdash; Switches the hero section to display this run's details.</li>
+                <li><strong>Compare checkbox</strong> &mdash; Select multiple runs to include them in the Comparison Matrix below.</li>
+                <li><strong>Detail</strong> &mdash; Opens the run in a new context.</li>
+            </ul>
+
+            <h3>Rerun This Claim</h3>
+            <p>A form to queue a new evaluation of the same claim (or a modified version). The controls mirror the Home Page's run configuration: provider, model, duplicate strategy, batch tags, and advanced settings (queries, results per query, bibliometrics).</p>
+            <ul>
+                <li><strong>Estimate Rerun</strong> &mdash; Calculate the cost of re-evaluating this claim.</li>
+                <li><strong>Queue Rerun</strong> &mdash; Submit the rerun after approving the cost in the confirmation modal.</li>
+            </ul>
+
+            <h3>Comparison Matrix</h3>
+            <p>A side-by-side table comparing all runs selected via the compare checkboxes. Shows each run's rating, evidence count, cost, and other key metrics in columns for easy visual comparison.</p>
+
+            <div class="gb-tip">
+                <strong>Tip:</strong> The Comparison Matrix is one of Valsci's most powerful features. If two models give the same claim different ratings, compare their evidence side-by-side to understand why. Did one find papers the other missed? Did they interpret the same excerpts differently? This helps you calibrate which models you trust for specific domains.
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- SECTION: Claim Report                                        -->
+        <!-- ============================================================ -->
+        <section class="panel guidebook-section" id="results">
+            <h2 class="panel-title">Claim Report</h2>
+            <p class="panel-subtitle">The full evaluation report for a single claim run.</p>
+            <div class="panel-divider"></div>
+
+            <p>You reach this page by clicking "View Report" from Batch Results or "Open Report" from Claim Detail.</p>
+
+            <h3>Report Content</h3>
+            <p>The report displays:</p>
+            <ul>
+                <li><strong>Claim text</strong> and <strong>overall rating</strong> with a color-coded badge (red for contradicted, green for highly supported, gray for no evidence or mixed).</li>
+                <li><strong>Explanation</strong> &mdash; A markdown-formatted narrative summarizing the evidence and reasoning behind the rating.</li>
+                <li><strong>Final Reasoning</strong> &mdash; If available, a collapsible section with the LLM's detailed reasoning. Click <strong>Show Final Reasoning</strong> / <strong>Hide Final Reasoning</strong> to toggle.</li>
+            </ul>
+
+            <h3>Papers Sections</h3>
+            <ul>
+                <li><strong>Relevant Papers</strong> &mdash; Papers that the LLM found relevant to the claim. Each entry shows:
+                    <ul>
+                        <li><em>Title</em> &mdash; The paper's title as retrieved from Semantic Scholar.</li>
+                        <li><em>Authors</em> &mdash; Author names with their H-index (a measure of research impact; higher is more influential).</li>
+                        <li><em>Relevance</em> &mdash; The LLM's explanation of why this paper is relevant to the claim.</li>
+                        <li><em>Bibliometric Impact</em> &mdash; A composite reliability score (when bibliometrics are enabled) combining author, citation, and venue quality.</li>
+                        <li><em>Excerpts</em> &mdash; Key passages from the paper that support or contradict the claim.</li>
+                        <li><em>Explanations</em> &mdash; The LLM's interpretation of how each excerpt relates to the claim.</li>
+                        <li><em>Citations</em> &mdash; Formatted citation entries for the paper.</li>
+                        <li><em>Content Type</em> &mdash; The type of paper (e.g., research article, review, meta-analysis).</li>
+                        <li><em>Read Paper</em> &mdash; A link to the original paper on Semantic Scholar.</li>
+                    </ul>
+                </li>
+                <li><strong>Other Reviewed Papers</strong> &mdash; Papers that were retrieved but determined not relevant, with an explanation of why.</li>
+                <li><strong>Inaccessible Papers</strong> &mdash; Papers that could not be retrieved or analyzed, with the reason.</li>
+            </ul>
+
+            <h3>Additional Information</h3>
+            <ul>
+                <li><strong>Search Queries</strong> &mdash; The actual search queries generated by the LLM and sent to Semantic Scholar.</li>
+                <li><strong>Processing Time Breakdown</strong> &mdash; How long each phase took (search, paper processing, report generation, total).</li>
+                <li><strong>LLM Usage</strong> &mdash; Token counts (input, output, total) and estimated cost.</li>
+                <li><strong>Usage By Stage</strong> &mdash; A table breaking down token usage and cost per pipeline stage.</li>
+                <li><strong>Prompt Provenance</strong> &mdash; Expandable section showing which prompt files were used, their SHA-256 hashes, and modification dates. Useful for reproducibility.</li>
+                <li><strong>Debug &amp; Trace</strong> &mdash; Summary of LLM calls, models used, retries, and a link to the full Trace Viewer.</li>
+            </ul>
+
+            <h3>Action Buttons</h3>
+            <ul>
+                <li><strong>Download Report</strong> &mdash; Download the report as a Markdown file.</li>
+                <li><strong>View Full Trace</strong> &mdash; Open the Trace View page for this run.</li>
+                <li><strong>Download Trace</strong> &mdash; Download the raw trace file (JSONL, gzipped).</li>
+                <li><strong>Download Issues</strong> &mdash; Download the issues log (JSONL, gzipped).</li>
+                <li><strong>Download Citations</strong> &mdash; Download citation data as a JSON file.</li>
+                <li><strong>Delete Claim</strong> &mdash; Permanently delete this claim and all its data. Requires confirmation.</li>
+            </ul>
+
+            <div class="gb-tip">
+                <strong>Tip:</strong> The Prompt Provenance section is valuable for reproducibility. If you modify prompt templates and re-run a claim, the SHA-256 hashes let you verify exactly which prompt version produced which result. This is especially useful in team settings or when iterating on prompt engineering.
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- SECTION: Batch Results                                       -->
+        <!-- ============================================================ -->
+        <section class="panel guidebook-section" id="batch-results">
+            <h2 class="panel-title">Batch Results</h2>
+            <p class="panel-subtitle">View all claims in a batch with their ratings and status.</p>
+            <div class="panel-divider"></div>
+
+            <p>You reach this page after a batch finishes processing, or by navigating from the Progress page.</p>
+
+            <h3>Status Banner</h3>
+            <p>Shows the batch status (processing or completed), the number of completed claims, and counts of saved vs. queued claims.</p>
+
+            <h3>Action Bar</h3>
+            <ul>
+                <li><strong>Delete Batch</strong> &mdash; Permanently delete the entire batch and all its claims. Requires confirmation.</li>
+                <li><strong>Download CSV</strong> &mdash; Export the results table as a CSV file.</li>
+                <li><strong>Bulk Download Reports</strong> &mdash; Download all claim reports as a ZIP of Markdown files. Only available after the batch is complete.</li>
+                <li><strong>Show all tagged runs</strong> &mdash; Toggle to show every run (including reruns) instead of just the primary run per claim.</li>
+                <li><strong>Filter results</strong> &mdash; Type to filter the table by claim text.</li>
+            </ul>
+
+            <h3>Results Table</h3>
+            <p>An interactive table with sortable and filterable columns:</p>
+            <ul>
+                <li><strong>Claim</strong> &mdash; The claim text.</li>
+                <li><strong>Status</strong> &mdash; Processing status (completed, processing, error).</li>
+                <li><strong>Location</strong> &mdash; Where the claim data is stored (saved_jobs or queued_jobs).</li>
+                <li><strong>Rating</strong> &mdash; The numerical claim rating (0-5).</li>
+                <li><strong>Supporting / Non-Relevant</strong> &mdash; Count of relevant and non-relevant papers found.</li>
+                <li><strong>Price</strong> &mdash; Estimated cost for that claim's evaluation.</li>
+                <li><strong>Report</strong> &mdash; Links to either <strong>View Report</strong> (if completed) or <strong>View Progress</strong> (if still processing), plus a <strong>Claim</strong> link to the Claim Detail page.</li>
+            </ul>
+
+            <h3>Total Batch Price</h3>
+            <p>The sum of all claim costs in the batch, displayed below the table.</p>
+
+            <div class="gb-tip">
+                <strong>Tip:</strong> Use column header filters to quickly find claims by status (e.g., type "error" in the Status filter to find failed evaluations). Click any column header to sort&mdash;sorting by Rating helps you quickly find the most and least supported claims.
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- SECTION: Progress                                            -->
+        <!-- ============================================================ -->
+        <section class="panel guidebook-section" id="progress">
+            <h2 class="panel-title">Progress</h2>
+            <p class="panel-subtitle">Real-time processing status for a batch or individual claim.</p>
+            <div class="panel-divider"></div>
+
+            <p>You are sent here automatically after submitting claims. The page polls for updates and displays:</p>
+            <ul>
+                <li><strong>Progress bar</strong> &mdash; Visual indicator of how many claims have been processed out of the total.</li>
+                <li><strong>Status breakdown</strong> &mdash; Counts of claims in each state (queued, processing, completed, error).</li>
+                <li><strong>Current claim</strong> &mdash; Which claim is currently being evaluated.</li>
+            </ul>
+            <p>Once all claims are complete, the page automatically redirects to Batch Results.</p>
+
+            <div class="gb-tip">
+                <strong>Tip:</strong> Processing time depends on the number of claims, the number of queries per claim, and the speed of your chosen LLM provider. A single claim with default settings (5 queries, 5 results each) typically takes 30 seconds to a few minutes. Local models (Ollama/llama.cpp) may be slower depending on your hardware.
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- SECTION: Arena Builder                                       -->
+        <!-- ============================================================ -->
+        <section class="panel guidebook-section" id="arena-builder">
+            <h2 class="panel-title">Arena Builder</h2>
+            <p class="panel-subtitle">Create a multi-model comparison arena.</p>
+            <div class="panel-divider"></div>
+
+            <p>Navigate here using <strong>New Arena</strong> from the Home page or the <strong>Arenas</strong> nav link followed by clicking "New Arena."</p>
+
+            <h3>When to Use an Arena</h3>
+            <p>Arenas are best when you need to:</p>
+            <ul>
+                <li><strong>Compare models</strong> &mdash; See how GPT-4o, Claude, Llama, etc. evaluate the same evidence differently.</li>
+                <li><strong>Benchmark cost vs. quality</strong> &mdash; A cheaper model might produce results nearly as good as a premium one for your domain.</li>
+                <li><strong>Build confidence</strong> &mdash; If three independent models all rate a claim "Highly Supported," that's stronger evidence than one model's opinion.</li>
+                <li><strong>Control variables</strong> &mdash; Use "Reuse retrieval" mode to give all models the same papers, isolating the analysis quality from retrieval differences.</li>
+            </ul>
+
+            <h3>Stepper</h3>
+            <p>A four-step visual guide at the top of the page: <strong>Step 1</strong> Choose provider, <strong>Step 2</strong> Choose models, <strong>Step 3</strong> Add claims, <strong>Step 4</strong> Review and launch.</p>
+
+            <h3>Default Arena Flow</h3>
+
+            <h4>Arena Title</h4>
+            <p>An optional name for the arena. If left blank, the arena is identified by its auto-generated ID.</p>
+
+            <h4>Provider Blocks</h4>
+            <p>Each provider block lets you select a provider and then check the models you want to include as candidates. By default, one provider block is shown. To compare models across different providers, use the Advanced Arena Settings to add more blocks.</p>
+            <ul>
+                <li><strong>Provider dropdown</strong> &mdash; Choose which provider to use for this block.</li>
+                <li><strong>Model search</strong> &mdash; Filter the model list by typing.</li>
+                <li><strong>Model checkboxes</strong> &mdash; Check each model you want to include. Each checked model becomes a candidate.</li>
+                <li><strong>Remove</strong> &mdash; Remove this provider block (only shown when multiple blocks exist).</li>
+            </ul>
+
+            <h4>Claims</h4>
+            <p>Same input pattern as the Home page:</p>
+            <ul>
+                <li><strong>Claims textarea</strong> &mdash; Enter one claim per line.</li>
+                <li><strong>Upload Claims</strong> &mdash; Load from a <code>.txt</code> file.</li>
+                <li><strong>Batch Tags</strong> &mdash; Optional labels for the arena's claims.</li>
+                <li><strong>Stage Claims</strong> / <strong>Clear</strong> &mdash; Move claims to the staging area or clear everything.</li>
+                <li><strong>Mock Claim Set buttons</strong> &mdash; Load preset claim sets (when Mock Data Mode is active).</li>
+            </ul>
+
+            <h3>Candidates Panel</h3>
+            <p>Shows a live preview of the candidates that will participate in the arena, based on your model selections. Each candidate is a named combination of provider and model.</p>
+
+            <h3>Review and Launch</h3>
+            <ul>
+                <li><strong>Estimate Arena</strong> &mdash; Calculate the estimated cost for all candidates across all claims.</li>
+                <li><strong>Launch Arena</strong> &mdash; Opens a confirmation modal showing the cost breakdown. Check the "I approve this arena spend" checkbox and click <strong>Launch Arena</strong> to start the comparison. You will be redirected to the Arena Workspace.</li>
+            </ul>
+
+            <h3>Advanced Arena Settings</h3>
+            <p>Click to expand. These settings give you fine-grained control:</p>
+            <ul>
+                <li><strong>Execution Mode</strong>:
+                    <ul>
+                        <li><em>Default mode</em> &mdash; Each candidate runs the full pipeline independently (same model for all stages).</li>
+                        <li><em>Reuse retrieval</em> &mdash; Candidate A runs the paper retrieval stage and all other candidates reuse those papers. Useful for comparing analysis quality while controlling for retrieval differences.</li>
+                    </ul>
+                </li>
+                <li><strong>Stop After</strong> &mdash; Choose which stage the arena should stop at: Query Generation, Review Evidence, Review Scores, or Final Reports (default). Stopping early lets you inspect intermediate outputs before committing to the full pipeline.</li>
+                <li><strong>Duplicate Strategy</strong> &mdash; Same as the Home page: Create New Runs or Open Existing Claim.</li>
+                <li><strong>Queries</strong> / <strong>Results per Query</strong> &mdash; Same as the Home page advanced settings.</li>
+                <li><strong>Use bibliometric scoring</strong> &mdash; Enable or disable bibliometric weighting.</li>
+            </ul>
+
+            <h4>Advanced Provider Setup</h4>
+            <p><strong>Add Provider Block</strong> &mdash; Adds a second (or third, etc.) provider block so you can compare models across different API providers in the same arena.</p>
+
+            <h4>Advanced Candidate Editor</h4>
+            <p>Once candidates are generated, this section lets you:</p>
+            <ul>
+                <li><strong>Edit candidate labels</strong> &mdash; Give candidates human-friendly names instead of auto-generated ones.</li>
+                <li><strong>Override stage models</strong> &mdash; Assign a different model for a specific pipeline stage on a per-candidate basis. For example, use a cheaper model for query generation and a more capable one for the final report.</li>
+            </ul>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- SECTION: Arenas Library                                      -->
+        <!-- ============================================================ -->
+        <section class="panel guidebook-section" id="arenas-library">
+            <h2 class="panel-title">Arenas Library</h2>
+            <p class="panel-subtitle">Browse and filter all arenas.</p>
+            <div class="panel-divider"></div>
+
+            <p>Navigate here using the <strong>Arenas</strong> link in the top navigation bar.</p>
+
+            <h3>Filters</h3>
+            <ul>
+                <li><strong>Search arenas</strong> &mdash; Filter by arena title or arena ID.</li>
+                <li><strong>Status</strong> dropdown &mdash; Filter by arena status:
+                    <ul>
+                        <li><em>All statuses</em> &mdash; Show everything.</li>
+                        <li><em>In Progress</em> &mdash; Arenas that are currently processing.</li>
+                        <li><em>Ready for Review</em> &mdash; Arenas that have completed a stage and are waiting for you to review results and decide which candidates advance.</li>
+                        <li><em>Completed</em> &mdash; Arenas that have finished all stages.</li>
+                    </ul>
+                </li>
+            </ul>
+
+            <h3>Arena Cards</h3>
+            <p>Each card shows the arena title (or ID), status, number of claims and candidates, and creation date. Click <strong>Open Workspace</strong> to navigate to the Arena Workspace for that arena.</p>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- SECTION: Arena Workspace                                     -->
+        <!-- ============================================================ -->
+        <section class="panel guidebook-section" id="arena-workspace">
+            <h2 class="panel-title">Arena Workspace</h2>
+            <p class="panel-subtitle">Monitor, review, and advance a running or completed arena.</p>
+            <div class="panel-divider"></div>
+
+            <p>You reach this page after launching an arena or by clicking "Open Workspace" from the Arenas Library.</p>
+
+            <h3>Header</h3>
+            <ul>
+                <li><strong>Arena title</strong> and a <strong>summary strip</strong> showing: status, current stage, number of claims, number of candidates, expected cost, and actual cost so far.</li>
+                <li><strong>Refresh state badge</strong> &mdash; Shows whether the workspace is synced or stale.</li>
+                <li><strong>Last updated</strong> &mdash; Timestamp of the last data refresh.</li>
+                <li><strong>Refresh Now</strong> &mdash; Manually re-fetch the latest arena data from the server.</li>
+            </ul>
+
+            <h3>Stage Stepper</h3>
+            <p>A visual progress indicator showing which pipeline stages have been completed, which is current, and which are still ahead.</p>
+
+            <h3>Workspace Tabs</h3>
+            <p>Three tabs organize the workspace content:</p>
+
+            <h4>Overview Tab</h4>
+            <p>A performance comparison table showing all candidates with columns for: provider, model, status, stage, elapsed time, metrics for each pipeline stage (query, evidence, scoring, report), issue count, evidence count, and actual cost. Use this to quickly see which candidates are performing best.</p>
+
+            <h4>Claims Tab</h4>
+            <p>Claims are grouped by claim text. For each claim:</p>
+            <ul>
+                <li>A progress indicator shows how many candidate runs are complete (e.g., "3/4 complete").</li>
+                <li>A comparison table lists each candidate's results for that claim, with columns for status, cost, issues, stage-specific metrics, and a <strong>Detail</strong> link to the Claim Detail page.</li>
+                <li><strong>Winner radio buttons</strong> &mdash; Select which candidate produced the best result for this claim. Winners are used when continuing the arena to the next stage.</li>
+                <li><strong>Skip claim</strong> checkbox &mdash; Exclude this claim from the next stage's continuation. Useful if a claim is ambiguous or not worth further processing.</li>
+            </ul>
+
+            <h4>History Tab</h4>
+            <p>A timeline of all arena activity: when each stage started and finished, which candidates ran, refresh events, and continuation decisions (who advanced, who was skipped).</p>
+
+            <h3>Continue Arena Panel</h3>
+            <p>Visible when the arena has completed a stage and can advance to the next one. Arenas are designed to be iterative: you review results at each stage and decide what moves forward.</p>
+            <ul>
+                <li><strong>Estimate Next Stage</strong> &mdash; Calculate the cost of advancing selected claims and candidates to the next pipeline stage.</li>
+                <li><strong>Continue Arena</strong> &mdash; Opens a confirmation modal showing which claims will advance, the cost delta, and requires you to check "I approve this continuation cost" before confirming.</li>
+            </ul>
+
+            <div class="gb-tip">
+                <strong>Tip:</strong> You don't have to advance every claim or every candidate. If a candidate is clearly underperforming after the evidence stage, you can skip it to save cost on the more expensive final report stage. Similarly, skip claims that are ambiguous or off-topic to focus resources on the claims that matter most.
+            </div>
+
+            <h3>Understanding the Arena Lifecycle</h3>
+            <p>An arena progresses through this cycle:</p>
+            <ul>
+                <li><strong>Launch</strong> &mdash; All candidates process all claims through the first stage (or up to the "Stop After" setting).</li>
+                <li><strong>Review</strong> &mdash; The arena pauses. You examine results in the Overview and Claims tabs, select winners, and skip claims you don't want to continue.</li>
+                <li><strong>Continue</strong> &mdash; Selected claims and candidates advance to the next stage. The arena processes them and pauses again for review.</li>
+                <li><strong>Complete</strong> &mdash; When all stages are done (or you choose not to continue further), the arena is marked as completed. All results remain accessible for future reference.</li>
+            </ul>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- SECTION: Providers                                           -->
+        <!-- ============================================================ -->
+        <section class="panel guidebook-section" id="providers">
+            <h2 class="panel-title">Providers</h2>
+            <p class="panel-subtitle">Configure LLM provider connections and manage models.</p>
+            <div class="panel-divider"></div>
+
+            <p>Navigate here using the <strong>Providers</strong> link in the top navigation bar.</p>
+
+            <h3>Understanding Provider Types</h3>
+            <p>Valsci supports several LLM provider types, each with different trade-offs:</p>
+            <ul>
+                <li><strong>OpenAI</strong> &mdash; The most common choice. Connects to OpenAI's API (GPT-4o, GPT-4, etc.). Requires an OpenAI API key. Models are high quality but incur per-token costs.</li>
+                <li><strong>OpenRouter</strong> &mdash; A unified API gateway that provides access to models from many providers (OpenAI, Anthropic, Meta, Google, etc.) through a single API key. Useful if you want to compare models across providers without managing multiple API keys.</li>
+                <li><strong>Ollama</strong> &mdash; Run open-source models (Llama, Mistral, Gemma, etc.) locally on your own hardware. Free to run but requires sufficient GPU/CPU resources. Valsci can auto-discover which models are installed on your Ollama instance.</li>
+                <li><strong>Local (llama.cpp)</strong> &mdash; Connect to a local llama.cpp server. Similar to Ollama but uses the llama.cpp HTTP server directly.</li>
+                <li><strong>Azure OpenAI</strong> &mdash; OpenAI models hosted on Microsoft Azure. Requires an Azure OpenAI resource endpoint and API key. Used by organizations with Azure enterprise agreements.</li>
+                <li><strong>Azure AI Inference</strong> &mdash; Azure's model inference endpoint for non-OpenAI models hosted on Azure. Requires a separate endpoint URL.</li>
+            </ul>
+
+            <h3>Provider Sidebar</h3>
+            <p>The left panel lists all available provider types. Each row has:</p>
+            <ul>
+                <li><strong>Toggle switch</strong> &mdash; Enable or disable this provider type. Disabled providers don't appear in the Provider dropdowns on other pages.</li>
+                <li><strong>Click the row</strong> &mdash; Select this provider type for editing in the right panel.</li>
+            </ul>
+
+            <h3>Provider Editor</h3>
+            <p>The right panel shows the configuration for the selected provider. An <strong>Unsaved changes</strong> badge appears when you have modified settings that haven't been saved yet.</p>
+
+            <h4>Connection Settings</h4>
+            <ul>
+                <li><strong>Label</strong> &mdash; A display name for this provider (shown in dropdowns across the app).</li>
+                <li><strong>API Key</strong> &mdash; The authentication key for the provider's API. Stored locally in the provider catalog file.</li>
+                <li><strong>Base URL</strong> &mdash; Only needed if the provider uses a non-default API endpoint (e.g., a proxy or self-hosted deployment).</li>
+            </ul>
+
+            <p>Additional fields appear depending on the provider type:</p>
+            <ul>
+                <li><strong>Local Backend</strong> (Local provider) &mdash; Select between Ollama and llama.cpp backends.</li>
+                <li><strong>HTTP Referer / Site Name</strong> (OpenRouter) &mdash; Optional headers sent with OpenRouter API requests.</li>
+                <li><strong>Azure OpenAI Endpoint / API Version</strong> (Azure OpenAI) &mdash; Your Azure resource endpoint and API version.</li>
+                <li><strong>Azure AI Inference Endpoint</strong> (Azure AI Inference) &mdash; Your Azure AI inference endpoint URL.</li>
+            </ul>
+
+            <h4>Discover Models (Ollama only)</h4>
+            <p>When an Ollama-type provider is selected, a discovery section appears:</p>
+            <ul>
+                <li><strong>Discover From Provider URL</strong> &mdash; Queries the provider's configured base URL to find all available Ollama models.</li>
+                <li><strong>Probe Alternate URL</strong> &mdash; Queries a different URL (entered in the Alternate URL field) to find models. Useful if Ollama is running on a different port or host.</li>
+            </ul>
+            <p>Discovered models appear in an import modal where you can filter, select, and add them to the provider.</p>
+
+            <h4>Model Import Modal</h4>
+            <p>After discovery, this modal shows all found models:</p>
+            <ul>
+                <li><strong>Filter</strong> &mdash; Type to search among discovered models.</li>
+                <li><strong>Select Visible</strong> / <strong>Clear Visible</strong> &mdash; Bulk check or uncheck all models matching the current filter.</li>
+                <li><strong>Individual checkboxes</strong> &mdash; Select specific models to import.</li>
+                <li><strong>Add Models</strong> &mdash; Merge the selected models into the provider's model list. Nothing is saved to disk until you click Save Provider.</li>
+                <li><strong>Cancel</strong> &mdash; Close the modal without importing.</li>
+            </ul>
+
+            <h4>Models Section</h4>
+            <p>Lists all models configured for this provider. The badge shows the total count. For each model:</p>
+            <ul>
+                <li><strong>Model Name</strong> &mdash; The identifier sent to the API (e.g., <code>gpt-4o</code>, <code>llama3:latest</code>).</li>
+                <li><strong>Label</strong> &mdash; Optional human-friendly name shown in the UI.</li>
+                <li><strong>Context Window</strong> &mdash; Maximum input token capacity.</li>
+                <li><strong>Default Max Output</strong> &mdash; Default limit on output tokens per request.</li>
+                <li><strong>Input Cost / Output Cost</strong> &mdash; Price per million tokens, used for cost estimation.</li>
+                <li><strong>Supports temperature</strong> &mdash; Whether the model accepts a temperature parameter.</li>
+                <li><strong>Supports JSON mode</strong> &mdash; Whether the model supports structured JSON output.</li>
+                <li><strong>Enabled</strong> &mdash; Whether this model appears in model selectors across the app.</li>
+                <li><strong>Remove</strong> &mdash; Delete this model entry from the provider.</li>
+            </ul>
+            <p><strong>Add Model</strong> &mdash; Adds a blank model row for manual configuration.</p>
+
+            <h4>Provider Actions</h4>
+            <ul>
+                <li><strong>Save Provider</strong> &mdash; Persist all changes (connection settings, models) to the provider catalog file on disk.</li>
+                <li><strong>Reset</strong> &mdash; Discard unsaved changes and reload the last saved state.</li>
+                <li><strong>Delete Provider</strong> &mdash; Permanently remove this provider and all its models. Only shown for providers that have been previously saved.</li>
+            </ul>
+
+            <div class="gb-tip">
+                <strong>Tip:</strong> Set accurate Input Cost and Output Cost values for each model. These are used for cost estimation before every run. If you leave them at zero, cost estimates will show $0.00 even though the actual API call may incur charges from your provider. Check your provider's pricing page for current rates.
+            </div>
+
+            <div class="gb-tip">
+                <strong>Tip:</strong> For Ollama users, use the <strong>Discover From Provider URL</strong> button after installing new models. It automatically detects all models available on your Ollama instance and lets you import them with one click, saving you from manually entering model names and parameters.
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- SECTION: Migration                                           -->
+        <!-- ============================================================ -->
+        <section class="panel guidebook-section" id="migration">
+            <h2 class="panel-title">Migration</h2>
+            <p class="panel-subtitle">Import or clean up legacy batch folders from older versions of Valsci.</p>
+            <div class="panel-divider"></div>
+
+            <p>Navigate here using the <strong>Migration</strong> link in the top navigation bar, or from the migration alert on the Home page.</p>
+
+            <div class="gb-tip">
+                <strong>Tip:</strong> If you've never used an older version of Valsci, this page will be empty and you can safely ignore it.
+            </div>
+
+            <h3>Header Actions</h3>
+            <ul>
+                <li><strong>Refresh</strong> &mdash; Re-scan for legacy batch folders and update the status.</li>
+                <li><strong>Migrate All Pending</strong> &mdash; Import every pending legacy batch into the canonical claim store in one operation.</li>
+            </ul>
+
+            <h3>Migration Status</h3>
+            <p>An info card showing how many legacy batches are pending migration.</p>
+
+            <h3>Batch Table</h3>
+            <p>A table listing all detected legacy batches with columns for:</p>
+            <ul>
+                <li><strong>Batch</strong> &mdash; The batch ID.</li>
+                <li><strong>Claims</strong> &mdash; Number of claims in the batch.</li>
+                <li><strong>Last Modified</strong> &mdash; When the batch was last updated.</li>
+                <li><strong>Status</strong> &mdash; Whether it's been imported or is still pending.</li>
+                <li><strong>Roots</strong> &mdash; Which legacy directories contain this batch's data.</li>
+                <li><strong>Actions</strong>:
+                    <ul>
+                        <li><strong>Review contents</strong> &mdash; Opens the Batch Review Panel below to inspect the claims in this batch.</li>
+                        <li><strong>Import</strong> &mdash; Import this specific batch into the canonical claim store.</li>
+                    </ul>
+                </li>
+            </ul>
+
+            <h3>Batch Review Panel</h3>
+            <p>Opens when you click "Review contents" on a batch. Shows each claim in the batch with its text, status, stage, and last update. Actions:</p>
+            <ul>
+                <li><strong>Import</strong> &mdash; Import this reviewed batch.</li>
+                <li><strong>Delete Legacy Batch</strong> &mdash; Permanently remove the legacy batch folder without importing. Use this to clean up batches you no longer need.</li>
+            </ul>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- SECTION: Trace View                                          -->
+        <!-- ============================================================ -->
+        <section class="panel guidebook-section" id="trace-view">
+            <h2 class="panel-title">Trace View</h2>
+            <p class="panel-subtitle">Inspect the detailed execution trace for a claim run.</p>
+            <div class="panel-divider"></div>
+
+            <p>You reach this page from the Claim Report ("View Full Trace") or Claim Detail ("Open Trace").</p>
+
+            <h3>What Is a Trace?</h3>
+            <p>A trace is a chronological log of every significant action during a claim's evaluation: each LLM call (with the exact prompts and responses), Semantic Scholar API requests, paper parsing steps, scoring calculations, and error recovery. It provides full transparency into how Valsci arrived at its verdict.</p>
+
+            <h3>Trace Records</h3>
+            <p>Each record in the trace is displayed as a row with:</p>
+            <ul>
+                <li><strong>Timestamp</strong> &mdash; When the action occurred.</li>
+                <li><strong>Stage</strong> &mdash; Which pipeline stage (query generation, paper analysis, venue scoring, or final report).</li>
+                <li><strong>Type</strong> &mdash; The kind of action (LLM call, API request, processing step, error, etc.).</li>
+                <li><strong>Details</strong> &mdash; Expandable content showing full request/response data, token counts, model used, and timing.</li>
+            </ul>
+
+            <h3>Navigation</h3>
+            <ul>
+                <li><strong>Highlighted records</strong> &mdash; Error-like records (failures, retries, warnings) are visually highlighted so you can quickly spot issues.</li>
+                <li><strong>Focused record</strong> &mdash; If you arrived via a link from an issue banner (e.g., "View trace section"), the relevant record is scrolled into view and highlighted.</li>
+            </ul>
+
+            <div class="gb-tip">
+                <strong>Tip:</strong> Traces are most useful for debugging unexpected ratings, understanding why certain papers were included or excluded, and verifying that prompts are working as intended.
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- SECTION: Login                                               -->
+        <!-- ============================================================ -->
+        <section class="panel guidebook-section" id="login">
+            <h2 class="panel-title">Login</h2>
+            <p class="panel-subtitle">Password protection for your Valsci instance.</p>
+            <div class="panel-divider"></div>
+
+            <p>When password protection is enabled in your configuration (<code>REQUIRE_PASSWORD</code> set to <code>true</code>), all pages require authentication. You'll be redirected to the login page if your session has expired or you haven't logged in.</p>
+
+            <h3>Login Form</h3>
+            <p>Enter the access password configured in your environment settings and click <strong>Log In</strong>. If the password is incorrect, an error message will appear.</p>
+
+            <h3>Logout</h3>
+            <p>Click the <strong>Logout</strong> button in the top-right corner of any page. This clears your session and redirects you to the login page.</p>
+
+            <div class="gb-tip">
+                <strong>Tip:</strong> Password protection is optional. If you're running Valsci locally for personal use and don't need authentication, you can disable it by setting <code>REQUIRE_PASSWORD</code> to <code>false</code> in your configuration.
+            </div>
+        </section>
+
+    </div><!-- .guidebook-body -->
+</div><!-- .guidebook-layout -->
+{% endblock %}

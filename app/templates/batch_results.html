@@ -8,6 +8,24 @@
     <link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator.min.css" rel="stylesheet">
     <script type="text/javascript" src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js"></script>
     <style>
+        .help-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            background: rgba(15, 118, 110, 0.1);
+            color: #0f766e;
+            font-size: 0.82rem;
+            font-weight: 700;
+            text-decoration: none;
+            vertical-align: middle;
+        }
+        .help-link:hover {
+            background: #0f766e;
+            color: #fff;
+        }
         .trace-box {
             margin: 0 0 16px 0;
             padding: 12px;
@@ -19,7 +37,7 @@
 </head>
 <body>
     <div class="batch-results-container wide-container">
-        <h1>Batch Results</h1>
+        <h1>Batch Results <a href="/guidebook#batch-results" class="help-link" title="Guidebook: Batch Results">?</a></h1>
         <div id="batchStatusBanner"></div>
         <div class="actions-bar">
             <button id="deleteBatchButton" class="danger-button">Delete Batch</button>
@@ -107,10 +125,13 @@
                 formatter: function(cell) {
                     const row = cell.getRow().getData();
                     const claim_id = row.claim_id;
+                    const claimHref = row.run_id
+                        ? `/claims/${row.claim_key}?run_id=${encodeURIComponent(row.run_id)}`
+                        : `/claims/${row.claim_key}`;
                     if (row.report_available && row.claim_location === 'saved_jobs') {
-                        return `<a href="/results?claim_id=${claim_id}&batch_id=${batchId}" class="report-link">View Report</a> | <a href="/claims/${row.claim_key}" class="report-link">Claim</a>`;
+                        return `<a href="/results?claim_id=${claim_id}&batch_id=${batchId}" class="report-link">View Report</a> | <a href="${claimHref}" class="report-link">Claim</a>`;
                     }
-                    return `<a href="/progress?claim_id=${claim_id}&batch_id=${batchId}" class="report-link">View Progress</a> | <a href="/claims/${row.claim_key}" class="report-link">Claim</a>`;
+                    return `<a href="/progress?claim_id=${claim_id}&batch_id=${batchId}" class="report-link">View Progress</a> | <a href="${claimHref}" class="report-link">Claim</a>`;
                 },
                 headerSort: false
             }

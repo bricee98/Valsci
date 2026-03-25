@@ -23,6 +23,7 @@ from app.services.batch_export import build_export_document
 from app.services.batch_state import build_batch_state, list_batch_ids
 from app.config.settings import Config
 from app.services.claim_store import ClaimStore
+from app.services.mock_semantic_scholar import available_mock_claim_sets
 from app.services.ollama_discovery import discover_ollama_models
 from app.services.provider_catalog import ProviderCatalog
 from app.services.submission_service import SubmissionService
@@ -62,6 +63,14 @@ def _state_dir() -> Path:
     return _configured_path("STATE_DIR", Config.STATE_DIR)
 
 
+def _archive_root_dir() -> Path:
+    if has_app_context():
+        configured_value = current_app.config.get("MIGRATION_ARCHIVE_DIR")
+        if configured_value:
+            return Path(configured_value)
+    return _state_dir() / "migrations" / "archive"
+
+
 def _provider_catalog_path() -> Path:
     return _configured_path("PROVIDER_CATALOG_PATH", Config.PROVIDER_CATALOG_PATH)
 
@@ -83,11 +92,13 @@ def _submission_service() -> SubmissionService:
     return SubmissionService(_claim_store(), _provider_catalog())
 
 
-def _public_providers() -> List[Dict[str, Any]]:
+def _public_providers(include_disabled: bool = False) -> List[Dict[str, Any]]:
     public_fields = {
         "provider_id",
         "label",
         "provider_type",
+        "enabled",
+        "base_url",
         "default_model",
         "local_backend",
         "task_defaults",
@@ -100,8 +111,24 @@ def _public_providers() -> List[Dict[str, Any]]:
     }
     providers = []
     for provider in _provider_catalog().list_providers():
+        if not include_disabled and not provider.get("enabled", True):
+            continue
         providers.append({key: provider.get(key) for key in public_fields})
     return providers
+
+
+def _mock_s2_enabled() -> bool:
+    return bool(current_app.config.get("MOCK_SEMANTIC_SCHOLAR_MODE", False))
+
+
+def _render_page(template_name: str, **context):
+    page_context = {
+        "config": current_app.config,
+        "migration_status": _claim_store().migration_status(),
+        "mock_s2_enabled": _mock_s2_enabled(),
+    }
+    page_context.update(context)
+    return render_template(template_name, **page_context)
 
 
 def _find_claim_artifact(batch_id: str, artifact_dir: str, claim_id: str, extension: str):
@@ -115,6 +142,12 @@ def _find_claim_artifact(batch_id: str, artifact_dir: str, claim_id: str, extens
         [
             _saved_jobs_dir() / batch_id / artifact_dir / f"{claim_id}.{extension}",
             _saved_jobs_dir() / batch_id / artifact_dir / f"{claim_id}.{extension}.gz",
+        ]
+    )
+    candidates.extend(
+        [
+            _archive_root_dir() / "traces" / batch_id / artifact_dir / f"{claim_id}.{extension}",
+            _archive_root_dir() / "traces" / batch_id / artifact_dir / f"{claim_id}.{extension}.gz",
         ]
     )
 
@@ -149,6 +182,8 @@ def _claim_file_candidates(batch_id: str, claim_id: str) -> List[Tuple[str, str]
     return [
         ("queued_jobs", str(_queued_jobs_dir() / batch_id / f"{claim_id}.txt")),
         ("saved_jobs", str(_saved_jobs_dir() / batch_id / f"{claim_id}.txt")),
+        ("archived_queued_jobs", str(_archive_root_dir() / "queued_jobs" / batch_id / f"{claim_id}.txt")),
+        ("archived_saved_jobs", str(_archive_root_dir() / "saved_jobs" / batch_id / f"{claim_id}.txt")),
     ]
 
 
@@ -391,6 +426,9 @@ def get_claim_status(batch_id, claim_id):
 @api.route('/api/v1/claims/<batch_id>/<claim_id>/report', methods=['GET'])
 @auth_required
 def get_claim_report(batch_id, claim_id):
+    store = _claim_store()
+    run_record = store.find_run_by_legacy(batch_id, claim_id)
+    run_summary = store.build_enhanced_run_summary(run_record, include_claim_data=True) if run_record else None
     location, _, claim_data = _load_claim_data(batch_id, claim_id)
     if claim_data is None:
         return jsonify({"error": "Claim not found"}), 404
@@ -401,13 +439,16 @@ def get_claim_report(batch_id, claim_id):
             "status": claim_data.get("status", "unknown"),
             "claim_location": location,
             "code": "CLAIM_PROCESSING",
+            "run_summary": run_summary,
         }), 409
     if location == "saved_jobs":
         return jsonify({
             "claim_id": claim_id,
             "text": claim_data.get('text', ''),
             "status": claim_data.get('status', ''),
-            "report": claim_data.get('report', {})
+            "report": claim_data.get('report', {}),
+            "prompt_provenance": claim_data.get("prompt_provenance") or (run_summary or {}).get("prompt_provenance") or {},
+            "run_summary": run_summary,
         }), 200
     return jsonify({"error": "Claim not found"}), 404
 
@@ -500,6 +541,61 @@ def migration_run():
     return jsonify(_claim_store().migrate_legacy(apply_changes=apply_changes)), 200
 
 
+@api.route('/api/v1/migration/batches', methods=['GET'])
+@auth_required
+def list_migration_batches():
+    return jsonify({"batches": _claim_store().list_legacy_batches()}), 200
+
+
+@api.route('/api/v1/migration/batches/<batch_id>', methods=['GET'])
+@auth_required
+def inspect_migration_batch(batch_id):
+    detail = _claim_store().inspect_legacy_batch(batch_id)
+    if not detail:
+        return jsonify({"error": "Legacy batch not found"}), 404
+    return jsonify(detail), 200
+
+
+@api.route('/api/v1/migration/batches/<batch_id>/import', methods=['POST'])
+@auth_required
+def import_migration_batch(batch_id):
+    payload = request.get_json(silent=True) or {}
+    archive_after = bool(payload.get("archive_after", False))
+    try:
+        result = _claim_store().migrate_legacy_batch(
+            batch_id,
+            apply_changes=True,
+            archive_after=archive_after,
+        )
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(result), 200
+
+
+@api.route('/api/v1/migration/import_all', methods=['POST'])
+@auth_required
+def import_all_migration_batches():
+    try:
+        results = [
+            _claim_store().migrate_legacy_batch(batch["batch_id"], apply_changes=True)
+            for batch in _claim_store().list_legacy_batches()
+            if batch.get("status") == "pending"
+        ]
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"results": results, "batch_count": len(results)}), 200
+
+
+@api.route('/api/v1/migration/batches/<batch_id>', methods=['DELETE'])
+@auth_required
+def delete_migration_batch(batch_id):
+    try:
+        result = _claim_store().delete_legacy_batch(batch_id)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(result), 200
+
+
 @api.route('/api/v1/providers', methods=['GET'])
 @auth_required
 def list_providers():
@@ -537,18 +633,21 @@ def delete_provider(provider_id):
 def discover_ollama_provider_models():
     payload = request.get_json(silent=True) or {}
     provider_id = str(payload.get("provider_id", "")).strip()
+    base_url = str(payload.get("base_url", "")).strip() or None
+    api_key = str(payload.get("api_key", "")).strip() or None
     if provider_id:
         provider = _provider_catalog().get_provider(provider_id)
         if not provider:
             return jsonify({"error": "Provider not found"}), 404
-        is_ollama_provider = provider.get("provider_type") == "ollama" or provider.get("local_backend") == "ollama"
-        if not is_ollama_provider:
-            return jsonify({"error": "Provider is not Ollama-backed"}), 400
+        base_url = base_url or str(provider.get("base_url", "")).strip() or None
+        api_key = api_key or str(provider.get("api_key", "")).strip() or None
+    if not base_url:
+        return jsonify({"error": "A provider with a base URL or an explicit base_url is required."}), 400
     try:
-        models = discover_ollama_models()
+        models = discover_ollama_models(base_url=base_url, api_key=api_key)
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
-    return jsonify({"models": models, "count": len(models)}), 200
+    return jsonify({"models": models, "count": len(models), "base_url": base_url}), 200
 
 
 @api.route('/api/v1/claims/preflight', methods=['POST'])
@@ -680,7 +779,7 @@ def get_run(run_id):
     claim_data = _claim_store().load_claim_data_for_run(run_record)
     return jsonify(
         {
-            "run": _claim_store().build_run_summary(run_record),
+            "run": _claim_store().build_enhanced_run_summary(run_record, include_claim_data=True),
             "claim_data": claim_data or run_record.get("claim_data") or {},
         }
     ), 200
@@ -689,7 +788,7 @@ def get_run(run_id):
 @api.route('/api/v1/claims/<claim_key>', methods=['GET'])
 @auth_required
 def get_claim_detail_api(claim_key):
-    detail = _claim_store().build_claim_detail(claim_key)
+    detail = _claim_store().build_claim_detail(claim_key, run_id=(request.args.get("run_id") or "").strip() or None)
     if not detail:
         return jsonify({"error": "Claim not found"}), 404
     return jsonify(detail), 200
@@ -699,6 +798,8 @@ def get_claim_detail_api(claim_key):
 @auth_required
 def list_claims_api():
     search_term = (request.args.get("search") or "").strip().lower()
+    limit_raw = (request.args.get("limit") or "").strip()
+    limit = int(limit_raw) if limit_raw.isdigit() else None
     claims = []
     store = _claim_store()
     for claim in store.list_claims():
@@ -711,12 +812,23 @@ def list_claims_api():
                 "claim_key": claim.get("claim_key"),
                 "text": text,
                 "batch_tags": claim.get("batch_tags", []),
-                "latest_run": store.build_run_summary(latest_run) if latest_run else None,
+                "latest_run": store.build_enhanced_run_summary(latest_run) if latest_run else None,
                 "run_count": len(claim.get("run_ids", [])),
             }
         )
     claims.sort(key=lambda item: item.get("text", ""))
+    if isinstance(limit, int) and limit > 0:
+        claims = claims[:limit]
     return jsonify({"claims": claims}), 200
+
+
+@api.route('/api/v1/arenas', methods=['GET'])
+@auth_required
+def list_arenas_api():
+    limit_raw = (request.args.get("limit") or "").strip()
+    limit = int(limit_raw) if limit_raw.isdigit() else None
+    arenas = _claim_store().list_arenas_summary(limit=limit)
+    return jsonify({"arenas": arenas}), 200
 
 
 @api.route('/api/v1/arenas/<arena_id>', methods=['GET'])
@@ -726,6 +838,26 @@ def get_arena_api(arena_id):
     if not arena:
         return jsonify({"error": "Arena not found"}), 404
     return jsonify(arena), 200
+
+
+@api.route('/api/v1/arenas/<arena_id>/progress', methods=['GET'])
+@auth_required
+def get_arena_progress_api(arena_id):
+    progress = _claim_store().build_arena_progress(arena_id)
+    if not progress:
+        return jsonify({"error": "Arena not found"}), 404
+    return jsonify(progress), 200
+
+
+@api.route('/api/v1/mock/claim_sets', methods=['GET'])
+@auth_required
+def list_mock_claim_sets_api():
+    return jsonify(
+        {
+            "enabled": _mock_s2_enabled(),
+            "claim_sets": available_mock_claim_sets() if _mock_s2_enabled() else [],
+        }
+    ), 200
 
 @api.route('/api/v1/batch', methods=['POST'])
 @auth_required
@@ -850,13 +982,13 @@ def download_batch_reports(batch_id):
 @api.route('/', methods=['GET'])
 @auth_required
 def index():
-    saved_jobs_path = _saved_jobs_dir()
-    saved_jobs_exist = saved_jobs_path.is_dir()
-    return render_template('index.html', 
-                         saved_jobs_exist=saved_jobs_exist,
-                         config=current_app.config,
-                         migration_status=_claim_store().migration_status(),
-                         providers=_public_providers())
+    return _render_page(
+        'index.html',
+        providers=_public_providers(),
+        active_nav="home",
+        page_title="Home",
+        mock_claim_sets=available_mock_claim_sets() if _mock_s2_enabled() else [],
+    )
 
 @api.route('/results', methods=['GET'])
 @auth_required
@@ -867,11 +999,34 @@ def results():
 @api.route('/arena', methods=['GET'])
 @auth_required
 def arena_submit():
-    return render_template(
+    return _render_page(
         'arena.html',
-        config=current_app.config,
         providers=_public_providers(),
-        migration_status=_claim_store().migration_status(),
+        mock_claim_sets=available_mock_claim_sets() if _mock_s2_enabled() else [],
+        active_nav="arenas",
+        page_title="New Arena",
+        page_subtitle="Configure and launch a model comparison.",
+        breadcrumbs=[
+            {"label": "Arenas", "href": url_for('api.arenas_page')},
+            {"label": "New Arena"},
+        ],
+        header_actions=[
+            {"href": url_for('api.arenas_page'), "label": "View Arenas", "kind": "secondary"},
+        ],
+    )
+
+
+@api.route('/arenas', methods=['GET'])
+@auth_required
+def arenas_page():
+    return _render_page(
+        'arenas.html',
+        active_nav="arenas",
+        page_title="Arenas",
+        page_subtitle="Active and past arena comparisons.",
+        header_actions=[
+            {"href": url_for('api.arena_submit'), "label": "New Arena", "kind": "primary"},
+        ],
     )
 
 
@@ -881,23 +1036,70 @@ def arena_results():
     arena_id = request.args.get('arena_id')
     if not arena_id:
         return "Arena not found", 404
-    return render_template('arena_results.html', arena_id=arena_id, config=current_app.config)
+    return _render_page(
+        'arena_results.html',
+        arena_id=arena_id,
+        focus_run_id=(request.args.get("run_id") or "").strip() or None,
+        active_nav="arenas",
+        page_title="Arena Workspace",
+        breadcrumbs=[
+            {"label": "Arenas", "href": url_for('api.arenas_page')},
+            {"label": arena_id},
+            {"label": "Review"},
+        ],
+        header_actions=[
+            {"href": url_for('api.arena_submit'), "label": "New Arena", "kind": "secondary"},
+        ],
+    )
 
 
 @api.route('/providers', methods=['GET'])
 @auth_required
 def providers_page():
-    return render_template('providers.html', config=current_app.config)
+    return _render_page(
+        'providers.html',
+        active_nav="providers",
+        page_title="Providers",
+        page_subtitle="Manage provider connections and model lists.",
+    )
+
+
+@api.route('/migration', methods=['GET'])
+@auth_required
+def migration_page():
+    return _render_page(
+        'migration.html',
+        active_nav="migration",
+        page_title="Migration",
+        page_subtitle="Import or clean up legacy batch folders.",
+    )
+
+
+@api.route('/guidebook', methods=['GET'])
+@auth_required
+def guidebook_page():
+    return _render_page(
+        'guidebook.html',
+        active_nav="guidebook",
+        page_title="Guidebook",
+        page_subtitle="A complete guide to every feature in Valsci.",
+    )
 
 
 @api.route('/claims/<claim_key>', methods=['GET'])
 @auth_required
 def claim_detail_page(claim_key):
-    return render_template(
+    return _render_page(
         'claim_detail.html',
         claim_key=claim_key,
-        config=current_app.config,
         providers=_public_providers(),
+        focused_run_id=(request.args.get("run_id") or "").strip() or None,
+        active_nav="claims",
+        page_title="Claim Detail",
+        breadcrumbs=[
+            {"label": "Claims", "href": url_for('api.browser')},
+            {"label": claim_key},
+        ],
     )
 
 
@@ -1007,10 +1209,14 @@ def batch_results():
 @api.route('/browser', methods=['GET'])
 @auth_required
 def browser():
-    return render_template(
+    return _render_page(
         'browser.html',
-        config=current_app.config,
-        migration_status=_claim_store().migration_status(),
+        active_nav="claims",
+        page_title="Claims",
+        page_subtitle="All evaluated claims.",
+        header_actions=[
+            {"href": url_for('api.arena_submit'), "label": "New Arena", "kind": "secondary"},
+        ],
     )
 
 @api.route('/api/v1/browse', methods=['GET'])

@@ -40,7 +40,7 @@ Claims are rated on an ordinal scale:
 
 - Python 3.8 or higher
 - PM2 (for production deployment)
-- A Semantic Scholar API Key (with S2ORC access)
+- A Semantic Scholar API Key (with S2ORC access), unless you are using Mock Demo Mode
 - Disk space for Semantic Scholar datasets:
   - Papers dataset: ~200GB
   - Abstracts dataset: ~140GB
@@ -117,6 +117,20 @@ Create an `app/config/env_vars.json` file with your configuration settings. Belo
 - `SMTP_SERVER`: SMTP server (default: smtp.gmail.com)
 - `SMTP_PORT`: SMTP port (default: 587)
 - `BASE_URL`: Base URL for your deployment
+
+### Mock Demo Mode
+
+If you want to validate the full claim and arena workflow locally without downloading Semantic Scholar datasets, enable mock mode in `app/config/env_vars.json`:
+
+```json
+{
+  "MOCK_SEMANTIC_SCHOLAR_MODE": true,
+  "MOCK_SEMANTIC_SCHOLAR_FIXTURE_PACK": "happy_path",
+  "MOCK_SEMANTIC_SCHOLAR_DELAY_SECONDS": 0.4
+}
+```
+
+In mock mode, Valsci uses deterministic retrieval fixtures, exposes demo claim sets in the UI, and does not require `SEMANTIC_SCHOLAR_API_KEY`.
 
 ### Downloading and Indexing Semantic Scholar Datasets
 

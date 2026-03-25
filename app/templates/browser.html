@@ -1,103 +1,37 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Claim Library</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
-</head>
-<body>
-    <div class="container wide-container">
-        <header class="page-header">
+{% extends "base.html" %}
+
+{% block content %}
+    <section class="panel">
+        <div class="panel-header">
             <div>
-                <h1>Claim Library</h1>
-                <p class="subtext">Browse canonical claims, latest runs, and batch tags.</p>
+                <h2 class="panel-title">Claim Library</h2>
+                <p class="panel-subtitle">Search and filter evaluated claims.</p>
             </div>
-            <div class="nav-links">
-                <a href="/" class="nav-link">Home</a>
-                <a href="/arena" class="nav-link">Arena</a>
-                <a href="/providers" class="nav-link">Providers</a>
-                {% if config.REQUIRE_PASSWORD %}
-                <a href="/logout" class="logout-link">Logout</a>
-                {% endif %}
-            </div>
-        </header>
-
-        {% if migration_status.pending_count %}
-        <div class="status-card warning-card">
-            <strong>Legacy migration available.</strong>
-            <span>{{ migration_status.pending_count }} batch folder(s) are not yet imported.</span>
+            <a href="{{ url_for('api.guidebook_page') }}#claims-browser" class="help-link" title="Guidebook: Claims Browser">?</a>
         </div>
-        {% endif %}
-
-        <section class="panel">
-            <div class="inline-actions">
-                <input type="text" id="searchInput" placeholder="Search claims...">
-                <button type="button" id="searchBtn" class="secondary-button">Search</button>
+        <div class="grid-two">
+            <div class="form-row">
+                <label for="searchInput">Search claims</label>
+                <input type="text" id="searchInput" placeholder="Search by text or claim key">
             </div>
-        </section>
+            <div class="inline-actions" style="align-items:end">
+                <button type="button" class="secondary-button" id="searchBtn">Search</button>
+                <button type="button" class="ghost-button" id="clearBtn">Clear</button>
+            </div>
+        </div>
+        <div class="summary-strip" style="margin-top:18px">
+            <div class="summary-cell">
+                <span class="label">Claims</span>
+                <span class="value" id="claimCount">0</span>
+            </div>
+        </div>
+    </section>
 
-        <div id="claimList"></div>
-    </div>
+    <section class="panel">
+        <div id="claimList" class="record-list"></div>
+    </section>
+{% endblock %}
 
-    <script>
-        function escapeHtml(value) {
-            return String(value ?? '')
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#39;');
-        }
-
-        function latestRunLink(latestRun) {
-            if (!latestRun) return '#';
-            if (latestRun.is_stage_checkpoint) {
-                return latestRun.arena_id
-                    ? `/arena_results?arena_id=${encodeURIComponent(latestRun.arena_id)}`
-                    : `/claims/${encodeURIComponent(latestRun.claim_key)}`;
-            }
-            if (!latestRun.transport_batch_id || !latestRun.transport_claim_id) return '#';
-            return latestRun.report_available
-                ? `/results?batch_id=${encodeURIComponent(latestRun.transport_batch_id)}&claim_id=${encodeURIComponent(latestRun.transport_claim_id)}`
-                : `/progress?batch_id=${encodeURIComponent(latestRun.transport_batch_id)}&claim_id=${encodeURIComponent(latestRun.transport_claim_id)}`;
-        }
-
-        function latestRunLinkLabel(latestRun) {
-            if (latestRun?.is_stage_checkpoint) return 'Stage Review';
-            return latestRun?.report_available ? 'Latest Report' : 'Latest Progress';
-        }
-
-        async function loadClaims() {
-            const search = document.getElementById('searchInput').value.trim();
-            const response = await fetch(`/api/v1/claims?search=${encodeURIComponent(search)}`);
-            const data = await response.json();
-            if (!response.ok) throw new Error(data.error || 'Failed to load claims.');
-            document.getElementById('claimList').innerHTML = data.claims.map(claim => `
-                <article class="panel">
-                    <h2>${escapeHtml(claim.text)}</h2>
-                    <p><strong>Claim Key:</strong> ${escapeHtml(claim.claim_key)}</p>
-                    <p><strong>Batch Tags:</strong> ${escapeHtml((claim.batch_tags || []).join(', '))}</p>
-                    <p><strong>Run Count:</strong> ${claim.run_count}</p>
-                    ${claim.latest_run ? `
-                        <p><strong>Latest Rating:</strong> ${escapeHtml(claim.latest_run.rating_label)}${claim.latest_run.claimRating !== null && claim.latest_run.claimRating !== undefined ? ` (${claim.latest_run.claimRating})` : ''}</p>
-                        <p><strong>Latest Provider:</strong> ${escapeHtml(claim.latest_run.provider_label || claim.latest_run.default_model || '')}</p>
-                    ` : '<p class="helper-text">No runs yet.</p>'}
-                    <div class="inline-actions">
-                        <a href="/claims/${encodeURIComponent(claim.claim_key)}" class="primary-button">Open Claim</a>
-                        ${claim.latest_run ? `<a href="${latestRunLink(claim.latest_run)}" class="secondary-button">${latestRunLinkLabel(claim.latest_run)}</a>` : ''}
-                    </div>
-                </article>
-            `).join('') || '<div class="panel helper-text">No claims found.</div>';
-        }
-
-        document.getElementById('searchBtn').addEventListener('click', () => loadClaims().catch(error => alert(error.message)));
-        document.getElementById('searchInput').addEventListener('keypress', (event) => {
-            if (event.key === 'Enter') loadClaims().catch(error => alert(error.message));
-        });
-        loadClaims().catch(error => {
-            document.getElementById('claimList').innerHTML = `<div class="panel error-message">${escapeHtml(error.message)}</div>`;
-        });
-    </script>
-</body>
-</html>
+{% block scripts %}
+    <script src="{{ url_for('static', filename='claims_browser.js') }}"></script>
+{% endblock %}

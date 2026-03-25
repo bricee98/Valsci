@@ -6,7 +6,7 @@ This guide explains how to run Valsci using Docker containers.
 
 - [Docker](https://www.docker.com/get-started)
 - [Docker Compose](https://docs.docker.com/compose/install/)
-- Semantic Scholar API key (get one at https://www.semanticscholar.org/product/api)
+- Semantic Scholar API key (get one at https://www.semanticscholar.org/product/api), unless you are using Mock Demo Mode
 
 ## Quick Start
 
@@ -50,6 +50,20 @@ All application code is mounted in the `/valsci` directory inside the containers
 - `/valsci/semantic_scholar/`: Contains the Semantic Scholar utilities
 - `/valsci/queued_jobs/`: Directory for claims waiting to be processed
 - `/valsci/saved_jobs/`: Directory for processed claim results and LLM debug traces/issues
+
+## Mock Demo Mode
+
+For fast local UI testing without Semantic Scholar datasets, enable these settings in `app/config/env_vars.json` before starting the stack:
+
+```json
+{
+  "MOCK_SEMANTIC_SCHOLAR_MODE": true,
+  "MOCK_SEMANTIC_SCHOLAR_FIXTURE_PACK": "happy_path",
+  "MOCK_SEMANTIC_SCHOLAR_DELAY_SECONDS": 0.4
+}
+```
+
+Mock mode drives the full claim, arena, progress, and review flow with deterministic synthetic papers and does not require a Semantic Scholar API key.
 
 ## Downloading Semantic Scholar Datasets
 

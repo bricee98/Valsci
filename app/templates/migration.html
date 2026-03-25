@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <section class="panel">
+        <div class="panel-header">
+            <div>
+                <h2 class="panel-title">Legacy Batch Review</h2>
+                <p class="panel-subtitle">Import or clean up legacy batch folders.</p>
+            </div>
+            <div class="inline-actions">
+                <button type="button" class="secondary-button" id="refreshMigrationBtn">Refresh</button>
+                <button type="button" class="primary-button" id="importAllBtn">Migrate All Pending</button>
+                <a href="{{ url_for('api.guidebook_page') }}#migration" class="help-link" title="Guidebook: Migration">?</a>
+            </div>
+        </div>
+        <div id="migrationStatus" class="status-card info-card hidden"></div>
+        <div class="comparison-scroll">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Batch</th>
+                        <th>Claims</th>
+                        <th>Last Modified</th>
+                        <th>Status</th>
+                        <th>Roots</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="migrationTableBody"></tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="panel hidden" id="migrationReviewPanel">
+        <div class="panel-header">
+            <div>
+                <h2 class="panel-title">Batch Review</h2>
+                <p class="panel-subtitle" id="migrationReviewSubtitle">Select a legacy batch to inspect its contents.</p>
+            </div>
+            <div class="inline-actions hidden" id="migrationReviewActions">
+                <button type="button" class="primary-button small-button" id="reviewImportBtn">Import</button>
+                <button type="button" class="danger-button small-button" id="reviewDeleteBtn">Delete Legacy Batch</button>
+            </div>
+        </div>
+        <div id="migrationReviewStatus" class="status-card info-card hidden"></div>
+        <div id="migrationReviewContent" class="record-list"></div>
+    </section>
+{% endblock %}
+
+{% block scripts %}
+    <script src="{{ url_for('static', filename='migration.js') }}"></script>
+{% endblock %}

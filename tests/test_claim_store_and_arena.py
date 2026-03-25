@@ -50,6 +50,11 @@ def seed_stage_checkpoint_run(
     claim_text: str,
     provider_snapshot: dict,
     stop_after: str = "query_generation",
+    candidate_id: str | None = None,
+    candidate_index: int | None = None,
+    candidate_prefix: str | None = None,
+    candidate_label: str | None = None,
+    candidate_color: str | None = None,
 ):
     claim_record, _ = store.get_or_create_claim(claim_text, batch_tags=[arena_id])
     run_record = store.create_run(
@@ -66,6 +71,11 @@ def seed_stage_checkpoint_run(
         source="arena",
         completed_stage=stop_after,
         is_stage_checkpoint=(stop_after != "final_report"),
+        candidate_id=candidate_id,
+        candidate_index=candidate_index,
+        candidate_prefix=candidate_prefix,
+        candidate_label=candidate_label,
+        candidate_color=candidate_color,
     )
     claim_data = {
         "text": claim_text,
@@ -82,6 +92,11 @@ def seed_stage_checkpoint_run(
         "is_stage_checkpoint": stop_after != "final_report",
         "provider_snapshot": provider_snapshot,
         "model_overrides": {},
+        "candidate_id": candidate_id,
+        "candidate_index": candidate_index,
+        "candidate_prefix": candidate_prefix,
+        "candidate_label": candidate_label,
+        "candidate_color": candidate_color,
         "search_config": {"num_queries": 5, "results_per_query": 5},
         "bibliometric_config": {"use_bibliometrics": True},
         "usage": empty_usage(),
@@ -672,13 +687,205 @@ def test_migration_route_imports_legacy_saved_claim(monkeypatch, tmp_path):
     assert run["text"] == "Legacy claim text"
 
 
-def test_arena_page_surfaces_reuse_retrieval_baseline_warning(monkeypatch, tmp_path):
+def test_arena_page_surfaces_advanced_reuse_copy(monkeypatch, tmp_path):
     client, _, _, _, _ = create_test_client(monkeypatch, tmp_path)
 
     response = client.get("/arena")
 
     assert response.status_code == 200
     page = response.get_data(as_text=True)
-    assert "reuseRetrievalBanner" in page
-    assert "Candidate order matters in Reuse Query Generation" in page
-    assert "Candidate 1 (" in page
+    assert "Reuse retrieval" in page
+    assert "Candidate A supplies shared query-generation and retrieval outputs" in page
+    assert "Advanced Arena Settings" in page
+
+
+def test_arenas_api_returns_summary_and_progress(monkeypatch, tmp_path):
+    client, saved_jobs_dir, queued_jobs_dir, state_dir, provider_catalog_path = create_test_client(monkeypatch, tmp_path)
+    store = ClaimStore(
+        state_dir=str(state_dir),
+        saved_jobs_dir=str(saved_jobs_dir),
+        queued_jobs_dir=str(queued_jobs_dir),
+        trace_dir=str(saved_jobs_dir),
+    )
+    arena = store.create_arena(
+        title="Arena Summary",
+        batch_tags=["arena-summary"],
+        execution_mode="full_pipeline",
+        current_stage="query_generation",
+        candidates=[
+            {"candidate_id": "candidate-0", "candidate_index": 0, "candidate_prefix": "A", "candidate_color": "#0f766e", "label": "Baseline"},
+            {"candidate_id": "candidate-1", "candidate_index": 1, "candidate_prefix": "B", "candidate_color": "#c2410c", "label": "Alt"},
+        ],
+    )
+    snapshot = ProviderCatalog(str(provider_catalog_path)).build_snapshot("default")
+    run_a = seed_stage_checkpoint_run(
+        store,
+        saved_jobs_dir,
+        arena_id=arena["arena_id"],
+        claim_text="Creatine improves memory.",
+        provider_snapshot={**snapshot, "label": "Baseline"},
+        stop_after="query_generation",
+        candidate_id="candidate-0",
+        candidate_index=0,
+        candidate_prefix="A",
+        candidate_label="Baseline",
+        candidate_color="#0f766e",
+    )
+    run_b = seed_stage_checkpoint_run(
+        store,
+        saved_jobs_dir,
+        arena_id=arena["arena_id"],
+        claim_text="Creatine improves memory.",
+        provider_snapshot={**snapshot, "label": "Alt"},
+        stop_after="query_generation",
+        candidate_id="candidate-1",
+        candidate_index=1,
+        candidate_prefix="B",
+        candidate_label="Alt",
+        candidate_color="#c2410c",
+    )
+    arena["claim_keys"] = [run_a["claim_key"]]
+    store.append_arena_stage_history(
+        arena,
+        stage="query_generation",
+        run_ids=[run_a["run_id"], run_b["run_id"]],
+        source="initial_submit",
+    )
+
+    list_response = client.get("/api/v1/arenas")
+    progress_response = client.get(f"/api/v1/arenas/{arena['arena_id']}/progress")
+
+    assert list_response.status_code == 200
+    list_payload = list_response.get_json()
+    assert list_payload["arenas"][0]["title"] == "Arena Summary"
+    assert list_payload["arenas"][0]["candidate_count"] == 2
+
+    assert progress_response.status_code == 200
+    progress_payload = progress_response.get_json()
+    assert progress_payload["summary"]["arena_id"] == arena["arena_id"]
+    assert len(progress_payload["candidates"]) == 2
+    assert {candidate["candidate"]["prefix"] for candidate in progress_payload["candidates"]} == {"A", "B"}
+
+
+def test_claim_detail_api_respects_focused_run(monkeypatch, tmp_path):
+    client, saved_jobs_dir, queued_jobs_dir, state_dir, provider_catalog_path = create_test_client(monkeypatch, tmp_path)
+    store = ClaimStore(
+        state_dir=str(state_dir),
+        saved_jobs_dir=str(saved_jobs_dir),
+        queued_jobs_dir=str(queued_jobs_dir),
+        trace_dir=str(saved_jobs_dir),
+    )
+    arena = store.create_arena(
+        title="Arena Focus",
+        batch_tags=["arena-focus"],
+        execution_mode="full_pipeline",
+        current_stage="query_generation",
+        candidates=[
+            {"candidate_id": "candidate-0", "candidate_index": 0, "candidate_prefix": "A", "candidate_color": "#0f766e", "label": "Baseline"},
+            {"candidate_id": "candidate-1", "candidate_index": 1, "candidate_prefix": "B", "candidate_color": "#c2410c", "label": "Alt"},
+        ],
+    )
+    snapshot = ProviderCatalog(str(provider_catalog_path)).build_snapshot("default")
+    run_a = seed_stage_checkpoint_run(
+        store,
+        saved_jobs_dir,
+        arena_id=arena["arena_id"],
+        claim_text="Creatine improves memory.",
+        provider_snapshot={**snapshot, "label": "Baseline"},
+        candidate_id="candidate-0",
+        candidate_index=0,
+        candidate_prefix="A",
+        candidate_label="Baseline",
+        candidate_color="#0f766e",
+    )
+    run_b = seed_stage_checkpoint_run(
+        store,
+        saved_jobs_dir,
+        arena_id=arena["arena_id"],
+        claim_text="Creatine improves memory.",
+        provider_snapshot={**snapshot, "label": "Alt"},
+        candidate_id="candidate-1",
+        candidate_index=1,
+        candidate_prefix="B",
+        candidate_label="Alt",
+        candidate_color="#c2410c",
+    )
+    arena["claim_keys"] = [run_a["claim_key"]]
+    store.append_arena_stage_history(
+        arena,
+        stage="query_generation",
+        run_ids=[run_a["run_id"], run_b["run_id"]],
+        source="initial_submit",
+    )
+
+    response = client.get(f"/api/v1/claims/{run_a['claim_key']}?run_id={run_b['run_id']}")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["focused_run"]["run_id"] == run_b["run_id"]
+    assert payload["source_context"]["arena_id"] == arena["arena_id"]
+    assert payload["source_context"]["candidate_prefix"] == "B"
+    assert payload["source_context"]["arena_title"] == "Arena Focus"
+
+
+def test_report_route_returns_prompt_provenance_and_run_summary(monkeypatch, tmp_path):
+    client, saved_jobs_dir, queued_jobs_dir, state_dir, provider_catalog_path = create_test_client(monkeypatch, tmp_path)
+    store = ClaimStore(
+        state_dir=str(state_dir),
+        saved_jobs_dir=str(saved_jobs_dir),
+        queued_jobs_dir=str(queued_jobs_dir),
+        trace_dir=str(saved_jobs_dir),
+    )
+    batch_id = "report-batch"
+    provider_snapshot = ProviderCatalog(str(provider_catalog_path)).build_snapshot("default")
+    claim_record, _ = store.get_or_create_claim("Creatine improves memory.", batch_tags=[batch_id])
+    run_record = store.create_run(
+        claim_record=claim_record,
+        batch_tags=[batch_id],
+        execution_mode="full_pipeline",
+        stop_after="final_report",
+        provider_snapshot=provider_snapshot,
+        cost_confirmation={"accepted": True},
+        transport_batch_id=batch_id,
+        review_type="regular",
+        status="processed",
+        source="submit",
+        completed_stage="final_report",
+        is_stage_checkpoint=False,
+    )
+
+    claim_path = saved_jobs_dir / batch_id / f"{run_record['run_id']}.txt"
+    claim_path.parent.mkdir(parents=True, exist_ok=True)
+    claim_path.write_text(json.dumps({
+        "text": claim_record["text"],
+        "status": "processed",
+        "batch_id": batch_id,
+        "claim_id": run_record["run_id"],
+        "run_id": run_record["run_id"],
+        "claim_key": claim_record["claim_key"],
+        "review_type": "regular",
+        "execution_mode": "full_pipeline",
+        "stop_after": "final_report",
+        "completed_stage": "final_report",
+        "is_stage_checkpoint": False,
+        "provider_snapshot": provider_snapshot,
+        "model_overrides": {},
+        "search_config": {"num_queries": 5, "results_per_query": 5},
+        "bibliometric_config": {"use_bibliometrics": True},
+        "usage": empty_usage(),
+        "usage_by_stage": {},
+        "report": {
+            "claimRating": 4,
+            "explanation": "Looks promising.",
+            "searchQueries": [],
+        },
+    }, indent=2), encoding="utf-8")
+    store.ingest_transport_artifact(batch_id, run_record["run_id"])
+
+    response = client.get(f"/api/v1/claims/{batch_id}/{run_record['run_id']}/report")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["run_summary"]["run_id"] == run_record["run_id"]
+    assert "query_generation" in payload["prompt_provenance"]
+    assert payload["prompt_provenance"]["query_generation"]["system_prompt"]["file_name"].endswith(".txt")

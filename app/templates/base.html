@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ page_title or "Valsci" }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='overhaul.css') }}">
+    {% block head_extra %}{% endblock %}
+</head>
+<body>
+    <div class="app-shell">
+        <header class="topbar">
+            <a class="brand-lockup" href="{{ url_for('api.index') }}">
+                <span class="brand-mark">VS</span>
+                <span class="brand-copy">
+                    <span class="brand-name">Valsci</span>
+                </span>
+            </a>
+
+            <nav class="topnav" aria-label="Primary">
+                <a href="{{ url_for('api.index') }}" class="topnav-link {% if active_nav == 'home' %}active{% endif %}">Home</a>
+                <a href="{{ url_for('api.browser') }}" class="topnav-link {% if active_nav == 'claims' %}active{% endif %}">Claims</a>
+                <a href="{{ url_for('api.arenas_page') }}" class="topnav-link {% if active_nav == 'arenas' %}active{% endif %}">Arenas</a>
+                <a href="{{ url_for('api.providers_page') }}" class="topnav-link {% if active_nav == 'providers' %}active{% endif %}">Providers</a>
+                <a href="{{ url_for('api.migration_page') }}" class="topnav-link {% if active_nav == 'migration' %}active{% endif %}">Migration</a>
+                <a href="{{ url_for('api.guidebook_page') }}" class="topnav-link {% if active_nav == 'guidebook' %}active{% endif %}">Guidebook</a>
+            </nav>
+
+            <div class="topbar-actions">
+                {% if mock_s2_enabled %}
+                <span class="badge mock-badge">Mock Data</span>
+                {% endif %}
+                {% if config.REQUIRE_PASSWORD %}
+                <a href="{{ url_for('api.logout') }}" class="button-link ghost-button">Logout</a>
+                {% endif %}
+            </div>
+        </header>
+
+        <section class="page-header">
+            {% if breadcrumbs %}
+            <nav class="breadcrumbs" aria-label="Breadcrumb">
+                {% for crumb in breadcrumbs %}
+                    {% if not loop.first %}
+                    <span class="breadcrumb-separator">/</span>
+                    {% endif %}
+                    {% if crumb.href %}
+                    <a href="{{ crumb.href }}">{{ crumb.label }}</a>
+                    {% else %}
+                    <span aria-current="page">{{ crumb.label }}</span>
+                    {% endif %}
+                {% endfor %}
+            </nav>
+            {% endif %}
+
+            <div class="page-header-row">
+                <div class="page-header-copy">
+                    {% if page_eyebrow %}
+                    <div class="page-eyebrow">{{ page_eyebrow }}</div>
+                    {% endif %}
+                    <h1 class="page-title">{{ page_title or "Valsci" }}</h1>
+                    {% if page_subtitle %}
+                    <p class="page-subtitle">{{ page_subtitle }}</p>
+                    {% endif %}
+                </div>
+
+                {% if header_actions %}
+                <div class="header-actions">
+                    {% for action in header_actions %}
+                    <a
+                        href="{{ action.href }}"
+                        class="{% if action.kind == 'primary' %}primary-button{% elif action.kind == 'danger' %}danger-button{% else %}secondary-button{% endif %}"
+                    >
+                        {{ action.label }}
+                    </a>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+        </section>
+
+        {% block content %}{% endblock %}
+    </div>
+
+    <script src="{{ url_for('static', filename='ui_shared.js') }}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

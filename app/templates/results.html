@@ -9,11 +9,12 @@
 </head>
 <body>
     <div class="container">
-        <h1>Claim Report</h1>
+        <h1>Claim Report <a href="/guidebook#results" class="help-link" title="Guidebook: Claim Report">?</a></h1>
         <div id="issuesBanner"></div>
         <div id="reportContent"></div>
         <div id="usageStats"></div>
         <div id="usageByStage"></div>
+        <div id="promptProvenance"></div>
         <div id="debugTrace"></div>
         <div id="timingStats">
             <h3>Processing Time Breakdown:</h3>
@@ -31,6 +32,24 @@
     <style>
         .hidden {
             display: none;
+        }
+        .help-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            background: rgba(15, 118, 110, 0.1);
+            color: #0f766e;
+            font-size: 0.82rem;
+            font-weight: 700;
+            text-decoration: none;
+            vertical-align: middle;
+        }
+        .help-link:hover {
+            background: #0f766e;
+            color: #fff;
         }
         .toggle-button {
             margin: 10px 0;
@@ -82,6 +101,7 @@
         const reportContent = document.getElementById('reportContent');
         const issuesBanner = document.getElementById('issuesBanner');
         const usageByStageContainer = document.getElementById('usageByStage');
+        const promptProvenanceContainer = document.getElementById('promptProvenance');
         const debugTraceContainer = document.getElementById('debugTrace');
 
         function escapeHtml(value) {
@@ -126,6 +146,26 @@
             if (rating === 4) return '#74b9ff'; // light blue
             if (rating === 5) return '#00b894'; // green-blue
             return '#6c757d'; // gray
+        }
+
+        function formatDateLabel(value) {
+            if (!value) return 'Unknown';
+            const date = new Date(value);
+            return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+        }
+
+        function normalizePromptEntry(entry = {}) {
+            const systemPrompt = entry.system_prompt || {};
+            const userPrompt = entry.user_prompt || {};
+            return {
+                promptSetHash: entry.prompt_set_hash || null,
+                renderedPromptHash: entry.rendered_prompt_hash || null,
+                systemFile: entry.system_prompt_file || systemPrompt.file_name || null,
+                userFile: entry.user_prompt_file || userPrompt.file_name || null,
+                systemHash: entry.system_prompt_sha256 || systemPrompt.sha256 || null,
+                userHash: entry.user_prompt_sha256 || userPrompt.sha256 || null,
+                modifiedAt: entry.prompt_file_modified_at || systemPrompt.modified_at || userPrompt.modified_at || null,
+            };
         }
 
         function renderIssues(issues) {
@@ -220,11 +260,42 @@
             `;
         }
 
+        function renderPromptProvenance(promptProvenance) {
+            if (!promptProvenance || typeof promptProvenance !== 'object' || Object.keys(promptProvenance).length === 0) {
+                promptProvenanceContainer.innerHTML = '';
+                return;
+            }
+
+            const rows = Object.entries(promptProvenance).map(([stage, rawEntry]) => {
+                const entry = normalizePromptEntry(rawEntry);
+                return `
+                    <div class="trace-box">
+                        <h4>${escapeHtml(stage.replace(/_/g, ' '))}</h4>
+                        <p><strong>System prompt:</strong> ${escapeHtml(entry.systemFile || 'Unknown')}</p>
+                        <p><strong>User prompt:</strong> ${escapeHtml(entry.userFile || 'Unknown')}</p>
+                        <p><strong>Prompt set hash:</strong> ${escapeHtml(entry.promptSetHash || 'Pending')}</p>
+                        <p><strong>Rendered hash:</strong> ${escapeHtml(entry.renderedPromptHash || 'Pending')}</p>
+                        <p><strong>System hash:</strong> ${escapeHtml(entry.systemHash || 'Pending')}</p>
+                        <p><strong>User hash:</strong> ${escapeHtml(entry.userHash || 'Pending')}</p>
+                        <p><strong>Modified:</strong> ${escapeHtml(formatDateLabel(entry.modifiedAt))}</p>
+                    </div>
+                `;
+            }).join('');
+
+            promptProvenanceContainer.innerHTML = `
+                <details class="trace-box">
+                    <summary><strong>Prompt Provenance</strong></summary>
+                    ${rows}
+                </details>
+            `;
+        }
+
         function displayReport(data) {
             const ratingText = getRatingText(data.report?.claimRating);
             const ratingColor = getRatingColor(data.report?.claimRating);
             renderIssues(data.report?.issues || []);
             renderDebugTrace(data.report?.debug_trace || null);
+            renderPromptProvenance(data.prompt_provenance || data.run_summary?.prompt_provenance || {});
             
             marked.setOptions({
                 sanitize: true,

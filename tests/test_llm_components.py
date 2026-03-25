@@ -97,6 +97,18 @@ def test_validate_config_rejects_non_numeric_backoff(monkeypatch):
         Config.validate_config()
 
 
+def test_validate_config_allows_mock_mode_without_semantic_scholar_key(monkeypatch):
+    monkeypatch.setattr(Config, "LLM_PROVIDER", "openai", raising=False)
+    monkeypatch.setattr(Config, "LLM_API_KEY", "test", raising=False)
+    monkeypatch.setattr(Config, "SECRET_KEY", "secret", raising=False)
+    monkeypatch.setattr(Config, "USER_EMAIL", "user@example.com", raising=False)
+    monkeypatch.setattr(Config, "SEMANTIC_SCHOLAR_API_KEY", "", raising=False)
+    monkeypatch.setattr(Config, "MOCK_SEMANTIC_SCHOLAR_MODE", True, raising=False)
+    monkeypatch.setattr(Config, "REQUIRE_PASSWORD", False, raising=False)
+
+    Config.validate_config()
+
+
 def test_get_paper_content_reports_missing_release():
     S2Searcher = _load_searcher_class()
     searcher = S2Searcher.__new__(S2Searcher)

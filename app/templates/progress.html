@@ -30,6 +30,24 @@
             height: 20px;
             margin: 10px 0;
         }
+        .help-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            background: rgba(15, 118, 110, 0.1);
+            color: #0f766e;
+            font-size: 0.82rem;
+            font-weight: 700;
+            text-decoration: none;
+            vertical-align: middle;
+        }
+        .help-link:hover {
+            background: #0f766e;
+            color: #fff;
+        }
         .current-claim {
             margin-top: 20px;
             padding: 10px;
@@ -40,7 +58,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>Processing Claims</h1>
+        <h1>Processing Claims <a href="/guidebook#progress" class="help-link" title="Guidebook: Progress">?</a></h1>
         <div id="referenceContainer" class="progress-container">
             <h2>Reference IDs</h2>
             <ul id="referenceList"></ul>

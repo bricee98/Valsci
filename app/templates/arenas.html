@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <section class="panel">
+        <div class="panel-header">
+            <div>
+                <h2 class="panel-title">Arena Library</h2>
+                <p class="panel-subtitle">Browse and filter all arenas.</p>
+            </div>
+            <a href="{{ url_for('api.guidebook_page') }}#arenas-library" class="help-link" title="Guidebook: Arenas Library">?</a>
+        </div>
+        <div class="grid-two">
+            <div class="form-row">
+                <label for="arenaSearchInput">Search arenas</label>
+                <input type="text" id="arenaSearchInput" placeholder="Search by title or arena ID">
+            </div>
+            <div class="form-row">
+                <label for="arenaStatusFilter">Status</label>
+                <select id="arenaStatusFilter">
+                    <option value="">All statuses</option>
+                    <option value="in_progress">In Progress</option>
+                    <option value="ready_for_review">Ready for Review</option>
+                    <option value="completed">Completed</option>
+                </select>
+            </div>
+        </div>
+    </section>
+
+    <section class="panel">
+        <div id="arenaLibrary" class="arena-list"></div>
+    </section>
+{% endblock %}
+
+{% block scripts %}
+    <script src="{{ url_for('static', filename='arenas.js') }}"></script>
+{% endblock %}

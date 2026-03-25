@@ -1,484 +1,193 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Valsci</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
-</head>
-<body>
-    <div class="container wide-container">
-        <header class="page-header">
-            <div>
-                <h1>Valsci</h1>
-            </div>
-            <div class="nav-links">
-                <a href="/arena" class="nav-link">Arena</a>
-                <a href="/browser" class="nav-link">Claims</a>
-                <a href="/providers" class="nav-link">Providers</a>
-                {% if config.REQUIRE_PASSWORD %}
-                <a href="/logout" class="logout-link">Logout</a>
-                {% endif %}
-            </div>
-        </header>
+{% extends "base.html" %}
 
-        {% if migration_status.pending_count %}
-        <div class="status-card warning-card">
-            <strong>Legacy migration available.</strong>
-            <span>{{ migration_status.pending_count }} batch folder(s) can be imported into the claim store.</span>
-            <span class="helper-text">Migration is explicit so the transport layout can stay untouched until you are ready.</span>
+{% block content %}
+    {% if migration_status.pending_count %}
+    <section class="status-card warning-card" id="migrationStrip">
+        <strong>Legacy migration needs attention.</strong>
+        <span>{{ migration_status.pending_count }} legacy batch folder(s) are still outside the canonical claim store.</span>
+        <div class="inline-actions">
+            <a href="{{ url_for('api.migration_page') }}" class="primary-button small-button">Review Migration</a>
+            <button type="button" class="secondary-button small-button" id="migrateAllBtn">Migrate All</button>
         </div>
-        {% endif %}
+    </section>
+    {% endif %}
 
-        <div class="grid-two">
-            <section class="panel">
-                <h2>Claims</h2>
-                <div class="form-row grid-two">
-                    <div>
+    {% if mock_s2_enabled %}
+    <section class="status-card info-card">
+        <strong>Mock Semantic Scholar mode is active.</strong>
+        <span>Retrieval results are synthetic so you can validate arena launch, progress, review, and history without downloading Semantic Scholar datasets.</span>
+    </section>
+    {% endif %}
+
+    <section class="dashboard-grid">
+        <article class="panel">
+            <div class="panel-header">
+                <div>
+                    <h2 class="panel-title">Run Claims</h2>
+                    <p class="panel-subtitle">Submit claims for evaluation.</p>
+                </div>
+                <a href="{{ url_for('api.guidebook_page') }}#home" class="help-link" title="Guidebook: Home Page">?</a>
+            </div>
+
+            <div id="homeRunStatus" class="status-card info-card hidden"></div>
+
+            <div class="form-grid">
+                <div class="grid-two">
+                    <div class="form-row">
                         <label for="providerId">Provider</label>
                         <select id="providerId"></select>
                     </div>
-                    <div>
+                    <div class="form-row">
+                        <label for="modelDefault">Model</label>
+                        <select id="modelDefault"></select>
+                    </div>
+                </div>
+
+                <div class="grid-two">
+                    <div class="form-row">
                         <label for="duplicateStrategy">Existing Claim Handling</label>
                         <select id="duplicateStrategy">
                             <option value="rerun">Create New Run</option>
-                            <option value="view">View Existing Claim</option>
+                            <option value="view">Open Existing Claim</option>
                         </select>
                     </div>
-                </div>
-
-                <div class="form-row">
-                    <label for="batchTags">Batch Tags</label>
-                    <input type="text" id="batchTags" placeholder="Optional comma-separated tags for filtering later">
-                </div>
-
-                <div class="form-row">
-                    <label for="newClaimText">Claim</label>
-                    <textarea id="newClaimText" rows="3" placeholder="Enter one scientific claim per submission item"></textarea>
-                    <div class="inline-actions">
-                        <button type="button" id="addClaimBtn" class="secondary-button">Add Claim</button>
+                    <div class="form-row">
+                        <label for="batchTags">Batch Tags</label>
+                        <input type="text" id="batchTags" placeholder="Optional comma-separated tags">
                     </div>
                 </div>
 
                 <div class="form-row">
-                    <label for="claimFile">Upload Claims</label>
-                    <input type="file" id="claimFile" accept=".txt">
+                    <label for="claimText">Claims</label>
+                    <textarea id="claimText" placeholder="Enter one claim per line"></textarea>
                 </div>
 
-                <div class="form-row">
-                    <label>Staged Claims</label>
-                    <div id="stagedClaims" class="staged-claims"></div>
+                <div class="grid-two">
+                    <div class="form-row">
+                        <label for="claimFile">Upload Claims</label>
+                        <input type="file" id="claimFile" accept=".txt">
+                    </div>
                 </div>
-            </section>
 
-            <section class="panel">
-                <h2>Run Settings</h2>
-                <div class="form-row grid-two">
-                    <div>
+                <div class="inline-actions">
+                    <button type="button" class="secondary-button" id="stageClaimsBtn">Stage Claims</button>
+                    <button type="button" class="ghost-button" id="clearClaimsBtn">Clear</button>
+                </div>
+            </div>
+
+            <div class="panel-divider"></div>
+
+            <div class="stack">
+                <strong>Staged Claims</strong>
+                <div id="stagedClaims" class="staged-list"></div>
+            </div>
+
+            <div class="panel-divider"></div>
+
+            <details class="panel panel-muted">
+                <summary><strong>Advanced Run Settings</strong></summary>
+                <div class="panel-divider"></div>
+                <div class="grid-three">
+                    <div class="form-row">
                         <label for="numQueries">Queries</label>
-                        <input type="number" id="numQueries" min="1" max="20" value="5">
+                        <input type="number" id="numQueries" value="5" min="1" max="20">
                     </div>
-                    <div>
+                    <div class="form-row">
                         <label for="resultsPerQuery">Results / Query</label>
-                        <input type="number" id="resultsPerQuery" min="1" max="10" value="5">
+                        <input type="number" id="resultsPerQuery" value="5" min="1" max="10">
                     </div>
-                </div>
-
-                <div class="form-row grid-two">
-                    <div>
-                        <label for="modelQueryGeneration">Query Generation Model</label>
-                        <select id="modelQueryGeneration"></select>
-                    </div>
-                    <div>
-                        <label for="modelPaperAnalysis">Paper Analysis Model</label>
-                        <select id="modelPaperAnalysis"></select>
-                    </div>
-                </div>
-
-                <div class="form-row grid-two">
-                    <div>
-                        <label for="modelVenueScoring">Venue Scoring Model</label>
-                        <select id="modelVenueScoring"></select>
-                    </div>
-                    <div>
-                        <label for="modelFinalReport">Final Report Model</label>
-                        <select id="modelFinalReport"></select>
-                    </div>
-                </div>
-
-                <div class="form-row">
                     <label class="checkbox-row">
                         <input type="checkbox" id="useBibliometrics" checked>
                         <span>Use bibliometric scoring</span>
                     </label>
                 </div>
+            </details>
 
-                <div class="form-row grid-three">
-                    <div>
-                        <label for="authorImpactWeight">Author Weight</label>
-                        <input type="number" id="authorImpactWeight" min="0" max="1" step="0.1" value="0.4">
-                    </div>
-                    <div>
-                        <label for="citationImpactWeight">Citation Weight</label>
-                        <input type="number" id="citationImpactWeight" min="0" max="1" step="0.1" value="0.4">
-                    </div>
-                    <div>
-                        <label for="venueImpactWeight">Venue Weight</label>
-                        <input type="number" id="venueImpactWeight" min="0" max="1" step="0.1" value="0.2">
-                    </div>
-                </div>
+            <div class="panel-divider"></div>
 
+            <div id="preflightPanel" class="panel panel-muted hidden"></div>
+
+            <div class="inline-actions">
+                <button type="button" class="secondary-button" id="estimateBtn">Estimate Cost</button>
+                <button type="button" class="primary-button" id="queueRunBtn" disabled>Queue Run</button>
+            </div>
+        </article>
+
+        <div class="section-stack">
+            <article class="panel">
                 <div class="inline-actions">
-                    <button type="button" id="preflightBtn" class="secondary-button">Estimate Cost</button>
-                    <button type="button" id="submitBtn" class="primary-button" disabled>Submit Batch</button>
+                    <a href="{{ url_for('api.arena_submit') }}" class="primary-button">New Arena</a>
+                    <a href="{{ url_for('api.arenas_page') }}" class="secondary-button">View Arenas</a>
                 </div>
-            </section>
-        </div>
+            </article>
 
-        <section id="preflightPanel" class="panel hidden"></section>
-    </div>
+            {% if mock_claim_sets %}
+            <article class="panel">
+                <div class="panel-header">
+                    <div>
+                        <h2 class="panel-title">Mock Claim Sets</h2>
+                    </div>
+                </div>
+                <div class="inline-actions">
+                    {% for claim_set in mock_claim_sets %}
+                    <button type="button" class="secondary-button small-button" data-load-claim-set="{{ claim_set.pack_id }}">{{ claim_set.label }}</button>
+                    {% endfor %}
+                </div>
+            </article>
+            {% endif %}
+
+            <article class="panel">
+                <div class="panel-header">
+                    <div>
+                        <h2 class="panel-title">Recent Arenas</h2>
+                        <p class="panel-subtitle">Recent comparisons.</p>
+                    </div>
+                    <a href="{{ url_for('api.arenas_page') }}" class="secondary-button small-button">Open Library</a>
+                </div>
+                <div id="recentArenas" class="arena-list"></div>
+            </article>
+
+            <article class="panel">
+                <div class="panel-header">
+                    <div>
+                        <h2 class="panel-title">Recent Claims</h2>
+                        <p class="panel-subtitle">Recent evaluations.</p>
+                    </div>
+                    <a href="{{ url_for('api.browser') }}" class="secondary-button small-button">Open Claims</a>
+                </div>
+                <div id="recentClaims" class="record-list"></div>
+            </article>
+        </div>
+    </section>
 
     <div id="costModal" class="modal hidden">
         <div class="modal-card">
-            <h2>Confirm Cost</h2>
-            <div id="costModalBody"></div>
+            <div class="panel-header">
+                <div>
+                    <h2 class="panel-title">Confirm Claim Run</h2>
+                    <p class="panel-subtitle">Review the estimated cost before queueing the run.</p>
+                </div>
+            </div>
+            <div id="costModalBody" class="stack"></div>
             <label class="checkbox-row">
                 <input type="checkbox" id="confirmCostCheckbox">
-                <span>I approve this estimated spend and want to queue the run(s).</span>
+                <span>I approve this estimated spend and want to queue the run.</span>
             </label>
             <div class="inline-actions">
-                <button type="button" id="cancelCostBtn" class="secondary-button">Cancel</button>
-                <button type="button" id="confirmCostBtn" class="primary-button" disabled>Submit</button>
+                <button type="button" class="secondary-button" id="cancelCostBtn">Cancel</button>
+                <button type="button" class="primary-button" id="confirmCostBtn" disabled>Queue Run</button>
             </div>
         </div>
     </div>
 
     <script>
-        const providerCatalog = {{ providers|tojson }};
-        const stagedClaims = [];
-        let preflightPayload = null;
-
-        const stageConfig = [
-            ['query_generation', 'modelQueryGeneration'],
-            ['paper_analysis', 'modelPaperAnalysis'],
-            ['venue_scoring', 'modelVenueScoring'],
-            ['final_report', 'modelFinalReport'],
-        ];
-
-        const stagedClaimsEl = document.getElementById('stagedClaims');
-        const preflightPanel = document.getElementById('preflightPanel');
-        const submitBtn = document.getElementById('submitBtn');
-        const costModal = document.getElementById('costModal');
-        const costModalBody = document.getElementById('costModalBody');
-        const confirmCostCheckbox = document.getElementById('confirmCostCheckbox');
-        const confirmCostBtn = document.getElementById('confirmCostBtn');
-
-        function escapeHtml(value) {
-            return String(value ?? '')
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#39;');
-        }
-
-        function getProvider(providerId) {
-            return providerCatalog.find(provider => provider.provider_id === providerId) || providerCatalog[0] || null;
-        }
-
-        function providerModelNames(provider) {
-            const models = Array.isArray(provider?.models) ? provider.models : [];
-            return models
-                .filter(model => model && model.enabled !== false)
-                .map(model => String(model.model_name || '').trim())
-                .filter(Boolean);
-        }
-
-        function setSelectOptions(select, provider) {
-            const current = select.value;
-            const models = providerModelNames(provider);
-            select.innerHTML = `
-                <option value="">Provider Default (${escapeHtml(provider?.default_model || 'unset')})</option>
-                ${models.map(model => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`).join('')}
-            `;
-            if (models.includes(current)) {
-                select.value = current;
-            } else {
-                select.value = '';
-            }
-        }
-
-        function refreshModelSelectors() {
-            const provider = getProvider(document.getElementById('providerId').value);
-            stageConfig.forEach(([, selectId]) => {
-                setSelectOptions(document.getElementById(selectId), provider);
-            });
-        }
-
-        function renderProviderOptions() {
-            const providerSelect = document.getElementById('providerId');
-            providerSelect.innerHTML = providerCatalog.map(provider => `
-                <option value="${escapeHtml(provider.provider_id)}">${escapeHtml(provider.label || provider.provider_id)}</option>
-            `).join('');
-            refreshModelSelectors();
-        }
-
-        function invalidatePreflight() {
-            preflightPayload = null;
-            submitBtn.disabled = true;
-            preflightPanel.classList.add('hidden');
-        }
-
-        function parseBatchTags() {
-            return document.getElementById('batchTags').value
-                .split(',')
-                .map(value => value.trim())
-                .filter(Boolean);
-        }
-
-        function renderStagedClaims() {
-            if (!stagedClaims.length) {
-                stagedClaimsEl.innerHTML = '<div class="helper-text">No claims staged.</div>';
-                submitBtn.disabled = true;
-                return;
-            }
-            stagedClaimsEl.innerHTML = stagedClaims.map((claim, index) => `
-                <div class="staged-claim">
-                    <span>${escapeHtml(claim)}</span>
-                    <button type="button" class="danger-button small-button" data-index="${index}">Remove</button>
-                </div>
-            `).join('');
-            submitBtn.disabled = !preflightPayload || !preflightPayload.totals.pricing_complete;
-        }
-
-        function addClaim(text) {
-            const cleaned = String(text || '').trim();
-            if (!cleaned) return;
-            stagedClaims.push(cleaned);
-            invalidatePreflight();
-            renderStagedClaims();
-            document.getElementById('newClaimText').value = '';
-        }
-
-        function currentSearchConfig() {
-            return {
-                num_queries: parseInt(document.getElementById('numQueries').value || '5', 10),
-                results_per_query: parseInt(document.getElementById('resultsPerQuery').value || '5', 10),
-            };
-        }
-
-        function currentBibliometricConfig() {
-            return {
-                use_bibliometrics: document.getElementById('useBibliometrics').checked,
-                author_impact_weight: parseFloat(document.getElementById('authorImpactWeight').value || '0.4'),
-                citation_impact_weight: parseFloat(document.getElementById('citationImpactWeight').value || '0.4'),
-                venue_impact_weight: parseFloat(document.getElementById('venueImpactWeight').value || '0.2'),
-            };
-        }
-
-        function currentModelOverrides() {
-            const overrides = {};
-            stageConfig.forEach(([taskName, selectId]) => {
-                const value = document.getElementById(selectId).value;
-                if (value) overrides[taskName] = value;
-            });
-            return overrides;
-        }
-
-        function currentCandidatePayload() {
-            return [{
-                provider_id: document.getElementById('providerId').value,
-                model_overrides: currentModelOverrides(),
-            }];
-        }
-
-        function renderClaimPlanTable(data) {
-            const rows = data.unique_claims.map(claim => `
-                <tr>
-                    <td>${escapeHtml(claim.text)}</td>
-                    <td>${claim.duplicate_input_count}</td>
-                    <td>${claim.existing_claim ? 'Yes' : 'No'}</td>
-                    <td>${escapeHtml(claim.submission_action === 'view_existing' ? 'View Existing' : 'Create Run')}</td>
-                </tr>
-            `).join('');
-            return `
-                <table>
-                    <thead>
-                        <tr><th>Claim</th><th>Inputs</th><th>Existing</th><th>Action</th></tr>
-                    </thead>
-                    <tbody>${rows}</tbody>
-                </table>
-            `;
-        }
-
-        function renderCostTable(data) {
-            return `
-                <table>
-                    <thead>
-                        <tr><th>Candidate</th><th>Runs</th><th>Expected</th><th>Upper Bound</th><th>Pricing</th></tr>
-                    </thead>
-                    <tbody>
-                        ${data.candidates.map(candidate => `
-                            <tr>
-                                <td>${escapeHtml(candidate.label)}</td>
-                                <td>${candidate.run_count}</td>
-                                <td>$${candidate.expected_cost_usd.toFixed(4)}</td>
-                                <td>$${candidate.upper_bound_cost_usd.toFixed(4)}</td>
-                                <td>${candidate.pricing_complete ? 'Complete' : `Missing: ${escapeHtml(candidate.missing_pricing_models.join(', '))}`}</td>
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
-            `;
-        }
-
-        async function runPreflight() {
-            if (!stagedClaims.length) {
-                alert('Add at least one claim first.');
-                return;
-            }
-            const response = await fetch('/api/v1/claims/preflight', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    claims: stagedClaims,
-                    candidates: currentCandidatePayload(),
-                    search_config: currentSearchConfig(),
-                    duplicate_strategy: document.getElementById('duplicateStrategy').value,
-                }),
-            });
-            const data = await response.json();
-            if (!response.ok) {
-                throw new Error(data.error || 'Preflight failed.');
-            }
-            preflightPayload = data;
-            submitBtn.disabled = !data.totals.pricing_complete;
-
-            const warnings = [];
-            if (data.totals.duplicate_input_count) {
-                warnings.push(`<div class="status-card warning-card"><strong>Duplicate inputs will be collapsed.</strong> ${data.totals.duplicate_input_count} repeated input(s) reduce to ${data.totals.unique_claim_count} unique claim(s).</div>`);
-            }
-            if (data.totals.reused_existing_count) {
-                warnings.push(`<div class="status-card info-card"><strong>Existing claims will be reused.</strong> ${data.totals.reused_existing_count} unique claim(s) will open existing history instead of queueing a new run.</div>`);
-            }
-            if (!data.totals.pricing_complete) {
-                warnings.push(`<div class="status-card error-card"><strong>Pricing metadata missing.</strong> Add costs for: ${escapeHtml(data.totals.missing_pricing_models.join(', '))} before submitting.</div>`);
-            }
-
-            preflightPanel.classList.remove('hidden');
-            preflightPanel.innerHTML = `
-                <h2>Preflight</h2>
-                ${warnings.join('')}
-                <p><strong>Raw claims:</strong> ${data.totals.raw_claim_count}</p>
-                <p><strong>Unique claims:</strong> ${data.totals.unique_claim_count}</p>
-                <p><strong>Runs to create:</strong> ${data.totals.run_count}</p>
-                <p><strong>Batch tags:</strong> ${escapeHtml(parseBatchTags().join(', ') || 'none')}</p>
-                ${renderClaimPlanTable(data)}
-                ${renderCostTable(data)}
-                <p><strong>Total expected:</strong> $${data.totals.expected_cost_usd.toFixed(4)}</p>
-                <p><strong>Total upper bound:</strong> $${data.totals.upper_bound_cost_usd.toFixed(4)}</p>
-            `;
-        }
-
-        function openCostModal() {
-            if (!preflightPayload) {
-                alert('Run cost estimation first.');
-                return;
-            }
-            if (!preflightPayload.totals.pricing_complete) {
-                alert('Pricing metadata is incomplete for one or more models.');
-                return;
-            }
-            costModalBody.innerHTML = `
-                <p><strong>Unique claims:</strong> ${preflightPayload.totals.unique_claim_count}</p>
-                <p><strong>Runs to create:</strong> ${preflightPayload.totals.run_count}</p>
-                <p><strong>Expected total:</strong> $${preflightPayload.totals.expected_cost_usd.toFixed(4)}</p>
-                <p><strong>Upper bound:</strong> $${preflightPayload.totals.upper_bound_cost_usd.toFixed(4)}</p>
-            `;
-            confirmCostCheckbox.checked = false;
-            confirmCostBtn.disabled = true;
-            costModal.classList.remove('hidden');
-        }
-
-        async function submitRuns() {
-            const response = await fetch('/api/v1/runs', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    claims: stagedClaims,
-                    candidates: currentCandidatePayload(),
-                    search_config: currentSearchConfig(),
-                    bibliometric_config: currentBibliometricConfig(),
-                    batch_tags: parseBatchTags(),
-                    duplicate_strategy: document.getElementById('duplicateStrategy').value,
-                    cost_confirmation: {
-                        accepted: true,
-                        expected_cost_usd: preflightPayload.totals.expected_cost_usd,
-                        upper_bound_cost_usd: preflightPayload.totals.upper_bound_cost_usd,
-                    },
-                }),
-            });
-            const data = await response.json();
-            if (!response.ok) {
-                throw new Error(data.error || 'Submission failed.');
-            }
-            if (data.created_runs && data.created_runs.length) {
-                window.location.href = `/batch_results?batch_id=${encodeURIComponent(data.batch_id)}`;
-                return;
-            }
-            if (data.reused_existing && data.reused_existing.length === 1) {
-                window.location.href = `/claims/${encodeURIComponent(data.reused_existing[0].claim_key)}`;
-                return;
-            }
-            window.location.href = '/browser';
-        }
-
-        document.getElementById('addClaimBtn').addEventListener('click', () => addClaim(document.getElementById('newClaimText').value));
-        document.getElementById('claimFile').addEventListener('change', async (event) => {
-            const file = event.target.files[0];
-            if (!file) return;
-            const text = await file.text();
-            text.split('\n').map(line => line.trim()).filter(Boolean).forEach(addClaim);
-        });
-        stagedClaimsEl.addEventListener('click', (event) => {
-            const button = event.target.closest('button[data-index]');
-            if (!button) return;
-            stagedClaims.splice(parseInt(button.dataset.index, 10), 1);
-            invalidatePreflight();
-            renderStagedClaims();
-        });
-        document.getElementById('preflightBtn').addEventListener('click', () => runPreflight().catch(error => alert(error.message)));
-        document.getElementById('submitBtn').addEventListener('click', openCostModal);
-        document.getElementById('cancelCostBtn').addEventListener('click', () => costModal.classList.add('hidden'));
-        confirmCostCheckbox.addEventListener('change', () => {
-            confirmCostBtn.disabled = !confirmCostCheckbox.checked;
-        });
-        confirmCostBtn.addEventListener('click', () => submitRuns().catch(error => alert(error.message)));
-
-        [
-            'providerId',
-            'duplicateStrategy',
-            'batchTags',
-            'numQueries',
-            'resultsPerQuery',
-            'modelQueryGeneration',
-            'modelPaperAnalysis',
-            'modelVenueScoring',
-            'modelFinalReport',
-            'useBibliometrics',
-            'authorImpactWeight',
-            'citationImpactWeight',
-            'venueImpactWeight',
-        ].forEach(id => {
-            document.getElementById(id).addEventListener('change', invalidatePreflight);
-        });
-        document.getElementById('providerId').addEventListener('change', () => {
-            refreshModelSelectors();
-            invalidatePreflight();
-        });
-
-        renderProviderOptions();
-        renderStagedClaims();
+        window.homePageConfig = {
+            providers: {{ providers|tojson }},
+            mockClaimSets: {{ mock_claim_sets|tojson }},
+        };
     </script>
-</body>
-</html>
+{% endblock %}
+
+{% block scripts %}
+    <script src="{{ url_for('static', filename='home.js') }}"></script>
+{% endblock %}
