@@ -1,129 +1,121 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Claim Report</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+{% extends "base.html" %}
+
+{% block head_extra %}
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-</head>
-<body>
-    <div class="container">
-        <h1>Claim Report <a href="/guidebook#results" class="help-link" title="Guidebook: Claim Report">?</a></h1>
-        <div id="issuesBanner"></div>
-        <div id="reportContent"></div>
-        <div id="usageStats"></div>
-        <div id="usageByStage"></div>
-        <div id="promptProvenance"></div>
-        <div id="debugTrace"></div>
-        <div id="timingStats">
-            <h3>Processing Time Breakdown:</h3>
-            <div class="timing-breakdown" id="timingBreakdown">
-                <!-- Timing data will be populated by JavaScript -->
+{% endblock %}
+
+{% block content %}
+    <section class="panel">
+        <div class="panel-header">
+            <div>
+                <h2 class="panel-title">Report Actions</h2>
+                <p class="panel-subtitle">Download report artifacts, inspect traces, or delete this claim run.</p>
             </div>
+            <a href="{{ url_for('api.guidebook_page') }}#results" class="help-link" title="Guidebook: Claim Report">?</a>
         </div>
-        <button id="downloadReport">Download Report</button>
-        <button id="viewTracePage">View Full Trace</button>
-        <button id="downloadTrace">Download Trace</button>
-        <button id="downloadIssues">Download Issues</button>
-        <button id="downloadCitations">Download Citations</button>
-        <button id="deleteClaimButton">Delete Claim</button>
-    </div>
-    <style>
-        .hidden {
-            display: none;
-        }
-        .help-link {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 26px;
-            height: 26px;
-            border-radius: 50%;
-            background: rgba(15, 118, 110, 0.1);
-            color: #0f766e;
-            font-size: 0.82rem;
-            font-weight: 700;
-            text-decoration: none;
-            vertical-align: middle;
-        }
-        .help-link:hover {
-            background: #0f766e;
-            color: #fff;
-        }
-        .toggle-button {
-            margin: 10px 0;
-            padding: 8px 16px;
-            background-color: #007bff;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        .toggle-button:hover {
-            background-color: #0056b3;
-        }
-        .final-reasoning-section {
-            margin: 20px 0;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-        }
-        .issues-banner {
-            margin: 12px 0;
-            padding: 10px;
-            border-radius: 4px;
-        }
-        .issues-banner.error {
-            background: #f8d7da;
-            border: 1px solid #f1aeb5;
-        }
-        .issues-banner.warn {
-            background: #fff3cd;
-            border: 1px solid #ffe69c;
-        }
-        .trace-box {
-            margin: 14px 0;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            background: #fafafa;
-        }
-    </style>
-    <div id="bibliometricConfigContainer" class="result-section" style="display: none;">
-        <h2>Bibliometric Configuration</h2>
-        <div id="bibliometricConfig"></div>
-    </div>
+        <div id="reportStatus" class="status-card info-card hidden"></div>
+        <div class="inline-actions">
+            <button id="downloadReport" type="button" class="primary-button">Download Report</button>
+            <button id="viewTracePage" type="button" class="secondary-button">View Full Trace</button>
+            <button id="downloadTrace" type="button" class="secondary-button">Download Trace</button>
+            <button id="downloadIssues" type="button" class="secondary-button">Download Issues</button>
+            <button id="downloadCitations" type="button" class="secondary-button">Download Citations</button>
+            <button id="deleteClaimButton" type="button" class="danger-button">Delete Claim</button>
+        </div>
+    </section>
+
+    <section id="issuesBanner"></section>
+    <section id="reportContent" class="panel"></section>
+    <section id="usageStats" class="panel hidden"></section>
+    <section id="usageByStage" class="panel hidden"></section>
+    <section id="promptProvenance" class="panel hidden"></section>
+    <section id="debugTrace" class="panel hidden"></section>
+
     <script>
+        window.resultsPageConfig = {
+            claimId: {{ claim_id|tojson }},
+            batchId: {{ batch_id|tojson }},
+        };
+    </script>
+{% endblock %}
+
+{% block scripts %}
+    <script>
+        const { escapeHtml, fetchJson, setStatus } = window.ValsciUI;
         const urlParams = new URLSearchParams(window.location.search);
-        const claimId = urlParams.get('claim_id');
-        const batchId = urlParams.get('batch_id');
+        const claimId = urlParams.get('claim_id') || window.resultsPageConfig?.claimId;
+        const batchId = urlParams.get('batch_id') || window.resultsPageConfig?.batchId;
         const reportContent = document.getElementById('reportContent');
+        const reportStatus = document.getElementById('reportStatus');
         const issuesBanner = document.getElementById('issuesBanner');
+        const usageStatsContainer = document.getElementById('usageStats');
         const usageByStageContainer = document.getElementById('usageByStage');
         const promptProvenanceContainer = document.getElementById('promptProvenance');
         const debugTraceContainer = document.getElementById('debugTrace');
 
-        function escapeHtml(value) {
-            return String(value ?? '')
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#039;');
+        const allowedMarkdownTags = new Set([
+            'A', 'B', 'BLOCKQUOTE', 'BR', 'CODE', 'DIV', 'EM', 'H1', 'H2', 'H3', 'H4', 'H5',
+            'H6', 'HR', 'I', 'LI', 'OL', 'P', 'PRE', 'S', 'SPAN', 'STRONG', 'TABLE', 'TBODY',
+            'TD', 'TH', 'THEAD', 'TR', 'UL',
+        ]);
+
+        function sanitizeHtml(html) {
+            const template = document.createElement('template');
+            template.innerHTML = html;
+            const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_ELEMENT);
+            const remove = [];
+            while (walker.nextNode()) {
+                const node = walker.currentNode;
+                if (!allowedMarkdownTags.has(node.tagName)) {
+                    remove.push(node);
+                    continue;
+                }
+                Array.from(node.attributes).forEach((attr) => {
+                    const name = attr.name.toLowerCase();
+                    if (node.tagName === 'A' && name === 'href') {
+                        const safe = safeUrl(attr.value);
+                        if (safe) {
+                            node.setAttribute('href', safe);
+                            node.setAttribute('target', '_blank');
+                            node.setAttribute('rel', 'noopener noreferrer');
+                        } else {
+                            node.removeAttribute('href');
+                        }
+                        return;
+                    }
+                    node.removeAttribute(attr.name);
+                });
+            }
+            remove.forEach((node) => node.replaceWith(document.createTextNode(node.textContent || '')));
+            return template.innerHTML;
         }
 
-        function buildTraceViewerUrl(focusTraceId) {
-            if (!claimId || !batchId) {
-                return '#';
+        function safeMarkdown(value) {
+            const text = String(value ?? '');
+            if (!text) return '';
+            if (!window.marked?.parse) {
+                return escapeHtml(text).replace(/\n/g, '<br>');
             }
-            const base = `/claims/${encodeURIComponent(batchId)}/${encodeURIComponent(claimId)}/trace`;
-            if (!focusTraceId) {
-                return base;
+            return sanitizeHtml(marked.parse(text, { breaks: true }));
+        }
+
+        function safeUrl(value) {
+            if (!String(value || '').trim()) return null;
+            try {
+                const url = new URL(String(value || ''), window.location.origin);
+                if (['http:', 'https:', 'mailto:'].includes(url.protocol)) {
+                    return url.href;
+                }
+            } catch (error) {
+                return null;
             }
-            const params = new URLSearchParams();
-            params.set('focus_trace_id', String(focusTraceId));
-            return `${base}?${params.toString()}`;
+            return null;
+        }
+
+        function safeLink(url, label, className = '') {
+            const href = safeUrl(url);
+            if (!href) return '';
+            return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" class="${escapeHtml(className)}">${escapeHtml(label)}</a>`;
         }
 
         function getRatingText(rating) {
@@ -137,21 +129,26 @@
             return 'No Rating';
         }
 
-        function getRatingColor(rating) {
-            if (rating === null || rating === undefined) return '#6c757d'; // gray
-            if (rating === 0) return '#6c757d'; // gray
-            if (rating === 1) return '#dc3545'; // red
-            if (rating === 2) return '#e17055'; // orange-red
-            if (rating === 3) return '#6c757d'; // gray
-            if (rating === 4) return '#74b9ff'; // light blue
-            if (rating === 5) return '#00b894'; // green-blue
-            return '#6c757d'; // gray
+        function getRatingTone(rating) {
+            if (rating === 1 || rating === 2) return 'error-card';
+            if (rating === 4 || rating === 5) return 'success-card';
+            if (rating === 3) return 'warning-card';
+            return 'info-card';
         }
 
         function formatDateLabel(value) {
             if (!value) return 'Unknown';
             const date = new Date(value);
             return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+        }
+
+        function buildTraceViewerUrl(focusTraceId) {
+            if (!claimId || !batchId) return '#';
+            const base = `/claims/${encodeURIComponent(batchId)}/${encodeURIComponent(claimId)}/trace`;
+            if (!focusTraceId) return base;
+            const params = new URLSearchParams();
+            params.set('focus_trace_id', String(focusTraceId));
+            return `${base}?${params.toString()}`;
         }
 
         function normalizePromptEntry(entry = {}) {
@@ -173,77 +170,76 @@
                 issuesBanner.innerHTML = '';
                 return;
             }
-
-            const errorCount = issues.filter(i => i.severity === 'ERROR').length;
-            const warnCount = issues.filter(i => i.severity === 'WARN').length;
-            const cls = errorCount > 0 ? 'error' : 'warn';
+            const errorCount = issues.filter(issue => issue.severity === 'ERROR').length;
+            const warnCount = issues.filter(issue => issue.severity === 'WARN').length;
+            const tone = errorCount > 0 ? 'error-card' : 'warning-card';
             const title = errorCount > 0
                 ? `${errorCount} error(s) and ${warnCount} warning(s) surfaced during processing`
                 : `${warnCount} warning(s) surfaced during processing`;
-
-            const issueItems = issues.map(issue => {
-                const traceId = issue?.details?.trace_id ? String(issue.details.trace_id) : '';
-                const viewSectionLink = traceId
-                    ? ` <a href="${buildTraceViewerUrl(traceId)}">View trace section</a>`
-                    : '';
-                return `<li>[${escapeHtml(issue.severity)}] ${escapeHtml(issue.stage)}: ${escapeHtml(issue.message)}${viewSectionLink}</li>`;
-            }).join('');
-
             issuesBanner.innerHTML = `
-                <div class="issues-banner ${cls}">
-                    <strong>${title}</strong>
+                <div class="status-card ${tone}">
+                    <strong>${escapeHtml(title)}</strong>
                     <ul>
-                        ${issueItems}
+                        ${issues.map((issue) => {
+                            const traceId = issue?.details?.trace_id ? String(issue.details.trace_id) : '';
+                            const traceLink = traceId ? ` <a href="${buildTraceViewerUrl(traceId)}">View trace section</a>` : '';
+                            return `<li>[${escapeHtml(issue.severity)}] ${escapeHtml(issue.stage)}: ${escapeHtml(issue.message)}${traceLink}</li>`;
+                        }).join('')}
                     </ul>
                 </div>
             `;
         }
 
         function renderDebugTrace(debugTrace) {
-            if (!debugTrace || !debugTrace.summary) {
+            if (!debugTrace?.summary) {
+                debugTraceContainer.classList.add('hidden');
                 debugTraceContainer.innerHTML = '';
                 return;
             }
-
             const summary = debugTrace.summary;
+            debugTraceContainer.classList.remove('hidden');
             debugTraceContainer.innerHTML = `
-                <div class="trace-box">
-                    <h3>Debug & Trace</h3>
-                    <p>LLM Calls: ${summary.llm_calls || 0}</p>
-                    <p>Models Used: ${(summary.models_used || []).join(', ')}</p>
-                    <p>Total Input Tokens: ${summary.total_input_tokens || 0}</p>
-                    <p>Total Output Tokens: ${summary.total_output_tokens || 0}</p>
-                    <p>Total Cost: $${(summary.total_cost_usd || 0).toFixed(4)}</p>
-                    <p>Retries: ${summary.retries || 0}</p>
-                    <p>Context Overflow Prevented: ${summary.context_overflow_prevented || 0}</p>
-                    <p>Intentional Truncations: ${summary.intentional_truncations || 0}</p>
-                    <p>Trace File: ${debugTrace.trace_file || ''}</p>
-                    <p><a href="${buildTraceViewerUrl()}">Open Full Trace Viewer</a></p>
+                <div class="panel-header">
+                    <div>
+                        <h2 class="panel-title">Debug and Trace</h2>
+                        <p class="panel-subtitle">Routing, token, retry, and trace-file details.</p>
+                    </div>
+                </div>
+                <div class="summary-strip">
+                    <div class="summary-cell"><span class="label">LLM Calls</span><span class="value">${Number(summary.llm_calls || 0)}</span></div>
+                    <div class="summary-cell"><span class="label">Input Tokens</span><span class="value">${Number(summary.total_input_tokens || 0).toLocaleString()}</span></div>
+                    <div class="summary-cell"><span class="label">Output Tokens</span><span class="value">${Number(summary.total_output_tokens || 0).toLocaleString()}</span></div>
+                    <div class="summary-cell"><span class="label">Cost</span><span class="value">$${Number(summary.total_cost_usd || 0).toFixed(4)}</span></div>
+                </div>
+                <div class="record-meta" style="margin-top:14px">
+                    <span>Models: ${escapeHtml((summary.models_used || []).join(', ') || 'Unknown')}</span>
+                    <span>Retries: ${Number(summary.retries || 0)}</span>
+                    <span>Context overflow prevented: ${Number(summary.context_overflow_prevented || 0)}</span>
+                    <span>Intentional truncations: ${Number(summary.intentional_truncations || 0)}</span>
+                    <span>Trace file: ${escapeHtml(debugTrace.trace_file || '')}</span>
+                </div>
+                <div class="inline-actions" style="margin-top:14px">
+                    <a href="${buildTraceViewerUrl()}" class="secondary-button small-button">Open Full Trace Viewer</a>
                 </div>
             `;
         }
 
         function renderUsageByStage(usageByStage) {
             if (!usageByStage || typeof usageByStage !== 'object' || Object.keys(usageByStage).length === 0) {
+                usageByStageContainer.classList.add('hidden');
                 usageByStageContainer.innerHTML = '';
                 return;
             }
-
-            const rows = Object.entries(usageByStage).map(([stage, stats]) => `
-                <tr>
-                    <td>${stage}</td>
-                    <td>${stats.input_tokens || 0}</td>
-                    <td>${stats.output_tokens || 0}</td>
-                    <td>${stats.total_tokens || 0}</td>
-                    <td>$${(stats.cost_usd || 0).toFixed(4)}</td>
-                    <td>${(stats.is_estimated || false) ? 'Yes' : 'No'}</td>
-                </tr>
-            `).join('');
-
+            usageByStageContainer.classList.remove('hidden');
             usageByStageContainer.innerHTML = `
-                <div class="trace-box">
-                    <h3>Usage By Stage</h3>
-                    <table>
+                <div class="panel-header">
+                    <div>
+                        <h2 class="panel-title">Usage By Stage</h2>
+                        <p class="panel-subtitle">Token and cost accounting for each pipeline stage.</p>
+                    </div>
+                </div>
+                <div class="comparison-scroll">
+                    <table class="data-table">
                         <thead>
                             <tr>
                                 <th>Stage</th>
@@ -254,7 +250,18 @@
                                 <th>Estimated</th>
                             </tr>
                         </thead>
-                        <tbody>${rows}</tbody>
+                        <tbody>
+                            ${Object.entries(usageByStage).map(([stage, stats]) => `
+                                <tr>
+                                    <td>${escapeHtml(stage.replace(/_/g, ' '))}</td>
+                                    <td>${Number(stats.input_tokens || 0).toLocaleString()}</td>
+                                    <td>${Number(stats.output_tokens || 0).toLocaleString()}</td>
+                                    <td>${Number(stats.total_tokens || 0).toLocaleString()}</td>
+                                    <td>$${Number(stats.cost_usd || 0).toFixed(4)}</td>
+                                    <td>${stats.is_estimated ? 'Yes' : 'No'}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
                     </table>
                 </div>
             `;
@@ -262,342 +269,221 @@
 
         function renderPromptProvenance(promptProvenance) {
             if (!promptProvenance || typeof promptProvenance !== 'object' || Object.keys(promptProvenance).length === 0) {
+                promptProvenanceContainer.classList.add('hidden');
                 promptProvenanceContainer.innerHTML = '';
                 return;
             }
-
-            const rows = Object.entries(promptProvenance).map(([stage, rawEntry]) => {
-                const entry = normalizePromptEntry(rawEntry);
-                return `
-                    <div class="trace-box">
-                        <h4>${escapeHtml(stage.replace(/_/g, ' '))}</h4>
-                        <p><strong>System prompt:</strong> ${escapeHtml(entry.systemFile || 'Unknown')}</p>
-                        <p><strong>User prompt:</strong> ${escapeHtml(entry.userFile || 'Unknown')}</p>
-                        <p><strong>Prompt set hash:</strong> ${escapeHtml(entry.promptSetHash || 'Pending')}</p>
-                        <p><strong>Rendered hash:</strong> ${escapeHtml(entry.renderedPromptHash || 'Pending')}</p>
-                        <p><strong>System hash:</strong> ${escapeHtml(entry.systemHash || 'Pending')}</p>
-                        <p><strong>User hash:</strong> ${escapeHtml(entry.userHash || 'Pending')}</p>
-                        <p><strong>Modified:</strong> ${escapeHtml(formatDateLabel(entry.modifiedAt))}</p>
-                    </div>
-                `;
-            }).join('');
-
+            promptProvenanceContainer.classList.remove('hidden');
             promptProvenanceContainer.innerHTML = `
-                <details class="trace-box">
+                <details open>
                     <summary><strong>Prompt Provenance</strong></summary>
-                    ${rows}
+                    <div class="panel-divider"></div>
+                    <div class="record-list">
+                        ${Object.entries(promptProvenance).map(([stage, rawEntry]) => {
+                            const entry = normalizePromptEntry(rawEntry);
+                            return `
+                                <article class="record-card">
+                                    <div class="panel-header">
+                                        <div>
+                                            <h3 class="panel-title">${escapeHtml(stage.replace(/_/g, ' '))}</h3>
+                                            <p class="panel-subtitle">${escapeHtml(entry.systemFile || 'No system prompt file recorded')}</p>
+                                        </div>
+                                        <span class="badge neutral-badge">${escapeHtml((entry.promptSetHash || 'Pending').slice(0, 12))}</span>
+                                    </div>
+                                    <div class="record-meta">
+                                        <span>User prompt: ${escapeHtml(entry.userFile || 'Unknown')}</span>
+                                        <span>Rendered hash: ${escapeHtml((entry.renderedPromptHash || 'Pending').slice(0, 12))}</span>
+                                        <span>Modified: ${escapeHtml(formatDateLabel(entry.modifiedAt))}</span>
+                                    </div>
+                                    <div class="pill-row">
+                                        <span class="pill">System ${escapeHtml((entry.systemHash || 'Pending').slice(0, 12))}</span>
+                                        <span class="pill">User ${escapeHtml((entry.userHash || 'Pending').slice(0, 12))}</span>
+                                    </div>
+                                </article>
+                            `;
+                        }).join('')}
+                    </div>
                 </details>
             `;
         }
 
-        function displayReport(data) {
-            const ratingText = getRatingText(data.report?.claimRating);
-            const ratingColor = getRatingColor(data.report?.claimRating);
-            renderIssues(data.report?.issues || []);
-            renderDebugTrace(data.report?.debug_trace || null);
-            renderPromptProvenance(data.prompt_provenance || data.run_summary?.prompt_provenance || {});
-            
-            marked.setOptions({
-                sanitize: true,
-                breaks: true
-            });
+        function paperAuthors(authors, includeHIndex = true) {
+            if (!Array.isArray(authors) || !authors.length) return 'Authors not available';
+            return authors.map((author) => {
+                const name = typeof author === 'string' ? author : author.name;
+                if (!includeHIndex || typeof author === 'string') return name || 'Unknown author';
+                return `${name || 'Unknown author'} (H-index: ${Number(author.hIndex || 0)})`;
+            }).join(', ');
+        }
 
-            // Helper function to safely parse markdown
-            function parseMarkdown(content) {
-                if (content === null || content === undefined) return '';
-                return marked.parse(String(content));
+        function renderMarkdownList(values, emptyLabel) {
+            if (!Array.isArray(values) || !values.length) {
+                return `<p class="helper-text">${escapeHtml(emptyLabel)}</p>`;
             }
-            
-            const explanation = data.report?.explanation ? parseMarkdown(data.report.explanation) : 'No explanation available';
-            
-            let html = `
-                <h2>Claim: ${data.text}</h2>
-                <div class="claim-rating" style="background-color: ${ratingColor}">
-                    <h3>Overall Assessment:</h3>
-                    <div class="rating-value">${data.report?.claimRating ?? 'N/A'}</div>
-                    <div class="rating-text">${ratingText}</div>
-                </div>
-                <div class="markdown-content">${explanation}</div>
+            return `<ul class="content-list">${values.map(item => `<li>${safeMarkdown(item?.citation || item)}</li>`).join('')}</ul>`;
+        }
 
-                <!-- Add Final Reasoning section -->
-                ${data.report?.finalReasoning ? `
-                    <div class="final-reasoning-section">
-                        <button id="toggleFinalReasoning" class="toggle-button">
-                            Show Final Reasoning
-                        </button>
-                        <div id="finalReasoningContent" class="hidden markdown-content">
-                            ${parseMarkdown(data.report.finalReasoning)}
+        function renderPaperCard(paper, options = {}) {
+            const title = paper?.title || 'Untitled paper';
+            const link = safeLink(paper?.link, 'Read Paper', 'secondary-button small-button');
+            return `
+                <article class="record-card">
+                    <div class="stack">
+                        <h4 class="panel-title">${escapeHtml(title)}</h4>
+                        <div class="record-meta">
+                            <span>${escapeHtml(paperAuthors(paper?.authors, options.includeHIndex !== false))}</span>
+                            ${paper?.content_type ? `<span>${escapeHtml(paper.content_type)}</span>` : ''}
+                        </div>
+                        ${paper?.relevance ? `<div><strong>Relevance</strong><div class="helper-text">${safeMarkdown(paper.relevance)}</div></div>` : ''}
+                        ${paper?.explanation ? `<div><strong>Why Not Relevant</strong><div class="helper-text">${safeMarkdown(paper.explanation)}</div></div>` : ''}
+                        ${paper?.bibliometric_impact !== undefined ? `<p class="helper-text"><strong>Bibliometric Impact:</strong> ${escapeHtml(paper.bibliometric_impact)}</p>` : ''}
+                        ${paper?.reason ? `<p class="helper-text"><strong>Reason:</strong> ${escapeHtml(paper.reason)}</p>` : ''}
+                        ${paper?.excerpts !== undefined ? `<div><strong>Excerpts</strong>${renderMarkdownList(Array.isArray(paper.excerpts) ? paper.excerpts : [paper.excerpts], 'No excerpts available')}</div>` : ''}
+                        ${paper?.explanations !== undefined ? `<div><strong>Explanations</strong>${renderMarkdownList(Array.isArray(paper.explanations) ? paper.explanations : [paper.explanations], 'No explanations available')}</div>` : ''}
+                        ${paper?.citations !== undefined ? `<div><strong>Citations</strong>${renderMarkdownList(paper.citations, 'No citations available')}</div>` : ''}
+                        ${link ? `<div class="inline-actions">${link}</div>` : ''}
+                    </div>
+                </article>
+            `;
+        }
+
+        function renderPaperSection(title, papers, emptyLabel, options = {}) {
+            return `
+                <section class="stack">
+                    <h3 class="panel-title">${escapeHtml(title)}</h3>
+                    <div class="record-list">
+                        ${Array.isArray(papers) && papers.length
+                            ? papers.map((paper) => renderPaperCard(paper, options)).join('')
+                            : `<div class="empty-state"><strong>${escapeHtml(emptyLabel)}</strong></div>`}
+                    </div>
+                </section>
+            `;
+        }
+
+        function displayReport(data) {
+            const report = data.report || {};
+            const rating = report.claimRating;
+            renderIssues(report.issues || []);
+            renderDebugTrace(report.debug_trace || null);
+            renderPromptProvenance(data.prompt_provenance || data.run_summary?.prompt_provenance || {});
+            renderUsageByStage(report.usage_by_stage || {});
+
+            const usage = report.usage_summary || report.usage_stats;
+            if (usage) {
+                usageStatsContainer.classList.remove('hidden');
+                usageStatsContainer.innerHTML = `
+                    <div class="panel-header">
+                        <div>
+                            <h2 class="panel-title">LLM Usage</h2>
+                            <p class="panel-subtitle">Aggregate token and cost totals for this report.</p>
                         </div>
                     </div>
-                ` : ''}
+                    <div class="summary-strip">
+                        <div class="summary-cell"><span class="label">Input</span><span class="value">${Number(usage.input_tokens || 0).toLocaleString()}</span></div>
+                        <div class="summary-cell"><span class="label">Output</span><span class="value">${Number(usage.output_tokens || 0).toLocaleString()}</span></div>
+                        <div class="summary-cell"><span class="label">Total</span><span class="value">${Number(usage.total_tokens || 0).toLocaleString()}</span></div>
+                        <div class="summary-cell"><span class="label">Cost</span><span class="value">$${Number(usage.cost_usd || usage.total_cost || 0).toFixed(4)}</span></div>
+                    </div>
+                    <p class="helper-text" style="margin-top:14px">Token counts estimated: ${usage.is_estimated ? 'Yes' : 'No'}</p>
+                `;
+            } else {
+                usageStatsContainer.classList.add('hidden');
+            }
 
-                <p><strong>Status:</strong> ${data.status}</p>
-                <h3>Relevant Papers:</h3>
-                <div class="papers-section">
-                    ${data.report?.relevantPapers && Array.isArray(data.report.relevantPapers) ? 
-                        data.report.relevantPapers.map(paper => `
-                            <div class="mechanism-section">
-                                <h4>${parseMarkdown(paper.title)}</h4>
-                                <div class="paper-details">
-                                    <p><strong>Authors:</strong> ${paper.authors && Array.isArray(paper.authors) 
-                                        ? paper.authors.map(author => `${author.name} (H-index: ${author.hIndex || 0})`).join(', ')
-                                        : 'Authors not available'}</p>
-                                    <p><strong>Relevance:</strong> ${parseMarkdown(paper.relevance)}</p>
-                                    <p data-field="weight-score"><strong>Bibliometric Impact:</strong> ${paper.bibliometric_impact}</p>
-                                    
-                                    <div class="paper-content">
-                                        <strong>Excerpts:</strong>
-                                        ${Array.isArray(paper.excerpts) 
-                                            ? `<ul class="content-list">${paper.excerpts.map(excerpt => `<li>${parseMarkdown(excerpt)}</li>`).join('')}</ul>`
-                                            : `<p>${parseMarkdown(paper.excerpts || 'No excerpts available')}</p>`
-                                        }
-                                        
-                                        <strong>Explanations:</strong>
-                                        ${Array.isArray(paper.explanations) 
-                                            ? `<ul class="content-list">${paper.explanations.map(explanation => `<li>${parseMarkdown(explanation)}</li>`).join('')}</ul>`
-                                            : `<p>${parseMarkdown(paper.explanations || 'No explanations available')}</p>`
-                                        }
-                                        
-                                        <strong>Citations:</strong>
-                                        <ul class="content-list">
-                                            ${Array.isArray(paper.citations) 
-                                                ? paper.citations.map(citation => `<li>${parseMarkdown(citation.citation)}</li>`).join('')
-                                                : '<li>No citations available</li>'
-                                            }
-                                        </ul>
-                                    </div>
-                                    
-                                    <p class="paper-type"><strong>Content Type:</strong> ${paper.content_type || 'Not specified'}</p>
-                                    <a href="${paper.link}" target="_blank" class="paper-link">Read Paper</a>
-                                </div>
-                            </div>
-                        `).join('')
-                        : '<div class="error-message">No relevant papers available</div>'
-                    }
-                </div>
-
-                <h3>Other Reviewed Papers:</h3>
-                <div class="papers-section">
-                    ${data.report.nonRelevantPapers && Array.isArray(data.report.nonRelevantPapers) && data.report.nonRelevantPapers.length > 0 ? 
-                        data.report.nonRelevantPapers.map(paper => `
-                            <div class="mechanism-section">
-                                <h4>${parseMarkdown(paper.title)}</h4>
-                                <div class="paper-details">
-                                    <p><strong>Authors:</strong> ${paper.authors && Array.isArray(paper.authors)
-                                        ? paper.authors.map(author => `${author.name} (H-index: ${author.hIndex || 0})`).join(', ')
-                                        : 'Authors not available'}</p>
-                                    <p><strong>Why Not Relevant:</strong> ${parseMarkdown(paper.explanation || 'No explanation provided')}</p>
-                                    <p class="paper-type"><strong>Content Type:</strong> ${paper.content_type || 'Not specified'}</p>
-                                    <a href="${paper.link}" target="_blank" class="paper-link">Read Paper</a>
-                                </div>
-                            </div>
-                        `).join('')
-                        : '<div class="error-message">No other papers were reviewed.</div>'
-                    }
-                </div>
-
-                <h3>Inaccessible Papers:</h3>
-                <div class="inaccessible-papers">
-                    ${data.report.inaccessiblePapers && Array.isArray(data.report.inaccessiblePapers) && data.report.inaccessiblePapers.length > 0 ? `
-                        <ul>
-                            ${data.report.inaccessiblePapers.map(paper => {
-                                const authorText = paper.authors && Array.isArray(paper.authors)
-                                    ? paper.authors.map(author => author.name).join(', ')
-                                    : 'Authors not available';
-                                
-                                return `
-                                    <li>
-                                        <h4>${paper.title}</h4>
-                                        <p><strong>Authors:</strong> ${authorText}</p>
-                                        <p><strong>Reason:</strong> ${paper.reason || 'No reason provided'}</p>
-                                        <p><a href="${paper.link}" target="_blank">Read Paper</a></p>
-                                    </li>
-                                `;
-                            }).join('')}
-                        </ul>
-                    ` : '<p>No inaccessible papers were found.</p>'}
-                </div>
-
-                <h3>Search Queries:</h3>
-                <ul>${Array.isArray(data.report.searchQueries) 
-                    ? data.report.searchQueries.map(query => `<li>${query}</li>`).join('')
-                    : '<li>No search queries available</li>'
-                }</ul>
-
-                <h3>Processing Time Breakdown:</h3>
-                <div class="timing-breakdown" id="timingBreakdown">
-                    ${data.report.timing_stats ? `
-                        <p><strong>Paper Search:</strong> ${data.report.timing_stats.search_papers ? data.report.timing_stats.search_papers.toFixed(2) : 'N/A'}s</p>
-                        <p><strong>Paper Processing:</strong> ${data.report.timing_stats.paper_processing ? data.report.timing_stats.paper_processing.toFixed(2) : 'N/A'}s</p>
-                        <p><strong>Report Generation:</strong> ${data.report.timing_stats.report_generation ? data.report.timing_stats.report_generation.toFixed(2) : 'N/A'}s</p>
-                        <p><strong>Total Time:</strong> ${data.report.timing_stats.total_time ? data.report.timing_stats.total_time.toFixed(2) : 'N/A'}s</p>
-                    ` : '<p>Timing information not available</p>'}
+            const timing = report.timing_stats || {};
+            reportContent.innerHTML = `
+                <div class="stack">
+                    <div class="panel-header">
+                        <div>
+                            <h2 class="page-title">Claim: ${escapeHtml(data.text || 'Untitled claim')}</h2>
+                            <p class="page-subtitle">Status: ${escapeHtml(data.status || 'unknown')}</p>
+                        </div>
+                    </div>
+                    <div class="status-card ${getRatingTone(rating)}">
+                        <strong>Overall Assessment: ${escapeHtml(getRatingText(rating))}</strong>
+                        <span>Rating value: ${rating ?? 'N/A'}</span>
+                    </div>
+                    <div class="markdown-content">${report.explanation ? safeMarkdown(report.explanation) : '<p class="helper-text">No explanation available.</p>'}</div>
+                    ${report.finalReasoning ? `
+                        <details class="panel panel-muted">
+                            <summary><strong>Final Reasoning</strong></summary>
+                            <div class="panel-divider"></div>
+                            <div class="markdown-content">${safeMarkdown(report.finalReasoning)}</div>
+                        </details>
+                    ` : ''}
+                    ${renderPaperSection('Relevant Papers', report.relevantPapers, 'No relevant papers available.')}
+                    ${renderPaperSection('Other Reviewed Papers', report.nonRelevantPapers, 'No other papers were reviewed.')}
+                    ${renderPaperSection('Inaccessible Papers', report.inaccessiblePapers, 'No inaccessible papers were found.', { includeHIndex: false })}
+                    <section class="stack">
+                        <h3 class="panel-title">Search Queries</h3>
+                        ${Array.isArray(report.searchQueries) && report.searchQueries.length
+                            ? `<ol>${report.searchQueries.map(query => `<li>${escapeHtml(query)}</li>`).join('')}</ol>`
+                            : '<p class="helper-text">No search queries available.</p>'}
+                    </section>
+                    <section class="stack">
+                        <h3 class="panel-title">Processing Time Breakdown</h3>
+                        <div class="summary-strip">
+                            <div class="summary-cell"><span class="label">Search</span><span class="value">${timing.search_papers ? Number(timing.search_papers).toFixed(2) : 'N/A'}s</span></div>
+                            <div class="summary-cell"><span class="label">Paper Processing</span><span class="value">${timing.paper_processing ? Number(timing.paper_processing).toFixed(2) : 'N/A'}s</span></div>
+                            <div class="summary-cell"><span class="label">Report Generation</span><span class="value">${timing.report_generation ? Number(timing.report_generation).toFixed(2) : 'N/A'}s</span></div>
+                            <div class="summary-cell"><span class="label">Total</span><span class="value">${timing.total_time ? Number(timing.total_time).toFixed(2) : 'N/A'}s</span></div>
+                        </div>
+                    </section>
                 </div>
             `;
-
-            const usage = data.report?.usage_summary || data.report?.usage_stats;
-            renderUsageByStage(data.report?.usage_by_stage || {});
-            if (usage) {
-                const usageStatsHtml = `
-                    <h3>LLM Usage:</h3>
-                    <p>Input Tokens: ${usage.input_tokens || 0}</p>
-                    <p>Output Tokens: ${usage.output_tokens || 0}</p>
-                    <p>Total Tokens: ${usage.total_tokens || 0}</p>
-                    <p>Estimated Cost: $${(usage.cost_usd || 0).toFixed(4)}</p>
-                    <p>Token Counts Estimated: ${(usage.is_estimated || false) ? 'Yes' : 'No'}</p>
-                `;
-                document.getElementById('usageStats').innerHTML = usageStatsHtml;
-            } else {
-                document.getElementById('usageStats').innerHTML = '<p>Usage statistics not available</p>';
-            }
-
-            reportContent.innerHTML = html;
-
-            // Add event listener for final reasoning toggle button
-            setTimeout(() => {
-                const toggleButton = document.getElementById('toggleFinalReasoning');
-                const content = document.getElementById('finalReasoningContent');
-                
-                if (toggleButton && content) {
-                    toggleButton.addEventListener('click', () => {
-                        const isHidden = content.classList.contains('hidden');
-                        content.classList.toggle('hidden');
-                        toggleButton.textContent = isHidden ? 'Hide Final Reasoning' : 'Show Final Reasoning';
-                    });
-                }
-            }, 100);
         }
 
-        if (claimId) {
-            if (!batchId) {
-                reportContent.textContent = 'Error: Batch ID is required';
-            } else {
-                fetch(`/api/v1/claims/${batchId}/${claimId}/report`)
-                    .then(async response => {
-                        const data = await response.json();
-                        if (!response.ok) {
-                            if (response.status === 409 && data.code === 'CLAIM_PROCESSING') {
-                                window.location.href = `/progress?batch_id=${encodeURIComponent(batchId)}&claim_id=${encodeURIComponent(claimId)}`;
-                                return null;
-                            }
-                            throw new Error(data.error || 'Report not found.');
-                        }
-                        return data;
-                    })
-                    .then(data => {
-                        if (!data) {
-                            return;
-                        }
-                        if (data.report || data.additional_info) {  // Check for both possible properties
-                            displayReport(data);
-                        } else {
-                            reportContent.textContent = 'Report not found.';
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Error fetching report:', error);
-                        reportContent.textContent = error.message || 'Error loading report.';
-                    });
-            }
-        }
-
-        document.getElementById('downloadReport').addEventListener('click', function() {
-            if (claimId && batchId) {
-                window.location.href = `/api/v1/claims/${batchId}/${claimId}/download_md`;
-            }
-        });
-
-        document.getElementById('viewTracePage').addEventListener('click', function() {
-            if (claimId && batchId) {
-                window.location.href = buildTraceViewerUrl();
-            }
-        });
-
-        document.getElementById('downloadTrace').addEventListener('click', function() {
-            if (claimId && batchId) {
-                window.location.href = `/api/v1/claims/${batchId}/${claimId}/trace`;
-            }
-        });
-
-        document.getElementById('downloadIssues').addEventListener('click', function() {
-            if (claimId && batchId) {
-                window.location.href = `/api/v1/claims/${batchId}/${claimId}/issues`;
-            }
-        });
-
-        document.getElementById('downloadCitations').addEventListener('click', function() {
-            if (claimId && batchId) {
-                window.location.href = `/api/v1/claims/${batchId}/${claimId}/download_citations`;
-            }
-        });
-
-        document.getElementById('deleteClaimButton').addEventListener('click', function() {
-            if (!batchId) {
-                alert('Error: Batch ID is required');
+        async function loadReport() {
+            if (!claimId || !batchId) {
+                reportContent.innerHTML = `<div class="empty-state"><strong>Missing report identifiers.</strong><span>Both batch ID and claim ID are required.</span></div>`;
                 return;
             }
-            
-            if (confirm('Are you sure you want to delete this claim?')) {
-                fetch(`/api/v1/delete/claim/${batchId}/${claimId}`, { method: 'DELETE' })
-                    .then(response => response.json())
-                    .then(data => {
-                        alert(data.message);
-                        window.location.href = '/browser';
-                    })
-                    .catch(error => {
-                        console.error('Error deleting claim:', error);
-                        alert('Error deleting claim. Please try again.');
-                    });
+            try {
+                const data = await fetchJson(`/api/v1/claims/${encodeURIComponent(batchId)}/${encodeURIComponent(claimId)}/report`);
+                if (data.report || data.additional_info) {
+                    displayReport(data);
+                } else {
+                    reportContent.innerHTML = `<div class="empty-state"><strong>Report not found.</strong></div>`;
+                }
+            } catch (error) {
+                if (error.message?.includes('processing')) {
+                    window.location.href = `/progress?batch_id=${encodeURIComponent(batchId)}&claim_id=${encodeURIComponent(claimId)}`;
+                    return;
+                }
+                reportContent.innerHTML = `<div class="status-card error-card"><strong>Report failed to load.</strong><span>${escapeHtml(error.message || 'Error loading report.')}</span></div>`;
+            }
+        }
+
+        document.getElementById('downloadReport').addEventListener('click', () => {
+            if (claimId && batchId) window.location.href = `/api/v1/claims/${encodeURIComponent(batchId)}/${encodeURIComponent(claimId)}/download_md`;
+        });
+        document.getElementById('viewTracePage').addEventListener('click', () => {
+            if (claimId && batchId) window.location.href = buildTraceViewerUrl();
+        });
+        document.getElementById('downloadTrace').addEventListener('click', () => {
+            if (claimId && batchId) window.location.href = `/api/v1/claims/${encodeURIComponent(batchId)}/${encodeURIComponent(claimId)}/trace`;
+        });
+        document.getElementById('downloadIssues').addEventListener('click', () => {
+            if (claimId && batchId) window.location.href = `/api/v1/claims/${encodeURIComponent(batchId)}/${encodeURIComponent(claimId)}/issues`;
+        });
+        document.getElementById('downloadCitations').addEventListener('click', () => {
+            if (claimId && batchId) window.location.href = `/api/v1/claims/${encodeURIComponent(batchId)}/${encodeURIComponent(claimId)}/download_citations`;
+        });
+        document.getElementById('deleteClaimButton').addEventListener('click', async () => {
+            if (!claimId || !batchId) {
+                setStatus(reportStatus, { title: 'Delete blocked', message: 'Batch ID and claim ID are required.', tone: 'warning' });
+                return;
+            }
+            if (!window.confirm('Delete this claim run?')) return;
+            try {
+                const data = await fetchJson(`/api/v1/delete/claim/${encodeURIComponent(batchId)}/${encodeURIComponent(claimId)}`, { method: 'DELETE' });
+                setStatus(reportStatus, { title: 'Claim deleted', message: data.message || 'The claim was deleted.', tone: 'warning' });
+                window.location.href = '/browser';
+            } catch (error) {
+                setStatus(reportStatus, { title: 'Delete failed', message: error.message, tone: 'error' });
             }
         });
 
-        $(document).ready(function() {
-            const originalProcessClaimData = processClaimData;
-            
-            window.processClaimData = function(data) {
-                if (originalProcessClaimData) {
-                    originalProcessClaimData(data);
-                }
-                
-                const bibliometricConfig = data.report?.bibliometric_config || {};
-                const useBibliometrics = bibliometricConfig.use_bibliometrics !== false;
-                
-                if (data.report && data.report.relevantPapers) {
-                    data.report.relevantPapers.forEach((paper, index) => {
-                        const paperElement = document.querySelector(`.paper-item:nth-child(${index + 1})`);
-                        if (paperElement) {
-                            const weightScoreElement = paperElement.querySelector('[data-field="weight-score"]');
-                            
-                            if (weightScoreElement) {
-                                if (useBibliometrics && paper.bibliometric_impact !== undefined) {
-                                    weightScoreElement.innerHTML = `<strong>Bibliometric Impact:</strong> ${paper.bibliometric_impact}`;
-                                    weightScoreElement.style.display = 'block';
-                                } else {
-                                    weightScoreElement.style.display = 'none';
-                                }
-                            }
-                        }
-                    });
-                }
-                
-                if (bibliometricConfig) {
-                    let configHtml = `<p><strong>Use Bibliometrics:</strong> ${useBibliometrics ? 'Yes' : 'No'}</p>`;
-                    
-                    if (useBibliometrics) {
-                        configHtml += `
-                            <p><strong>Author Impact Weight:</strong> ${bibliometricConfig.author_impact_weight || 0.4}</p>
-                            <p><strong>Citation Impact Weight:</strong> ${bibliometricConfig.citation_impact_weight || 0.4}</p>
-                            <p><strong>Venue Impact Weight:</strong> ${bibliometricConfig.venue_impact_weight || 0.2}</p>
-                        `;
-                    }
-                    
-                    $('#bibliometricConfig').html(configHtml);
-                    $('#bibliometricConfigContainer').show();
-                } else {
-                    $('#bibliometricConfigContainer').hide();
-                }
-            };
-        });
+        loadReport();
     </script>
-</body>
-</html>
+{% endblock %}

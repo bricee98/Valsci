@@ -337,11 +337,13 @@ button {
   appearance: none;
   border: 0;
   border-radius: 999px;
+  margin-top: 0;
   padding: 12px 18px;
   font: inherit;
   font-weight: 800;
   cursor: pointer;
   transition: background-color 0.2s ease;
+  transform: none;
 }
 
 .button-link:hover,
@@ -351,6 +353,7 @@ button {
 .danger-button:hover,
 button:hover {
   text-decoration: none;
+  transform: none;
 }
 
 .button-link:disabled,
@@ -484,6 +487,7 @@ select,
 textarea {
   width: 100%;
   box-sizing: border-box;
+  height: auto;
   padding: 14px 15px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--line);
@@ -556,6 +560,9 @@ textarea:focus {
   width: 100%;
   border-collapse: collapse;
   overflow: hidden;
+  margin-bottom: 0;
+  box-shadow: none;
+  background: transparent;
 }
 
 th {
@@ -582,6 +589,15 @@ th {
   padding: 12px 10px;
   border-bottom: 1px solid rgba(33, 49, 40, 0.08);
   vertical-align: top;
+}
+
+.model-table tr:nth-child(even),
+.data-table tr:nth-child(even),
+.comparison-table tr:nth-child(even),
+.model-table tr:hover,
+.data-table tr:hover,
+.comparison-table tr:hover {
+  background: transparent;
 }
 
 .comparison-scroll {
@@ -865,7 +881,8 @@ th {
 }
 
 .claim-hero-title {
-  max-width: 20ch;
+  max-width: none;
+  overflow-wrap: anywhere;
 }
 
 .prompt-provenance summary,
@@ -1055,4 +1072,29 @@ details.panel summary {
   .grid-three {
     grid-template-columns: 1fr;
   }
+}
+
+.auth-page .app-shell {
+  width: min(520px, calc(100% - 32px));
+  min-height: 100vh;
+  display: grid;
+  align-items: center;
+  padding: 32px 0;
+}
+
+.auth-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.auth-form {
+  margin: 0;
+  padding: 0;
+  box-shadow: none;
+  background: transparent;
+  transition: none;
+}
+
+.auth-form:hover {
+  transform: none;
 }

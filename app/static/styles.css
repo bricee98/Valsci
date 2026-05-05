@@ -216,28 +216,33 @@ td a:hover {
 
 /* Responsive table for small screens */
 @media screen and (max-width: 600px) {
-    table, thead, tbody, th, td, tr {
+    .legacy-responsive-table table,
+    .legacy-responsive-table thead,
+    .legacy-responsive-table tbody,
+    .legacy-responsive-table th,
+    .legacy-responsive-table td,
+    .legacy-responsive-table tr {
         display: block;
     }
 
-    thead tr {
+    .legacy-responsive-table thead tr {
         position: absolute;
         top: -9999px;
         left: -9999px;
     }
 
-    tr {
+    .legacy-responsive-table tr {
         margin-bottom: 15px;
         border: 1px solid #ccc;
     }
 
-    td {
+    .legacy-responsive-table td {
         border: none;
         position: relative;
         padding-left: 50%;
     }
 
-    td:before {
+    .legacy-responsive-table td:before {
         position: absolute;
         top: 6px;
         left: 6px;

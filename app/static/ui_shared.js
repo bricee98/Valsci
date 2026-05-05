@@ -118,7 +118,11 @@
               const detail = hasDetails ? detailContent(item) : null;
               return `
                 <tr class="${isFocused ? "focused-row" : ""}">
-                  <th class="candidate-header" style="${candidateStyle({ color: item._candidateColor })}">${rowHeader(item, index)}</th>
+                  <th
+                    class="candidate-header"
+                    style="${candidateStyle({ color: item._candidateColor })}"
+                    ${detail ? 'role="button" tabindex="0" aria-expanded="false"' : ""}
+                  >${rowHeader(item, index)}</th>
                   ${columns.map((col) => {
                     const value = col.cell(item);
                     const highlighted = col.highlight ? col.highlight(item, items) : false;
@@ -147,4 +151,59 @@
     candidateStyle,
     renderTransposedTable,
   };
+
+  function visibleModal() {
+    const modals = Array.from(document.querySelectorAll(".modal:not(.hidden)"));
+    return modals.length ? modals[modals.length - 1] : null;
+  }
+
+  function focusModal(modal) {
+    if (!modal) return;
+    const focusable = modal.querySelector(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    (focusable || modal).focus();
+  }
+
+  function closeModal(modal) {
+    if (modal) modal.classList.add("hidden");
+  }
+
+  function enhanceModals() {
+    document.querySelectorAll(".modal").forEach((modal) => {
+      modal.setAttribute("role", "dialog");
+      modal.setAttribute("aria-modal", "true");
+      modal.setAttribute("tabindex", "-1");
+      const title = modal.querySelector("h1, h2, h3");
+      if (title && !modal.getAttribute("aria-labelledby")) {
+        if (!title.id) {
+          title.id = `modal-title-${Math.random().toString(36).slice(2)}`;
+        }
+        modal.setAttribute("aria-labelledby", title.id);
+      }
+      const observer = new MutationObserver(() => {
+        if (!modal.classList.contains("hidden")) {
+          window.setTimeout(() => focusModal(modal), 0);
+        }
+      });
+      observer.observe(modal, { attributes: true, attributeFilter: ["class"] });
+      modal.addEventListener("click", (event) => {
+        if (event.target === modal) {
+          closeModal(modal);
+        }
+      });
+    });
+  }
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      closeModal(visibleModal());
+    }
+  });
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", enhanceModals);
+  } else {
+    enhanceModals();
+  }
 })();

@@ -512,10 +512,18 @@
     // Wire detail row toggles
     target.querySelectorAll(".candidate-header").forEach((header) => {
       header.style.cursor = "pointer";
-      header.addEventListener("click", () => {
+      const toggleDetail = () => {
         const detailRow = header.closest("tr").nextElementSibling;
         if (detailRow?.classList.contains("detail-row")) {
           detailRow.classList.toggle("open");
+          header.setAttribute("aria-expanded", detailRow.classList.contains("open") ? "true" : "false");
+        }
+      };
+      header.addEventListener("click", toggleDetail);
+      header.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          toggleDetail();
         }
       });
     });

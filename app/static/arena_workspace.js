@@ -393,10 +393,18 @@
     // Wire detail row toggles
     target.querySelectorAll(".candidate-header").forEach((header) => {
       header.style.cursor = "pointer";
-      header.addEventListener("click", () => {
+      const toggleDetail = () => {
         const detailRow = header.closest("tr").nextElementSibling;
         if (detailRow?.classList.contains("detail-row")) {
           detailRow.classList.toggle("open");
+          header.setAttribute("aria-expanded", detailRow.classList.contains("open") ? "true" : "false");
+        }
+      };
+      header.addEventListener("click", toggleDetail);
+      header.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          toggleDetail();
         }
       });
     });
@@ -612,11 +620,17 @@
 
   function activateTab(tabName) {
     document.querySelectorAll("[data-workspace-tab]").forEach((button) => {
-      button.classList.toggle("active", button.dataset.workspaceTab === tabName);
+      const active = button.dataset.workspaceTab === tabName;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-selected", active ? "true" : "false");
+      button.setAttribute("tabindex", active ? "0" : "-1");
     });
     byId("overviewPane").classList.toggle("hidden", tabName !== "overview");
     byId("claimsPane").classList.toggle("hidden", tabName !== "claims");
     byId("historyPane").classList.toggle("hidden", tabName !== "history");
+    byId("overviewPane").toggleAttribute("hidden", tabName !== "overview");
+    byId("claimsPane").toggleAttribute("hidden", tabName !== "claims");
+    byId("historyPane").toggleAttribute("hidden", tabName !== "history");
   }
 
   function activeTabName() {
@@ -748,6 +762,19 @@
 
   document.querySelectorAll("[data-workspace-tab]").forEach((button) => {
     button.addEventListener("click", () => activateTab(button.dataset.workspaceTab));
+    button.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const tabs = Array.from(document.querySelectorAll("[data-workspace-tab]"));
+      const currentIndex = tabs.indexOf(button);
+      let nextIndex = currentIndex;
+      if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % tabs.length;
+      if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+      if (event.key === "Home") nextIndex = 0;
+      if (event.key === "End") nextIndex = tabs.length - 1;
+      tabs[nextIndex].focus();
+      activateTab(tabs[nextIndex].dataset.workspaceTab);
+    });
   });
 
   byId("claimGroups").addEventListener("change", () => {

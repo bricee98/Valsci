@@ -35,11 +35,12 @@
       byId("estimateBtn").disabled = true;
       setStatus(byId("homeRunStatus"), {
         title: "No providers configured",
-        message: 'Enable a provider on the <a href="/providers">Providers</a> page to run claims.',
+        message: "Open Providers from the top navigation, enable a provider, and add at least one model before running claims.",
         tone: "warning",
       });
       return;
     }
+    hideStatus(byId("homeRunStatus"));
     select.disabled = false;
     byId("modelDefault").disabled = false;
     byId("stageClaimsBtn").disabled = false;
@@ -115,14 +116,34 @@
       .split(/\r?\n/)
       .map(value => value.trim())
       .filter(Boolean);
+    if (!claims.length) {
+      setStatus(byId("homeRunStatus"), {
+        title: "No claims found",
+        message: "Paste one claim per line or upload a text file before staging.",
+        tone: "warning",
+      });
+      return;
+    }
+    let addedCount = 0;
+    let duplicateCount = 0;
     claims.forEach(claim => {
       if (!stagedClaims.includes(claim)) {
         stagedClaims.push(claim);
+        addedCount += 1;
+      } else {
+        duplicateCount += 1;
       }
     });
-    byId("claimText").value = "";
+    if (addedCount > 0) {
+      byId("claimText").value = "";
+    }
     renderStagedClaims();
     invalidatePreflight();
+    setStatus(byId("homeRunStatus"), {
+      title: addedCount ? "Claims staged" : "No new claims staged",
+      message: `${addedCount} added${duplicateCount ? `, ${duplicateCount} duplicate${duplicateCount === 1 ? "" : "s"} skipped` : ""}.`,
+      tone: addedCount ? "success" : "warning",
+    });
   }
 
   function renderStagedClaims() {
@@ -389,5 +410,4 @@
   loadRecents().catch(error => {
     setStatus(byId("homeRunStatus"), { title: "Home panels failed to load", message: error.message, tone: "error" });
   });
-  hideStatus(byId("homeRunStatus"));
 })();

@@ -117,6 +117,13 @@ def _public_providers(include_disabled: bool = False) -> List[Dict[str, Any]]:
     return providers
 
 
+def _provider_for_settings_ui(provider: Dict[str, Any]) -> Dict[str, Any]:
+    public_provider = dict(provider)
+    api_key = str(public_provider.pop("api_key", "") or "")
+    public_provider["api_key_present"] = bool(api_key)
+    return public_provider
+
+
 def _mock_s2_enabled() -> bool:
     return bool(current_app.config.get("MOCK_SEMANTIC_SCHOLAR_MODE", False))
 
@@ -599,24 +606,29 @@ def delete_migration_batch(batch_id):
 @api.route('/api/v1/providers', methods=['GET'])
 @auth_required
 def list_providers():
-    return jsonify({"providers": _provider_catalog().list_providers()}), 200
+    return jsonify({"providers": [_provider_for_settings_ui(provider) for provider in _provider_catalog().list_providers()]}), 200
 
 
 @api.route('/api/v1/providers', methods=['POST'])
 @auth_required
 def create_provider():
     payload = request.get_json(silent=True) or {}
+    payload.pop("api_key_present", None)
     provider = _provider_catalog().upsert_provider(payload)
-    return jsonify(provider), 201
+    return jsonify(_provider_for_settings_ui(provider)), 201
 
 
 @api.route('/api/v1/providers/<provider_id>', methods=['PUT'])
 @auth_required
 def update_provider(provider_id):
     payload = request.get_json(silent=True) or {}
+    payload.pop("api_key_present", None)
     payload["provider_id"] = provider_id
+    existing_provider = _provider_catalog().get_provider(provider_id)
+    if existing_provider and "api_key" not in payload:
+        payload["api_key"] = existing_provider.get("api_key", "")
     provider = _provider_catalog().upsert_provider(payload)
-    return jsonify(provider), 200
+    return jsonify(_provider_for_settings_ui(provider)), 200
 
 
 @api.route('/api/v1/providers/<provider_id>', methods=['DELETE'])
@@ -807,16 +819,26 @@ def list_claims_api():
         if search_term and search_term not in text.lower() and search_term not in claim.get("claim_key", "").lower():
             continue
         latest_run = store.get_run(claim.get("latest_run_id")) if claim.get("latest_run_id") else None
+        latest_run_summary = store.build_enhanced_run_summary(latest_run) if latest_run else None
         claims.append(
             {
                 "claim_key": claim.get("claim_key"),
                 "text": text,
                 "batch_tags": claim.get("batch_tags", []),
-                "latest_run": store.build_enhanced_run_summary(latest_run) if latest_run else None,
+                "latest_run": latest_run_summary,
                 "run_count": len(claim.get("run_ids", [])),
+                "sort_timestamp": (
+                    (latest_run_summary or {}).get("last_activity_at")
+                    or (latest_run_summary or {}).get("updated_at")
+                    or claim.get("updated_at")
+                    or claim.get("created_at")
+                    or ""
+                ),
             }
         )
-    claims.sort(key=lambda item: item.get("text", ""))
+    claims.sort(key=lambda item: (item.get("sort_timestamp", ""), item.get("text", "")), reverse=True)
+    for claim in claims:
+        claim.pop("sort_timestamp", None)
     if isinstance(limit, int) and limit > 0:
         claims = claims[:limit]
     return jsonify({"claims": claims}), 200
@@ -993,7 +1015,18 @@ def index():
 @api.route('/results', methods=['GET'])
 @auth_required
 def results():
-    return render_template('results.html')
+    return _render_page(
+        'results.html',
+        claim_id=(request.args.get("claim_id") or "").strip() or None,
+        batch_id=(request.args.get("batch_id") or "").strip() or None,
+        active_nav="claims",
+        page_title="Claim Report",
+        page_subtitle="Detailed assessment, evidence, usage, and trace links for a completed run.",
+        breadcrumbs=[
+            {"label": "Claims", "href": url_for('api.browser')},
+            {"label": "Report"},
+        ],
+    )
 
 
 @api.route('/arena', methods=['GET'])
@@ -1107,11 +1140,20 @@ def claim_detail_page(claim_key):
 @auth_required
 def trace_view(batch_id, claim_id):
     focus_trace_id = (request.args.get("focus_trace_id") or "").strip()
-    return render_template(
+    return _render_page(
         'trace_view.html',
         batch_id=batch_id,
         claim_id=claim_id,
         focus_trace_id=focus_trace_id,
+        active_nav="claims",
+        page_title="Trace Viewer",
+        page_subtitle="Inspect LLM calls, timing, retries, errors, and resumability for this claim.",
+        breadcrumbs=[
+            {"label": "Claims", "href": url_for('api.browser')},
+            {"label": batch_id},
+            {"label": claim_id},
+            {"label": "Trace"},
+        ],
     )
 
 @api.route('/progress', methods=['GET'])
@@ -1125,16 +1167,50 @@ def progress():
         if batch_id:
             location, _, claim_data = _load_claim_data(batch_id, claim_id)
             if location == "saved_jobs" and claim_data:
-                return render_template(_claim_results_template(claim_data), claim_id=claim_id)
+                return _render_page(
+                    _claim_results_template(claim_data),
+                    claim_id=claim_id,
+                    batch_id=batch_id,
+                    active_nav="claims",
+                    page_title="Claim Report",
+                    page_subtitle="Detailed assessment, evidence, usage, and trace links for a completed run.",
+                    breadcrumbs=[
+                        {"label": "Claims", "href": url_for('api.browser')},
+                        {"label": "Report"},
+                    ],
+                )
         else:
             for root, dirs, files in os.walk(_saved_jobs_dir()):
                 if f"{claim_id}.txt" in files:
                     with open(os.path.join(root, f"{claim_id}.txt"), 'r', encoding='utf-8') as f:
                         claim_data = json.load(f)
-                        return render_template(_claim_results_template(claim_data), claim_id=claim_id)
+                        inferred_batch_id = Path(root).name
+                        return _render_page(
+                            _claim_results_template(claim_data),
+                            claim_id=claim_id,
+                            batch_id=inferred_batch_id,
+                            active_nav="claims",
+                            page_title="Claim Report",
+                            page_subtitle="Detailed assessment, evidence, usage, and trace links for a completed run.",
+                            breadcrumbs=[
+                                {"label": "Claims", "href": url_for('api.browser')},
+                                {"label": "Report"},
+                            ],
+                        )
     
     # Default to progress template for batches or not-found claims
-    return render_template('progress.html', claim_id=claim_id, batch_id=batch_id)
+    return _render_page(
+        'progress.html',
+        claim_id=claim_id,
+        batch_id=batch_id,
+        active_nav="claims",
+        page_title="Processing Claims",
+        page_subtitle="Live batch progress and current claim status.",
+        breadcrumbs=[
+            {"label": "Claims", "href": url_for('api.browser')},
+            {"label": "Progress"},
+        ],
+    )
 
 @api.route('/api/v1/batch/<batch_id>', methods=['GET'])
 @auth_required
@@ -1202,7 +1278,18 @@ def batch_results():
     if review_type == 'llm':
         template = 'llm_screen_batch_results.html'
     
-    return render_template(template, batch_id=batch_id)
+    return _render_page(
+        template,
+        batch_id=batch_id,
+        active_nav="claims",
+        page_title="Batch Results",
+        page_subtitle="Review, filter, and export all runs in this batch.",
+        breadcrumbs=[
+            {"label": "Claims", "href": url_for('api.browser')},
+            {"label": batch_id},
+            {"label": "Batch Results"},
+        ],
+    )
 
 # Add these new routes
 
@@ -1733,7 +1820,14 @@ def login():
         else:
             error = 'Invalid password. Please try again.'
     
-    return render_template('login.html', error=error)
+    return _render_page(
+        'login.html',
+        error=error,
+        page_title="Valsci Login",
+        show_topbar=False,
+        show_page_header=False,
+        body_class="auth-page",
+    )
 
 @api.route('/logout', methods=['GET'])
 def logout():

@@ -1,27 +1,29 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Valsci - Login</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
-</head>
-<body>
-    <div class="container">
-        <h1>Valsci</h1>
-        <div class="login-container">
-            <h2>Login</h2>
+{% extends "base.html" %}
+
+{% block content %}
+    <main class="auth-panel">
+        <section class="panel">
+            <div class="panel-header">
+                <div>
+                    <h1 class="page-title">Valsci</h1>
+                    <p class="page-subtitle">Enter the access password to continue.</p>
+                </div>
+            </div>
+
             {% if error %}
-            <div class="error-message">{{ error }}</div>
+            <div class="status-card error-card">
+                <strong>Login failed</strong>
+                <span>{{ error }}</span>
+            </div>
             {% endif %}
-            <form method="POST" action="{{ url_for('api.login') }}">
-                <div class="form-group">
+
+            <form method="POST" action="{{ url_for('api.login') }}" class="auth-form">
+                <div class="form-row">
                     <label for="password">Password</label>
-                    <input type="password" id="password" name="password" required>
+                    <input type="password" id="password" name="password" required autocomplete="current-password">
                 </div>
                 <button type="submit" class="primary-button">Login</button>
             </form>
-        </div>
-    </div>
-</body>
-</html> 
+        </section>
+    </main>
+{% endblock %}

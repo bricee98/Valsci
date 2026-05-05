@@ -14,6 +14,7 @@
   const candidatePalette = ["#0f766e", "#c2410c", "#1d4ed8", "#b45309", "#be123c", "#4f46e5"];
 
   const byId = (id) => document.getElementById(id);
+  const domId = (value) => String(value || "").replace(/[^a-zA-Z0-9_-]/g, "-");
 
   let stagedClaims = [];
   let providerBlocks = [];
@@ -122,6 +123,8 @@
     target.innerHTML = providerBlocks.map((block, index) => {
       const provider = providerById(block.providerId);
       const visibleModels = providerBlockModelRows(block);
+      const providerSelectId = `provider-select-${domId(block.id)}`;
+      const providerSearchId = `provider-search-${domId(block.id)}`;
       return `
         <section class="panel panel-muted" data-provider-block="${escapeHtml(block.id)}">
           <div class="panel-header">
@@ -136,14 +139,14 @@
 
           <div class="grid-two">
             <div class="form-row">
-              <label>Provider</label>
-              <select data-provider-select="${escapeHtml(block.id)}">
+              <label for="${escapeHtml(providerSelectId)}">Provider</label>
+              <select id="${escapeHtml(providerSelectId)}" data-provider-select="${escapeHtml(block.id)}">
                 ${providerCatalog.map(item => `<option value="${escapeHtml(item.provider_id)}" ${item.provider_id === block.providerId ? "selected" : ""}>${escapeHtml(item.label || item.provider_id)}</option>`).join("")}
               </select>
             </div>
             <div class="form-row">
-              <label>Find models</label>
-              <input type="text" value="${escapeHtml(block.search || "")}" data-provider-search="${escapeHtml(block.id)}" placeholder="Filter models by name, size, or context">
+              <label for="${escapeHtml(providerSearchId)}">Find models</label>
+              <input id="${escapeHtml(providerSearchId)}" type="text" value="${escapeHtml(block.search || "")}" data-provider-search="${escapeHtml(block.id)}" placeholder="Filter models by name, size, or context">
             </div>
           </div>
 
@@ -245,6 +248,7 @@
 
     advanced.innerHTML = candidates.map(candidate => {
       const providerModels = enabledModels(candidate.provider);
+      const candidateLabelId = `candidate-label-${domId(candidate.key)}`;
       return `
         <article class="record-card" data-candidate-editor="${escapeHtml(candidate.key)}" style="${candidateStyle({ color: candidate.candidate_color })}">
           <div class="panel-header">
@@ -256,18 +260,20 @@
             <span class="badge neutral-badge">${escapeHtml(candidate.modelName)}</span>
           </div>
           <div class="form-row">
-            <label>Candidate Label</label>
-            <input type="text" value="${escapeHtml(candidate.label)}" data-candidate-label="${escapeHtml(candidate.key)}">
+            <label for="${escapeHtml(candidateLabelId)}">Candidate Label</label>
+            <input id="${escapeHtml(candidateLabelId)}" type="text" value="${escapeHtml(candidate.label)}" data-candidate-label="${escapeHtml(candidate.key)}">
           </div>
           <div class="grid-two">
-            ${stageNames.map(stageName => `
+            ${stageNames.map(stageName => {
+              const stageSelectId = `candidate-${domId(candidate.key)}-${domId(stageName)}`;
+              return `
               <div class="form-row">
-                <label>${escapeHtml(window.ValsciUI.stageLabel(stageName))}</label>
-                <select data-candidate-stage="${escapeHtml(candidate.key)}" data-stage-name="${escapeHtml(stageName)}">
+                <label for="${escapeHtml(stageSelectId)}">${escapeHtml(window.ValsciUI.stageLabel(stageName))}</label>
+                <select id="${escapeHtml(stageSelectId)}" data-candidate-stage="${escapeHtml(candidate.key)}" data-stage-name="${escapeHtml(stageName)}">
                   ${providerModels.map(model => `<option value="${escapeHtml(model.model_name)}" ${candidate.overrides[stageName] === model.model_name ? "selected" : ""}>${escapeHtml(model.label || model.model_name)}</option>`).join("")}
                 </select>
               </div>
-            `).join("")}
+            `;}).join("")}
           </div>
         </article>
       `;
@@ -329,15 +335,35 @@
 
   function stageClaims(text) {
     const claims = String(text || "").split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+    if (!claims.length) {
+      setStatus(byId("arenaStatus"), {
+        title: "No claims found",
+        message: "Paste one claim per line or upload a text file before staging.",
+        tone: "warning",
+      });
+      return;
+    }
+    let addedCount = 0;
+    let duplicateCount = 0;
     claims.forEach(claim => {
       if (!stagedClaims.includes(claim)) {
         stagedClaims.push(claim);
+        addedCount += 1;
+      } else {
+        duplicateCount += 1;
       }
     });
-    byId("claimInput").value = "";
+    if (addedCount > 0) {
+      byId("claimInput").value = "";
+    }
     renderClaims();
     invalidatePreflight();
     renderLaunchReview();
+    setStatus(byId("arenaStatus"), {
+      title: addedCount ? "Claims staged" : "No new claims staged",
+      message: `${addedCount} added${duplicateCount ? `, ${duplicateCount} duplicate${duplicateCount === 1 ? "" : "s"} skipped` : ""}.`,
+      tone: addedCount ? "success" : "warning",
+    });
   }
 
   function serializeCandidatesForApi() {

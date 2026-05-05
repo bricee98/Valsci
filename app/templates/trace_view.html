@@ -1,10 +1,6 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Trace Viewer</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+{% extends "base.html" %}
+
+{% block head_extra %}
     <style>
         .trace-toolbar {
             display: flex;
@@ -196,10 +192,10 @@
             background: #ebf8ff;
         }
     </style>
-</head>
-<body>
-    <div class="container">
-        <h1>Trace Viewer</h1>
+{% endblock %}
+
+{% block content %}
+    <section class="panel">
         <p><strong>Batch:</strong> <span id="batchLabel"></span> | <strong>Claim:</strong> <span id="claimLabel"></span></p>
 
         <div class="trace-toolbar">
@@ -214,8 +210,10 @@
         <div id="statusMessage"></div>
         <div id="traceSummary" class="trace-summary"></div>
         <div id="traceList" class="trace-list"></div>
-    </div>
+    </section>
+{% endblock %}
 
+{% block scripts %}
     <script>
         const batchId = {{ batch_id | tojson }};
         const claimId = {{ claim_id | tojson }};
@@ -567,5 +565,4 @@
 
         loadTrace();
     </script>
-</body>
-</html>
+{% endblock %}

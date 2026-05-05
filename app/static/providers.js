@@ -169,7 +169,13 @@
       }
 
       return `
-        <article class="record-card provider-type-row ${isActive ? "provider-type-row-active" : ""} ${!isEnabled ? "provider-type-row-disabled" : ""}" data-ptype="${escapeHtml(type)}">
+        <article
+          class="record-card provider-type-row ${isActive ? "provider-type-row-active" : ""} ${!isEnabled ? "provider-type-row-disabled" : ""}"
+          data-ptype="${escapeHtml(type)}"
+          role="button"
+          tabindex="0"
+          aria-pressed="${isActive ? "true" : "false"}"
+        >
           <div class="panel-header">
             <div>
               <strong>${escapeHtml(meta.title)}</strong>
@@ -253,7 +259,10 @@
     byId("providerId").value = provider.provider_id || "";
     byId("providerType").value = provider.provider_type || "openai";
     byId("providerLabel").value = provider.label || "";
-    byId("providerApiKey").value = provider.api_key || "";
+    byId("providerApiKey").value = "";
+    byId("providerApiKey").placeholder = provider.api_key_present
+      ? "Stored key present; leave blank to keep it"
+      : "Paste API key";
     byId("providerBaseUrl").value = provider.base_url || "";
     byId("providerDefaultModel").value = provider.default_model || "";
     byId("providerLocalBackend").value = provider.local_backend || "";
@@ -365,7 +374,7 @@
       provider_id: byId("providerId").value.trim() || selectedType || undefined,
       label: byId("providerLabel").value.trim() || undefined,
       provider_type: byId("providerType").value,
-      api_key: byId("providerApiKey").value.trim() || undefined,
+      ...(byId("providerApiKey").value.trim() ? { api_key: byId("providerApiKey").value.trim() } : {}),
       base_url: byId("providerBaseUrl").value.trim() || undefined,
       default_model: byId("providerDefaultModel").value.trim() || undefined,
       local_backend: byId("providerLocalBackend").value.trim() || undefined,
@@ -593,6 +602,15 @@
     }
   });
 
+  byId("providerList").addEventListener("keydown", (event) => {
+    if (event.target.closest(".toggle-switch")) return;
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const row = event.target.closest("[data-ptype]");
+    if (!row) return;
+    event.preventDefault();
+    selectType(row.dataset.ptype);
+  });
+
   // Editor input/change
   byId("providerEditor").addEventListener("input", (event) => {
     if (event.target.id === "providerBaseUrl" || event.target.id === "discoveryBaseUrl") {
@@ -632,7 +650,11 @@
     btn.textContent = "Discovering...";
     btn.disabled = true;
     discoverModels(
-      { base_url: baseUrl, api_key: byId("providerApiKey").value.trim() || undefined },
+      {
+        provider_id: selectedProviderId || undefined,
+        base_url: baseUrl,
+        api_key: byId("providerApiKey").value.trim() || undefined,
+      },
       `provider URL (${baseUrl})`
     ).catch((error) => {
       setStatus(byId("pageFeedback"), { title: "Discovery failed", message: error.message, tone: "error" });

@@ -1,5 +1,5 @@
 (() => {
-  const { escapeHtml, fetchJson, formatCurrency, formatDateTime } = window.ValsciUI;
+  const { escapeHtml, fetchJson, formatCurrency, formatDateTime, hideStatus, setStatus } = window.ValsciUI;
   const byId = (id) => document.getElementById(id);
 
   function claimHref(claim) {
@@ -48,16 +48,25 @@
     const query = byId("searchInput").value.trim();
     const data = await fetchJson(`/api/v1/claims?search=${encodeURIComponent(query)}`);
     renderClaims(data.claims || []);
+    hideStatus(byId("claimBrowserStatus"));
   }
 
-  byId("searchBtn").addEventListener("click", () => loadClaims().catch(error => alert(error.message)));
+  function showLoadError(error) {
+    setStatus(byId("claimBrowserStatus"), {
+      title: "Claims failed to load",
+      message: error.message,
+      tone: "error",
+    });
+  }
+
+  byId("searchBtn").addEventListener("click", () => loadClaims().catch(showLoadError));
   byId("clearBtn").addEventListener("click", () => {
     byId("searchInput").value = "";
-    loadClaims().catch(error => alert(error.message));
+    loadClaims().catch(showLoadError);
   });
   byId("searchInput").addEventListener("keydown", event => {
     if (event.key === "Enter") {
-      loadClaims().catch(error => alert(error.message));
+      loadClaims().catch(showLoadError);
     }
   });
 

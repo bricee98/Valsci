@@ -45,7 +45,7 @@
                         </div>
                         <div class="form-row" id="providerApiKeyGroup">
                             <label for="providerApiKey">API Key</label>
-                            <input type="text" id="providerApiKey" placeholder="Stored in the repo-local provider catalog">
+                            <input type="password" id="providerApiKey" placeholder="Leave blank to keep the stored key" autocomplete="new-password">
                         </div>
                     </div>
                     <div class="grid-two">
@@ -106,7 +106,7 @@
                         </div>
                         <div class="form-row">
                             <label for="discoveryApiKey">Optional API Key</label>
-                            <input type="text" id="discoveryApiKey" placeholder="Only if your gateway expects bearer auth">
+                            <input type="password" id="discoveryApiKey" placeholder="Only if your gateway expects bearer auth" autocomplete="new-password">
                         </div>
                     </div>
                     <div class="inline-actions">
@@ -155,27 +155,27 @@
             <div class="grid-three">
                 <div class="form-row">
                     <label>Model Name</label>
-                    <input type="text" data-model-field="model_name" placeholder="gpt-4o">
+                    <input type="text" data-model-field="model_name" placeholder="gpt-4o" aria-label="Model name">
                 </div>
                 <div class="form-row">
                     <label>Label</label>
-                    <input type="text" data-model-field="label" placeholder="Optional label">
+                    <input type="text" data-model-field="label" placeholder="Optional label" aria-label="Model label">
                 </div>
                 <div class="form-row">
                     <label>Context Window</label>
-                    <input type="number" data-model-field="context_window_tokens" min="1" value="8192">
+                    <input type="number" data-model-field="context_window_tokens" min="1" value="8192" aria-label="Context window tokens">
                 </div>
                 <div class="form-row">
                     <label>Default Max Output</label>
-                    <input type="number" data-model-field="max_output_tokens_default" min="1" value="1024">
+                    <input type="number" data-model-field="max_output_tokens_default" min="1" value="1024" aria-label="Default max output tokens">
                 </div>
                 <div class="form-row">
                     <label>Input Cost ($ / 1M tokens)</label>
-                    <input type="number" data-model-field="input_cost_per_million" min="0" step="0.0001" value="0" placeholder="For cost estimation">
+                    <input type="number" data-model-field="input_cost_per_million" min="0" step="0.0001" value="0" placeholder="For cost estimation" aria-label="Input cost per million tokens">
                 </div>
                 <div class="form-row">
                     <label>Output Cost ($ / 1M tokens)</label>
-                    <input type="number" data-model-field="output_cost_per_million" min="0" step="0.0001" value="0" placeholder="For cost estimation">
+                    <input type="number" data-model-field="output_cost_per_million" min="0" step="0.0001" value="0" placeholder="For cost estimation" aria-label="Output cost per million tokens">
                 </div>
             </div>
             <div class="inline-actions">

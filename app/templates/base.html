@@ -8,8 +8,9 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='overhaul.css') }}">
     {% block head_extra %}{% endblock %}
 </head>
-<body>
+<body class="{{ body_class or '' }}">
     <div class="app-shell">
+        {% if show_topbar is not defined or show_topbar %}
         <header class="topbar">
             <a class="brand-lockup" href="{{ url_for('api.index') }}">
                 <span class="brand-mark">VS</span>
@@ -36,7 +37,9 @@
                 {% endif %}
             </div>
         </header>
+        {% endif %}
 
+        {% if show_page_header is not defined or show_page_header %}
         <section class="page-header">
             {% if breadcrumbs %}
             <nav class="breadcrumbs" aria-label="Breadcrumb">
@@ -78,6 +81,7 @@
                 {% endif %}
             </div>
         </section>
+        {% endif %}
 
         {% block content %}{% endblock %}
     </div>

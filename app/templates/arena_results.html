@@ -23,23 +23,23 @@
     </section>
 
     <section class="panel">
-        <div class="workspace-tabs">
-            <button type="button" class="workspace-tab active" data-workspace-tab="overview">Overview</button>
-            <button type="button" class="workspace-tab" data-workspace-tab="claims">Claims</button>
-            <button type="button" class="workspace-tab" data-workspace-tab="history">History</button>
+        <div class="workspace-tabs" role="tablist" aria-label="Arena workspace sections">
+            <button type="button" class="workspace-tab active" data-workspace-tab="overview" role="tab" aria-selected="true" aria-controls="overviewPane" id="overviewTab">Overview</button>
+            <button type="button" class="workspace-tab" data-workspace-tab="claims" role="tab" aria-selected="false" aria-controls="claimsPane" id="claimsTab" tabindex="-1">Claims</button>
+            <button type="button" class="workspace-tab" data-workspace-tab="history" role="tab" aria-selected="false" aria-controls="historyPane" id="historyTab" tabindex="-1">History</button>
         </div>
 
         <div id="workspaceStatus" class="status-card info-card hidden"></div>
 
-        <div id="overviewPane" class="workspace-pane">
+        <div id="overviewPane" class="workspace-pane" role="tabpanel" aria-labelledby="overviewTab">
             <div id="overviewContent" class="section-stack"></div>
         </div>
 
-        <div id="claimsPane" class="workspace-pane hidden">
+        <div id="claimsPane" class="workspace-pane hidden" role="tabpanel" aria-labelledby="claimsTab" hidden>
             <div id="claimGroups" class="section-stack"></div>
         </div>
 
-        <div id="historyPane" class="workspace-pane hidden">
+        <div id="historyPane" class="workspace-pane hidden" role="tabpanel" aria-labelledby="historyTab" hidden>
             <div id="historyContent" class="history-list"></div>
         </div>
     </section>

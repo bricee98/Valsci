@@ -1,298 +1,233 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Batch Results</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+{% extends "base.html" %}
+
+{% block head_extra %}
     <link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator.min.css" rel="stylesheet">
     <script type="text/javascript" src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js"></script>
-    <style>
-        .help-link {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 26px;
-            height: 26px;
-            border-radius: 50%;
-            background: rgba(15, 118, 110, 0.1);
-            color: #0f766e;
-            font-size: 0.82rem;
-            font-weight: 700;
-            text-decoration: none;
-            vertical-align: middle;
-        }
-        .help-link:hover {
-            background: #0f766e;
-            color: #fff;
-        }
-        .trace-box {
-            margin: 0 0 16px 0;
-            padding: 12px;
-            border: 1px solid #ddd;
-            border-radius: 6px;
-            background: #fafafa;
-        }
-    </style>
-</head>
-<body>
-    <div class="batch-results-container wide-container">
-        <h1>Batch Results <a href="/guidebook#batch-results" class="help-link" title="Guidebook: Batch Results">?</a></h1>
-        <div id="batchStatusBanner"></div>
-        <div class="actions-bar">
-            <button id="deleteBatchButton" class="danger-button">Delete Batch</button>
-            <button id="downloadCSV" class="primary-button">Download CSV</button>
-            <button id="downloadMarkdown" class="primary-button">Bulk Download Reports</button>
-            <label class="checkbox-row inline-checkbox">
+{% endblock %}
+
+{% block content %}
+    <section class="panel">
+        <div class="panel-header">
+            <div>
+                <h2 class="panel-title">Batch Controls</h2>
+                <p class="panel-subtitle">Filter, export, or delete this batch.</p>
+            </div>
+            <a href="{{ url_for('api.guidebook_page') }}#batch-results" class="help-link" title="Guidebook: Batch Results">?</a>
+        </div>
+        <div id="batchStatusBanner" class="stack"></div>
+        <div class="inline-actions">
+            <button id="deleteBatchButton" type="button" class="danger-button">Delete Batch</button>
+            <button id="downloadCSV" type="button" class="primary-button">Download CSV</button>
+            <button id="downloadMarkdown" type="button" class="primary-button">Bulk Download Reports</button>
+            <label class="checkbox-row">
                 <input type="checkbox" id="showAllRunsToggle">
                 <span>Show all tagged runs</span>
             </label>
-            <input type="text" id="filter-input" placeholder="Filter results..." class="filter-input">
         </div>
-        
+        <div class="form-row" style="margin-top:16px">
+            <label for="filter-input">Filter results</label>
+            <input type="text" id="filter-input" placeholder="Filter by claim text">
+        </div>
+    </section>
+
+    <section class="panel">
         <div id="resultsTable"></div>
         <div id="totalPrice" class="total-price"></div>
-    </div>
+    </section>
 
     <script>
-        const batchId = '{{ batch_id }}';
+        window.batchResultsConfig = {
+            batchId: {{ batch_id|tojson }},
+        };
+    </script>
+{% endblock %}
+
+{% block scripts %}
+    <script>
+        const { escapeHtml, fetchJson } = window.ValsciUI;
+        const batchId = window.batchResultsConfig?.batchId;
         let table;
         let refreshTimer = null;
         const batchStatusBanner = document.getElementById('batchStatusBanner');
 
+        function safeClaimHref(row) {
+            const claimKey = encodeURIComponent(row.claim_key || '');
+            const runSuffix = row.run_id ? `?run_id=${encodeURIComponent(row.run_id)}` : '';
+            return `/claims/${claimKey}${runSuffix}`;
+        }
+
         const columns = [
             {
-                title: "Claim", 
-                field: "text", 
-                sorter: "string", 
-                headerFilter: true, 
-                formatter: "textarea",
-                widthGrow: 3
-            },
-            {
-                title: "Status", 
-                field: "status", 
-                sorter: "string", 
-                headerFilter: true, 
-                widthGrow: 1
-            },
-            {
-                title: "Location",
-                field: "claim_location",
-                sorter: "string",
+                title: 'Claim',
+                field: 'text',
+                sorter: 'string',
                 headerFilter: true,
-                widthGrow: 1
+                formatter: 'textarea',
+                widthGrow: 3,
             },
+            { title: 'Status', field: 'status', sorter: 'string', headerFilter: true, widthGrow: 1 },
+            { title: 'Location', field: 'claim_location', sorter: 'string', headerFilter: true, widthGrow: 1 },
             {
-                title: "Rating", 
-                field: "claimRating", 
-                sorter: "number", 
-                headerFilter: true, 
+                title: 'Rating',
+                field: 'claimRating',
+                sorter: 'number',
+                headerFilter: true,
                 widthGrow: 1,
-                formatter: function(cell) {
+                formatter(cell) {
                     const value = cell.getValue();
-                    return value === null || value === undefined ? 'N/A' : value;
-                }
-            },
-            {
-                title: "Supporting", 
-                field: "supporting_papers_count", 
-                sorter: "number", 
-                headerFilter: true, 
-                widthGrow: 1
-            },
-            {
-                title: "Non-Relevant", 
-                field: "non_relevant_papers_count", 
-                sorter: "number", 
-                headerFilter: true, 
-                widthGrow: 1
-            },
-            {
-                title: "Price", 
-                field: "price", 
-                sorter: "number",
-                widthGrow: 1,
-                formatter: function(cell) {
-                    const value = cell.getValue();
-                    return value ? `$${value.toFixed(4)}` : 'N/A';
-                }
-            },
-            {
-                title: "Report",
-                field: "report",
-                widthGrow: 1,
-                formatter: function(cell) {
-                    const row = cell.getRow().getData();
-                    const claim_id = row.claim_id;
-                    const claimHref = row.run_id
-                        ? `/claims/${row.claim_key}?run_id=${encodeURIComponent(row.run_id)}`
-                        : `/claims/${row.claim_key}`;
-                    if (row.report_available && row.claim_location === 'saved_jobs') {
-                        return `<a href="/results?claim_id=${claim_id}&batch_id=${batchId}" class="report-link">View Report</a> | <a href="${claimHref}" class="report-link">Claim</a>`;
-                    }
-                    return `<a href="/progress?claim_id=${claim_id}&batch_id=${batchId}" class="report-link">View Progress</a> | <a href="${claimHref}" class="report-link">Claim</a>`;
+                    return value === null || value === undefined ? 'N/A' : escapeHtml(value);
                 },
-                headerSort: false
-            }
+            },
+            { title: 'Supporting', field: 'supporting_papers_count', sorter: 'number', headerFilter: true, widthGrow: 1 },
+            { title: 'Non-Relevant', field: 'non_relevant_papers_count', sorter: 'number', headerFilter: true, widthGrow: 1 },
+            {
+                title: 'Price',
+                field: 'price',
+                sorter: 'number',
+                widthGrow: 1,
+                formatter(cell) {
+                    const value = Number(cell.getValue() || 0);
+                    return value ? `$${value.toFixed(4)}` : 'N/A';
+                },
+            },
+            {
+                title: 'Report',
+                field: 'report',
+                widthGrow: 1,
+                formatter(cell) {
+                    const row = cell.getRow().getData();
+                    const claimId = encodeURIComponent(row.claim_id || '');
+                    const claimLink = `<a href="${safeClaimHref(row)}" class="report-link">Claim</a>`;
+                    if (row.report_available && row.claim_location === 'saved_jobs') {
+                        return `<a href="/results?claim_id=${claimId}&batch_id=${encodeURIComponent(batchId)}" class="report-link">View Report</a> | ${claimLink}`;
+                    }
+                    return `<a href="/progress?claim_id=${claimId}&batch_id=${encodeURIComponent(batchId)}" class="report-link">View Progress</a> | ${claimLink}`;
+                },
+                headerSort: false,
+            },
         ];
 
         function renderBatchBanner(data) {
+            const savedCount = data.counts_by_location?.saved_jobs || 0;
+            const queuedCount = data.counts_by_location?.queued_jobs || 0;
             const statusText = data.has_partial_resume
                 ? 'This batch is processing again after one or more claims were resumed.'
                 : data.status === 'completed'
                     ? 'This batch is completed.'
                     : 'This batch is still processing.';
-            const savedCount = data.counts_by_location?.saved_jobs || 0;
-            const queuedCount = data.counts_by_location?.queued_jobs || 0;
             batchStatusBanner.innerHTML = `
-                <div class="trace-box">
-                    <p><strong>Status:</strong> ${data.status}</p>
-                    <p><strong>Claims:</strong> ${data.processed_claims} completed out of ${data.total_claims}</p>
-                    <p><strong>Saved / Queued:</strong> ${savedCount} / ${queuedCount}</p>
-                    <p>${statusText}</p>
+                <div class="summary-strip">
+                    <div class="summary-cell"><span class="label">Status</span><span class="value">${escapeHtml(data.status)}</span></div>
+                    <div class="summary-cell"><span class="label">Completed</span><span class="value">${Number(data.processed_claims || 0)} / ${Number(data.total_claims || 0)}</span></div>
+                    <div class="summary-cell"><span class="label">Saved / Queued</span><span class="value">${savedCount} / ${queuedCount}</span></div>
                 </div>
+                <p class="helper-text">${escapeHtml(statusText)}</p>
             `;
         }
 
         function initializeTable(data) {
             const useAllRuns = document.getElementById('showAllRunsToggle').checked;
             const sourceRows = useAllRuns && Array.isArray(data.all_runs) && data.all_runs.length ? data.all_runs : data.claims;
-            const tableData = sourceRows.map(claim => {
+            const tableData = sourceRows.map((claim) => {
                 const report = claim.report || {};
-                
-                if (claim.report_available && claim.claim_location === 'saved_jobs') {
-                    return {
-                        text: claim.text || 'N/A',
-                        status: claim.status,
-                        claim_location: claim.claim_location || 'saved_jobs',
-                        claimRating: report.claimRating !== undefined && report.claimRating !== null ? report.claimRating : null,
-                        supporting_papers_count: report.relevantPapers?.length || 0,
-                        non_relevant_papers_count: report.nonRelevantPapers?.length || 0,
-                        price: report.usage_summary?.cost_usd || report.usage_stats?.cost_usd || report.usage_stats?.total_cost || 0,
-                        claim_id: claim.claim_id,
-                        claim_key: claim.claim_key,
-                        report_available: true
-                    };
-                }
-
+                const completed = claim.report_available && claim.claim_location === 'saved_jobs';
                 return {
                     text: claim.text || 'N/A',
-                    status: claim.status || 'Error',
-                    claim_location: claim.claim_location || 'unknown',
-                    claimRating: null,
-                    supporting_papers_count: 0,
-                    non_relevant_papers_count: 0,
-                    price: 0,
+                    status: claim.status || 'unknown',
+                    claim_location: claim.claim_location || (completed ? 'saved_jobs' : 'unknown'),
+                    claimRating: completed && report.claimRating !== undefined && report.claimRating !== null ? report.claimRating : null,
+                    supporting_papers_count: completed ? (report.relevantPapers?.length || 0) : 0,
+                    non_relevant_papers_count: completed ? (report.nonRelevantPapers?.length || 0) : 0,
+                    price: completed ? (report.usage_summary?.cost_usd || report.usage_stats?.cost_usd || report.usage_stats?.total_cost || 0) : 0,
                     claim_id: claim.claim_id,
                     claim_key: claim.claim_key,
-                    report_available: false
+                    run_id: claim.run_id,
+                    report_available: completed,
                 };
             });
 
             if (table) {
                 table.setData(tableData);
             } else {
-                table = new Tabulator("#resultsTable", {
+                table = new Tabulator('#resultsTable', {
                     data: tableData,
-                    layout: "fitColumns",
-                    responsiveLayout: true,
-                    pagination: "local",
+                    layout: 'fitColumns',
+                    responsiveLayout: 'collapse',
+                    pagination: 'local',
                     paginationSize: 25,
                     paginationSizeSelector: [10, 25, 50, 100],
-                    columns: columns,
-                    initialSort: [
-                        {column: "claimRating", dir: "desc"}
-                    ],
+                    columns,
+                    initialSort: [{ column: 'claimRating', dir: 'desc' }],
                     rowHeight: 100,
                     textWrapping: true,
-                    width: "100%"
+                    width: '100%',
                 });
             }
 
             const totalPrice = tableData.reduce((sum, row) => sum + (row.price || 0), 0);
-            document.getElementById('totalPrice').innerHTML = 
-                `<h3>Total Batch Price: $${totalPrice.toFixed(4)}</h3>`;
+            document.getElementById('totalPrice').innerHTML = `<h3>Total Batch Price: $${totalPrice.toFixed(4)}</h3>`;
             renderBatchBanner(data);
             document.getElementById('downloadMarkdown').disabled = data.status !== 'completed';
         }
 
-        function loadBatchResults() {
-            fetch(`/api/v1/batch/${batchId}`)
-                .then(response => response.json())
-                .then(data => {
-                    initializeTable(data);
-                    if (refreshTimer) {
-                        clearTimeout(refreshTimer);
-                        refreshTimer = null;
-                    }
-                    if (data.status !== 'completed') {
-                        refreshTimer = setTimeout(loadBatchResults, 5000);
-                    }
-                })
-                .catch(error => {
-                    console.error('Error fetching batch results:', error);
-                    document.getElementById('resultsTable').innerHTML = 
-                        '<div class="error-message">Error fetching batch results. Please try again later.</div>';
-                });
+        async function loadBatchResults() {
+            try {
+                const data = await fetchJson(`/api/v1/batch/${encodeURIComponent(batchId)}`);
+                initializeTable(data);
+                if (refreshTimer) {
+                    clearTimeout(refreshTimer);
+                    refreshTimer = null;
+                }
+                if (data.status !== 'completed') {
+                    refreshTimer = setTimeout(loadBatchResults, 5000);
+                }
+            } catch (error) {
+                document.getElementById('resultsTable').innerHTML =
+                    `<div class="status-card error-card"><strong>Batch results failed to load.</strong><span>${escapeHtml(error.message)}</span></div>`;
+            }
         }
 
-        loadBatchResults();
-
-        // Download CSV handler
-        document.getElementById('downloadCSV').addEventListener('click', function() {
-            table.download("csv", `batch_results_${batchId}.csv`);
+        document.getElementById('downloadCSV').addEventListener('click', () => {
+            if (table) table.download('csv', `batch_results_${batchId}.csv`);
         });
 
-        // Delete batch handler
-        document.getElementById('deleteBatchButton').addEventListener('click', function() {
-            if (confirm('Are you sure you want to delete this batch?')) {
-                fetch(`/api/v1/delete/batch/${batchId}`, { method: 'DELETE' })
-                    .then(response => response.json())
-                    .then(data => {
-                        alert(data.message);
-                        window.location.href = '/browser';
-                    })
-                    .catch(error => {
-                        console.error('Error deleting batch:', error);
-                        alert('Error deleting batch. Please try again.');
-                    });
+        document.getElementById('deleteBatchButton').addEventListener('click', async () => {
+            if (!window.confirm('Delete this batch? This removes its queued/saved claim files.')) return;
+            try {
+                const data = await fetchJson(`/api/v1/delete/batch/${encodeURIComponent(batchId)}`, { method: 'DELETE' });
+                batchStatusBanner.innerHTML = `<div class="status-card warning-card"><strong>Batch deleted</strong><span>${escapeHtml(data.message || batchId)}</span></div>`;
+                window.location.href = '/browser';
+            } catch (error) {
+                batchStatusBanner.innerHTML = `<div class="status-card error-card"><strong>Delete failed</strong><span>${escapeHtml(error.message)}</span></div>`;
             }
         });
 
-        // Filter input handler
-        document.getElementById('filter-input').addEventListener('keyup', function(e) {
-            table.setFilter("text", "like", e.target.value);
+        document.getElementById('filter-input').addEventListener('keyup', (event) => {
+            if (table) table.setFilter('text', 'like', event.target.value);
         });
 
-        // Add a click handler for Bulk Download Markdown
-        document.getElementById('downloadMarkdown').addEventListener('click', function() {
-            fetch(`/api/v1/batch/${batchId}/download_markdown`)
-                .then(async response => {
-                    if (!response.ok) {
-                        const payload = await response.json();
-                        throw new Error(payload.error || 'Failed to download markdown reports.');
-                    }
-                    return response.blob();
-                })
-                .then(blob => {
-                    const url = URL.createObjectURL(blob);
-                    const link = document.createElement('a');
-                    link.href = url;
-                    link.download = `batch_${batchId}_reports.zip`;
-                    document.body.appendChild(link);
-                    link.click();
-                    link.remove();
-                    URL.revokeObjectURL(url);
-                })
-                .catch(error => {
-                    alert(error.message || 'Failed to download markdown reports.');
-                });
+        document.getElementById('downloadMarkdown').addEventListener('click', async () => {
+            try {
+                const response = await fetch(`/api/v1/batch/${encodeURIComponent(batchId)}/download_markdown`);
+                if (!response.ok) {
+                    const payload = await response.json().catch(() => ({}));
+                    throw new Error(payload.error || 'Failed to download markdown reports.');
+                }
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `batch_${batchId}_reports.zip`;
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+                URL.revokeObjectURL(url);
+            } catch (error) {
+                batchStatusBanner.innerHTML = `<div class="status-card error-card"><strong>Download failed</strong><span>${escapeHtml(error.message)}</span></div>`;
+            }
         });
 
-        document.getElementById('showAllRunsToggle').addEventListener('change', function() {
-            loadBatchResults();
-        });
+        document.getElementById('showAllRunsToggle').addEventListener('change', loadBatchResults);
+        loadBatchResults();
     </script>
-</body>
-</html>
+{% endblock %}
