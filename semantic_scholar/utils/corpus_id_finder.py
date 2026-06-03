@@ -27,7 +27,7 @@ class CorpusIDFinder:
         self.corpus_id_datasets = [
             'papers',
             'abstracts',
-            's2orc',
+            's2orc_v2',
             'tldrs'
         ]
 

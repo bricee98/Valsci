@@ -180,7 +180,7 @@ def test_failed_analysis_paper_is_terminal_for_analyze_claim(monkeypatch):
         "corpusId": 101,
         "title": "Paper 101",
         "content": "Full text",
-        "content_type": "s2orc",
+        "content_type": "s2orc_v2",
     }
     claim_data = {
         "text": "Claim text",
@@ -276,7 +276,7 @@ def test_failed_scoring_is_terminal_and_allows_final_report(monkeypatch):
         "explanations": ["Explanation"],
         "score": -1,
         "score_status": "pending",
-        "content_type": "s2orc",
+        "content_type": "s2orc_v2",
     }
     claim_data = {
         "text": "Claim text",

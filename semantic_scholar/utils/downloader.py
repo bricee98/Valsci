@@ -1,7 +1,7 @@
 import os
 import json
 import requests
-from typing import List, Dict, Optional, Tuple, Set
+from typing import Any, List, Dict, Optional, Tuple, Set
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
@@ -17,6 +17,7 @@ import time
 from urllib.parse import urlparse, unquote
 import re
 import multiprocessing
+import uuid
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 from collections import defaultdict
@@ -31,6 +32,16 @@ from app.config.settings import Config
 
 BASE_URL = "https://api.semanticscholar.org/datasets/v1"
 console = Console()
+
+DEFAULT_MINI_MANIFEST_PATH = Path(project_root) / "semantic_scholar/mini_corpora/mendelian_v1/manifest.json"
+MINI_SUPPORTED_DATASETS = {"papers", "abstracts", "authors", "s2orc_v2", "tldrs"}
+S2ORC_DATASETS = {"s2orc_v2"}
+DEFAULT_DATASETS = ["papers", "abstracts", "authors", "s2orc_v2", "tldrs"]
+SUPPORTED_DATASETS = ["papers", "abstracts", "authors", "s2orc_v2", "tldrs"]
+
+
+class MiniCorpusManifestError(ValueError):
+    """Raised when the curated mini-corpus manifest is missing or invalid."""
 
 class RateLimiter:
     def __init__(self, requests_per_second: float = 1.0):
@@ -54,24 +65,17 @@ class S2DatasetDownloader:
         self.session = requests.Session()
         self.rate_limiter = RateLimiter(requests_per_second=0.5)  # Reduced to 1 request per 2 seconds
         
-        self.api_key = os.getenv('SEMANTIC_SCHOLAR_API_KEY') or Config.SEMANTIC_SCHOLAR_API_KEY
-        if not self.api_key:
-            raise ValueError("No Semantic Scholar API key found. Set SEMANTIC_SCHOLAR_API_KEY in env_vars.json")
-        
-        self.session.headers.update({
-            'x-api-key': self.api_key
-        })
+        self.api_key = Config.SEMANTIC_SCHOLAR_API_KEY
+        if self.api_key:
+            self.session.headers.update({
+                'x-api-key': self.api_key
+            })
         
         # Store the requested version
         self.version = version
         
-        self.datasets_to_download = [
-            "papers", 
-            "abstracts",
-            "authors",
-            "s2orc",
-            "tldrs"
-        ]
+        self.datasets_to_download = list(DEFAULT_DATASETS)
+        self.supported_datasets = list(SUPPORTED_DATASETS)
         
         # Create base and index directories with parents
         self.base_dir.mkdir(parents=True, exist_ok=True)
@@ -80,12 +84,9 @@ class S2DatasetDownloader:
         
         # Define which IDs to index for each dataset
         self.dataset_id_fields = {
-            'papers': [
-                ('paperId', 'paper_id'),
-                ('corpusid', 'corpus_id')
-            ],
+            'papers': [('corpusid', 'corpus_id')],
             'abstracts': [('corpusid', 'corpus_id')],
-            's2orc': [('corpusid', 'corpus_id')],
+            's2orc_v2': [('corpusid', 'corpus_id')],
             'authors': [('authorid', 'author_id')],
             'tldrs': [('corpusid', 'corpus_id')]
         }
@@ -146,36 +147,70 @@ class S2DatasetDownloader:
         response = self.make_request(f"{BASE_URL}/release/latest")
         return response.json()["release_id"]
 
+    def _shard_name_from_url(self, dataset_name: str, url: str) -> str:
+        filename = self.get_filename_from_url(url)
+        for suffix in [".gz", ".json"]:
+            if filename.endswith(suffix):
+                filename = filename[:-len(suffix)]
+        return filename or dataset_name
+
+    def _normalize_dataset_file_entry(self, dataset_name: str, entry: Any) -> Any:
+        if isinstance(entry, dict):
+            url = (
+                entry.get("url")
+                or entry.get("path")
+                or entry.get("file")
+                or entry.get("source")
+                or entry.get("source_file")
+            )
+            shard = entry.get("shard")
+        else:
+            url = entry
+            shard = None
+
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError(f"Dataset file entry for {dataset_name} is missing a URL/path.")
+
+        if dataset_name in S2ORC_DATASETS:
+            return {
+                "url": url.strip(),
+                "shard": str(shard or self._shard_name_from_url(dataset_name, url)).strip(),
+            }
+        return url.strip()
+
     def get_dataset_info(self, dataset_name: str, release_id: str) -> Dict:
         """Get information about a specific dataset including download links."""
-        if dataset_name == 's2orc':
-            # Special handling for S2ORC dataset
-            url = f"https://api.semanticscholar.org/datasets/v1/release/{release_id}/dataset/s2orc/"
+        if not self.api_key:
+            raise ValueError("No Semantic Scholar API key found. Set SEMANTIC_SCHOLAR_API_KEY in env_vars.json")
+        if dataset_name in S2ORC_DATASETS:
+            # S2ORC datasets use many large shards; normalize entries for consistent naming/progress.
+            url = f"{BASE_URL}/release/{release_id}/dataset/{dataset_name}/"
             try:
                 response = self.make_request(url)
                 data = response.json()
-                # Filter URLs to get only what we need for mini download
                 if data.get('files'):
-                    # Extract shard IDs for better progress tracking
                     data['files'] = [
-                        {
-                            'url': url,
-                            'shard': re.match(r"https://ai2-s2ag.s3.amazonaws.com/staging/(.*)/s2orc/(.*).gz(.*)", url).group(2)
-                        }
-                        for url in data['files']
+                        self._normalize_dataset_file_entry(dataset_name, file_entry)
+                        for file_entry in data['files']
                     ]
-                    print("s2orc files")
-                    print(data['files'])
+                    console.print(
+                        f"[cyan]Found {len(data['files'])} {dataset_name} shards for release {release_id}[/cyan]"
+                    )
                 return data
-            except requests.exceptions.HTTPError as e:
-                console.print("[red]Error accessing S2ORC dataset. Make sure your API key has S2ORC access.[/red]")
-                console.print("[yellow]For S2ORC access, visit: https://api.semanticscholar.org/s2orc[/yellow]")
+            except requests.exceptions.HTTPError:
+                console.print(f"[red]Error accessing {dataset_name} dataset. Make sure your API key has access.[/red]")
                 raise
         else:
             # Standard dataset handling
             url = f"{BASE_URL}/release/{release_id}/dataset/{dataset_name}"
             response = self.make_request(url)
-            return response.json()
+            data = response.json()
+            if data.get('files'):
+                data['files'] = [
+                    self._normalize_dataset_file_entry(dataset_name, file_entry)
+                    for file_entry in data['files']
+                ]
+            return data
 
     def format_size(self, size_bytes: int) -> str:
         """Convert bytes to human readable format."""
@@ -201,6 +236,583 @@ class S2DatasetDownloader:
         parsed_url = urlparse(url)
         path = unquote(parsed_url.path)
         return os.path.basename(path)
+
+    @staticmethod
+    def _safe_slug(value: str) -> str:
+        slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
+        return slug or "curated"
+
+    @staticmethod
+    def _parse_json_line(line: bytes) -> Optional[Dict[str, Any]]:
+        try:
+            decoded = bytes.fromhex(line.strip().decode("ascii")).decode("utf-8")
+            data = json.loads(decoded)
+        except Exception:
+            try:
+                data = json.loads(line.strip())
+            except Exception:
+                return None
+        return data if isinstance(data, dict) else None
+
+    @staticmethod
+    def _first_present(data: Dict[str, Any], keys: List[str]) -> Any:
+        for key in keys:
+            if key in data:
+                return data.get(key)
+        return None
+
+    @classmethod
+    def _record_corpus_id(cls, data: Dict[str, Any]) -> Optional[str]:
+        value = cls._first_present(data, ["corpusid", "corpusId", "corpus_id", "CorpusId"])
+        if value is None:
+            external_ids = data.get("externalids") or data.get("externalIds") or {}
+            if isinstance(external_ids, dict):
+                value = cls._first_present(external_ids, ["CorpusId", "corpusId", "corpusid"])
+        return str(value) if value is not None and str(value).strip() else None
+
+    @classmethod
+    def _record_author_id(cls, data: Dict[str, Any]) -> Optional[str]:
+        value = cls._first_present(data, ["authorid", "authorId", "author_id"])
+        return str(value) if value is not None and str(value).strip() else None
+
+    @staticmethod
+    def _collect_ids(value: Any, keys: Set[str]) -> Set[str]:
+        ids: Set[str] = set()
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in keys and item is not None and str(item).strip():
+                    ids.add(str(item))
+                ids.update(S2DatasetDownloader._collect_ids(item, keys))
+        elif isinstance(value, list):
+            for item in value:
+                ids.update(S2DatasetDownloader._collect_ids(item, keys))
+        return ids
+
+    @staticmethod
+    def _string_id_set(values: Any) -> Set[str]:
+        if values is None:
+            return set()
+        if not isinstance(values, list):
+            raise MiniCorpusManifestError("Manifest ID lists must be arrays.")
+        return {str(value).strip() for value in values if str(value).strip()}
+
+    def _mini_manifest_setup_instructions(self, manifest_path: Path) -> str:
+        return (
+            "Curated mini-corpus manifest not found. "
+            f"Restore the tracked Mendelian mini manifest at {manifest_path} or pass --mini-manifest. "
+            "The manifest should include release_id and dataset-specific corpus_ids or author_ids; "
+            "the downloader fetches the matching rows from Semantic Scholar."
+        )
+
+    def _load_mini_manifest(self, manifest_path: Optional[Path] = None) -> Tuple[Path, Dict[str, Any]]:
+        path = Path(manifest_path or DEFAULT_MINI_MANIFEST_PATH).expanduser()
+        if not path.is_absolute():
+            path = Path(project_root) / path
+        path = path.resolve()
+        if not path.exists():
+            raise MiniCorpusManifestError(self._mini_manifest_setup_instructions(path))
+
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                manifest = json.load(handle)
+        except json.JSONDecodeError as exc:
+            raise MiniCorpusManifestError(f"Mini-corpus manifest is not valid JSON: {path}") from exc
+
+        if not isinstance(manifest, dict):
+            raise MiniCorpusManifestError("Mini-corpus manifest must be a JSON object.")
+        if not str(manifest.get("release_id", "")).strip():
+            raise MiniCorpusManifestError("Mini-corpus manifest must include release_id.")
+
+        dataset_ids = self._manifest_dataset_ids(manifest)
+        if not dataset_ids:
+            raise MiniCorpusManifestError(
+                "Mini-corpus manifest must include dataset-specific corpus_ids or author_ids."
+            )
+        return path, manifest
+
+    @staticmethod
+    def _dataset_id_values(config: Any, dataset: str) -> Set[str]:
+        if isinstance(config, list):
+            return S2DatasetDownloader._string_id_set(config)
+        if not isinstance(config, dict):
+            return set()
+        if dataset == "authors":
+            values = config.get("author_ids")
+        else:
+            values = config.get("corpus_ids")
+        if values is None:
+            values = config.get("ids")
+        return S2DatasetDownloader._string_id_set(values)
+
+    def _manifest_dataset_ids(self, manifest: Dict[str, Any]) -> Dict[str, Set[str]]:
+        dataset_ids: Dict[str, Set[str]] = {}
+        dataset_config = manifest.get("datasets")
+        if isinstance(dataset_config, dict):
+            for dataset, config in dataset_config.items():
+                dataset_name = str(dataset).strip()
+                if dataset_name not in MINI_SUPPORTED_DATASETS:
+                    console.print(f"[yellow]Skipping unsupported mini-corpus dataset: {dataset_name}[/yellow]")
+                    continue
+                ids = self._dataset_id_values(config, dataset_name)
+                if ids:
+                    dataset_ids[dataset_name] = ids
+
+        legacy_corpus_ids = self._string_id_set(manifest.get("corpus_ids"))
+        legacy_corpus_ids.update(self._collect_ids(manifest.get("papers"), {"corpusid", "corpusId", "corpus_id"}))
+        legacy_corpus_ids.update(self._collect_ids(manifest.get("claims"), {"corpusid", "corpusId", "corpus_id"}))
+        for dataset in ["papers", "abstracts", "s2orc_v2", "tldrs"]:
+            if legacy_corpus_ids and dataset not in dataset_ids:
+                dataset_ids[dataset] = set(legacy_corpus_ids)
+
+        legacy_author_ids = self._string_id_set(manifest.get("author_ids"))
+        legacy_author_ids.update(self._collect_ids(manifest.get("authors"), {"authorid", "authorId", "author_id"}))
+        legacy_author_ids.update(self._collect_ids(manifest.get("claims"), {"authorid", "authorId", "author_id"}))
+        if legacy_author_ids and "authors" not in dataset_ids:
+            dataset_ids["authors"] = legacy_author_ids
+
+        return dataset_ids
+
+    def _manifest_corpus_ids(self, manifest: Dict[str, Any]) -> Set[str]:
+        dataset_ids = self._manifest_dataset_ids(manifest)
+        corpus_ids: Set[str] = set()
+        for dataset, ids in dataset_ids.items():
+            if dataset != "authors":
+                corpus_ids.update(ids)
+        return corpus_ids
+
+    def _manifest_author_ids(self, manifest: Dict[str, Any]) -> Set[str]:
+        return set(self._manifest_dataset_ids(manifest).get("authors", set()))
+
+    @staticmethod
+    def _manifest_file_entry_value(entry: Any) -> Optional[str]:
+        if isinstance(entry, str):
+            return entry
+        if isinstance(entry, dict):
+            for key in ["path", "url", "file", "source", "source_file"]:
+                value = entry.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        return None
+
+    def _manifest_source_files(self, manifest: Dict[str, Any], manifest_dir: Path) -> Dict[str, List[str]]:
+        source_config = manifest.get("source_files")
+        if source_config is None:
+            source_config = manifest.get("datasets")
+        if not isinstance(source_config, dict):
+            return {}
+
+        source_files: Dict[str, List[str]] = {}
+        for dataset, config in source_config.items():
+            dataset_name = str(dataset).strip()
+            if dataset_name not in MINI_SUPPORTED_DATASETS:
+                console.print(f"[yellow]Skipping unsupported mini-corpus dataset: {dataset_name}[/yellow]")
+                continue
+
+            entries = config
+            if isinstance(config, dict):
+                entries = config.get("files") or config.get("source_files") or []
+            if not isinstance(entries, list):
+                raise MiniCorpusManifestError(f"source_files.{dataset_name} must be an array.")
+
+            resolved_entries: List[str] = []
+            for entry in entries:
+                value = self._manifest_file_entry_value(entry)
+                if not value:
+                    raise MiniCorpusManifestError(
+                        f"source_files.{dataset_name} entries must be strings or objects with path/url."
+                    )
+                if re.match(r"^https?://", value):
+                    resolved_entries.append(value)
+                else:
+                    source_path = Path(value).expanduser()
+                    if not source_path.is_absolute():
+                        source_path = manifest_dir / source_path
+                    resolved_entries.append(str(source_path.resolve()))
+            if resolved_entries:
+                source_files[dataset_name] = resolved_entries
+        return source_files
+
+    def _mini_topic_label(self, manifest: Dict[str, Any]) -> str:
+        explicit = str(manifest.get("topic_label", "")).strip()
+        if explicit:
+            return explicit
+        mini_release_id = str(manifest.get("mini_release_id", "")).strip()
+        if "-mini-" in mini_release_id:
+            return mini_release_id.split("-mini-", 1)[1]
+        return "curated"
+
+    def _mini_release_id(self, manifest: Dict[str, Any]) -> str:
+        explicit = str(manifest.get("mini_release_id", "")).strip()
+        if explicit:
+            return explicit
+        release_id = str(manifest["release_id"]).strip()
+        topic_slug = self._safe_slug(self._mini_topic_label(manifest))
+        return f"{release_id}-mini-{topic_slug}"
+
+    @staticmethod
+    def _is_remote_source(source: str) -> bool:
+        return bool(re.match(r"^https?://", source))
+
+    def _iter_source_lines(self, source: str):
+        if self._is_remote_source(source):
+            response = self.make_request(source, stream=True)
+            response.raw.decode_content = True
+            try:
+                raw_stream = response.raw
+                if self.get_filename_from_url(source).endswith(".gz"):
+                    with gzip.GzipFile(fileobj=raw_stream) as gzip_stream:
+                        for line in gzip_stream:
+                            yield line
+                else:
+                    for line in raw_stream:
+                        yield line
+            finally:
+                response.close()
+            return
+
+        source_path = Path(source)
+        if not source_path.exists():
+            raise MiniCorpusManifestError(f"Mini-corpus source file does not exist: {source_path}")
+        opener = gzip.open if source_path.suffix == ".gz" else open
+        with opener(source_path, "rb") as handle:
+            for line in handle:
+                yield line
+
+    def _record_matches_manifest(
+        self,
+        dataset: str,
+        data: Dict[str, Any],
+        *,
+        target_ids: Set[str],
+    ) -> bool:
+        if dataset == "authors":
+            author_id = self._record_author_id(data)
+            return bool(author_id and author_id in target_ids)
+        corpus_id = self._record_corpus_id(data)
+        return bool(corpus_id and corpus_id in target_ids)
+
+    def _matched_ids_in_sources(self, *, dataset: str, sources: List[str], target_ids: Set[str]) -> Set[str]:
+        matched_ids: Set[str] = set()
+        for source in sources:
+            if self._is_remote_source(source):
+                continue
+            source_path = Path(source)
+            if not source_path.exists():
+                continue
+            for line in self._iter_source_lines(str(source_path)):
+                data = self._parse_json_line(line)
+                if not data:
+                    continue
+                record_id = self._record_author_id(data) if dataset == "authors" else self._record_corpus_id(data)
+                if record_id and record_id in target_ids:
+                    matched_ids.add(record_id)
+            if matched_ids == target_ids:
+                break
+        return matched_ids
+
+    def _scan_remote_sources_for_ids(
+        self,
+        *,
+        dataset: str,
+        release_id: str,
+        target_ids: Set[str],
+        output_path: Path,
+    ) -> Tuple[str, Set[str]]:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        info = self.get_dataset_info(dataset, release_id)
+        files = info.get("files") or []
+        remaining = set(target_ids)
+        matched_ids: Set[str] = set()
+        mode = "a" if output_path.exists() else "w"
+        with open(output_path, mode, encoding="utf-8") as output:
+            for index, entry in enumerate(files, start=1):
+                if dataset in S2ORC_DATASETS:
+                    source = entry.get("url") if isinstance(entry, dict) else ""
+                    label = entry.get("shard") if isinstance(entry, dict) else source
+                else:
+                    source = str(entry or "")
+                    label = self.get_filename_from_url(source)
+                if not source:
+                    continue
+                console.print(f"[cyan]Fetching mini {dataset} source {index}/{len(files)}: {label}[/cyan]")
+                for line in self._iter_source_lines(source):
+                    data = self._parse_json_line(line)
+                    if not data:
+                        continue
+                    record_id = self._record_author_id(data) if dataset == "authors" else self._record_corpus_id(data)
+                    if not record_id or record_id not in remaining:
+                        continue
+                    output.write(json.dumps(data, ensure_ascii=True) + "\n")
+                    output.flush()
+                    matched_ids.add(record_id)
+                    remaining.discard(record_id)
+                    if not remaining:
+                        break
+                if not remaining:
+                    break
+        return str(output_path.resolve()), matched_ids
+
+    def _mini_sources_for_dataset(
+        self,
+        *,
+        dataset: str,
+        release_id: str,
+        mini_release_id: str,
+        manifest_dir: Path,
+        configured_sources: List[str],
+        target_ids: Set[str],
+    ) -> List[str]:
+        sources = list(configured_sources)
+        cache_path = self.base_dir / "mini" / "source_extracts" / self._safe_slug(mini_release_id) / f"{dataset}.jsonl"
+        cache_resolved = str(cache_path.resolve())
+        if cache_path.exists() and cache_resolved not in sources:
+            sources.append(cache_resolved)
+
+        local_matches = self._matched_ids_in_sources(dataset=dataset, sources=sources, target_ids=target_ids)
+        missing_ids = target_ids - local_matches
+        if missing_ids:
+            console.print(
+                f"[yellow]{dataset}: {len(missing_ids):,} requested IDs are not in the local mini cache; "
+                "streaming Semantic Scholar dataset shards.[/yellow]"
+            )
+            source, matched_ids = self._scan_remote_sources_for_ids(
+                dataset=dataset,
+                release_id=release_id,
+                target_ids=missing_ids,
+                output_path=cache_path,
+            )
+            if matched_ids and source not in sources:
+                sources.append(source)
+            unresolved = missing_ids - matched_ids
+            if unresolved:
+                console.print(f"[yellow]{dataset}: {len(unresolved):,} requested IDs were not found.[/yellow]")
+        if not sources:
+            raise MiniCorpusManifestError(f"No source rows available for mini-corpus dataset: {dataset}")
+        return sources
+
+    def _write_filtered_dataset(
+        self,
+        *,
+        dataset: str,
+        sources: List[str],
+        output_path: Path,
+        target_ids: Set[str],
+    ) -> Tuple[int, Set[str]]:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        seen_ids: Set[str] = set()
+        written = 0
+        with open(output_path, "w", encoding="utf-8") as output:
+            for source in sources:
+                console.print(f"[cyan]Filtering {dataset} source: {source}[/cyan]")
+                for line in self._iter_source_lines(source):
+                    data = self._parse_json_line(line)
+                    if not data or not self._record_matches_manifest(
+                        dataset,
+                        data,
+                        target_ids=target_ids,
+                    ):
+                        continue
+
+                    record_id = self._record_author_id(data) if dataset == "authors" else self._record_corpus_id(data)
+                    if not record_id or record_id in seen_ids:
+                        continue
+                    seen_ids.add(record_id)
+                    output.write(json.dumps(data, ensure_ascii=True) + "\n")
+                    written += 1
+        return written, seen_ids
+
+    def materialize_mini_corpus(self, manifest_path: Optional[Path] = None) -> str:
+        """Build the curated mini corpus described by a local manifest."""
+        path, manifest = self._load_mini_manifest(manifest_path)
+        mini_release_id = self._mini_release_id(manifest)
+        topic_label = self._mini_topic_label(manifest)
+        dataset_ids = self._manifest_dataset_ids(manifest)
+        source_files = self._manifest_source_files(manifest, path.parent)
+
+        release_dir = self.base_dir / mini_release_id
+        if release_dir.exists():
+            if "-mini-" not in mini_release_id:
+                raise MiniCorpusManifestError(
+                    f"Refusing to replace non-mini release directory: {release_dir}"
+                )
+            console.print(f"[cyan]Existing mini release will be replaced after rebuild succeeds: {release_dir}[/cyan]")
+
+        build_root = self.base_dir / "mini" / "builds"
+        build_root.mkdir(parents=True, exist_ok=True)
+        build_dir = build_root / f"{self._safe_slug(mini_release_id)}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        if build_dir.exists():
+            shutil.rmtree(build_dir)
+        build_dir.mkdir(parents=True, exist_ok=True)
+
+        release_metadata = {
+            "release_id": mini_release_id,
+            "source_release_id": manifest["release_id"],
+            "topic_label": topic_label,
+            "manifest_path": str(path),
+            "dataset_ids_requested": {dataset: len(ids) for dataset, ids in dataset_ids.items()},
+        }
+        with open(build_dir / "mini_manifest_metadata.json", "w", encoding="utf-8") as handle:
+            json.dump(release_metadata, handle, indent=2, ensure_ascii=True)
+
+        written_by_dataset: Dict[str, int] = {}
+        matched_ids_by_dataset: Dict[str, Set[str]] = {}
+        missing_ids_by_dataset: Dict[str, List[str]] = {}
+        dataset_order = DEFAULT_DATASETS
+        for dataset in sorted(dataset_ids, key=lambda name: dataset_order.index(name) if name in dataset_order else 999):
+            target_ids = dataset_ids[dataset]
+            sources = self._mini_sources_for_dataset(
+                dataset=dataset,
+                release_id=str(manifest["release_id"]),
+                mini_release_id=mini_release_id,
+                manifest_dir=path.parent,
+                configured_sources=source_files.get(dataset, []),
+                target_ids=target_ids,
+            )
+            dataset_dir = build_dir / dataset
+            dataset_dir.mkdir(parents=True, exist_ok=True)
+            with open(dataset_dir / "metadata.json", "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "name": dataset,
+                        "mini_corpus": True,
+                        "source_release_id": manifest["release_id"],
+                        "topic_label": topic_label,
+                        "requested_id_count": len(target_ids),
+                        "source_files": sources,
+                    },
+                    handle,
+                    indent=2,
+                    ensure_ascii=True,
+                )
+            count, matched_ids = self._write_filtered_dataset(
+                dataset=dataset,
+                sources=sources,
+                output_path=dataset_dir / "mini.json",
+                target_ids=target_ids,
+            )
+            written_by_dataset[dataset] = count
+            matched_ids_by_dataset[dataset] = matched_ids
+            missing_ids_by_dataset[dataset] = sorted(target_ids - matched_ids)
+            console.print(f"[green]Wrote {count:,} records for {dataset}[/green]")
+
+        summary = {
+            "mini_release_id": mini_release_id,
+            "source_release_id": manifest["release_id"],
+            "topic_label": topic_label,
+            "records_requested": {dataset: len(ids) for dataset, ids in dataset_ids.items()},
+            "records_written": written_by_dataset,
+            "records_missing": {
+                dataset: len(ids)
+                for dataset, ids in missing_ids_by_dataset.items()
+                if ids
+            },
+        }
+        with open(build_dir / "mini_build_summary.json", "w", encoding="utf-8") as handle:
+            json.dump(summary, handle, indent=2, ensure_ascii=True)
+
+        backup_dir: Optional[Path] = None
+        try:
+            if release_dir.exists():
+                backup_root = self.base_dir / "mini" / "release_backups"
+                backup_root.mkdir(parents=True, exist_ok=True)
+                backup_dir = backup_root / f"{self._safe_slug(mini_release_id)}-{uuid.uuid4().hex[:8]}"
+                shutil.move(str(release_dir), str(backup_dir))
+            shutil.move(str(build_dir), str(release_dir))
+        except Exception:
+            if backup_dir and backup_dir.exists() and not release_dir.exists():
+                shutil.move(str(backup_dir), str(release_dir))
+            if build_dir.exists():
+                shutil.rmtree(build_dir)
+            raise
+
+        for dataset, count in written_by_dataset.items():
+            if count <= 0:
+                console.print(f"[yellow]Skipping index for {dataset}; no matching records were written.[/yellow]")
+                continue
+            if not self.index_dataset(dataset, mini_release_id):
+                raise MiniCorpusManifestError(f"Failed to index mini-corpus dataset: {dataset}")
+
+        if backup_dir and backup_dir.exists():
+            shutil.rmtree(backup_dir)
+
+        console.print(
+            f"[green]Curated mini corpus ready: {mini_release_id} "
+            f"({release_dir})[/green]"
+        )
+        return mini_release_id
+
+    @staticmethod
+    def _count_jsonl_records(path: Path) -> int:
+        count = 0
+        with open(path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                if line.strip():
+                    count += 1
+        return count
+
+    def verify_mini_corpus(self, manifest_path: Optional[Path] = None) -> bool:
+        """Verify that the local mini release matches the manifest and indices."""
+        path, manifest = self._load_mini_manifest(manifest_path)
+        mini_release_id = self._mini_release_id(manifest)
+        release_dir = self.base_dir / mini_release_id
+        if not release_dir.exists():
+            console.print(f"[red]Mini corpus release not found: {release_dir}[/red]")
+            return False
+
+        dataset_ids = self._manifest_dataset_ids(manifest)
+        missing_rows: Dict[str, int] = {}
+        record_counts: Dict[str, int] = {}
+        for dataset, ids in dataset_ids.items():
+            dataset_dir = release_dir / dataset
+            if not dataset_dir.exists():
+                missing_rows[dataset] = len(ids)
+                record_counts[dataset] = 0
+                continue
+            count = sum(
+                self._count_jsonl_records(path)
+                for path in dataset_dir.glob("*.json")
+                if path.name != "metadata.json"
+            )
+            record_counts[dataset] = count
+            if count < len(ids):
+                missing_rows[dataset] = len(ids) - count
+
+        if missing_rows:
+            console.print(f"[red]Mini corpus release is stale: {mini_release_id}[/red]")
+            for dataset, count in missing_rows.items():
+                console.print(f"[yellow]{dataset}: {count:,} manifest records missing locally[/yellow]")
+            return False
+
+        stats = self.indexer.get_index_stats(mini_release_id)
+        dataset_id_fields = getattr(
+            self,
+            "dataset_id_fields",
+            getattr(self.indexer, "dataset_id_fields", {}),
+        )
+        index_issues: List[str] = []
+        for dataset, ids in dataset_ids.items():
+            for _, id_type in dataset_id_fields.get(dataset, []):
+                key = f"{dataset}_{id_type}"
+                info = stats.get(key)
+                if not info:
+                    index_issues.append(f"{key}: missing")
+                    continue
+                if not info.get("healthy"):
+                    index_issues.append(f"{key}: unhealthy")
+                    continue
+                if int(info.get("entry_count") or 0) < len(ids):
+                    index_issues.append(f"{key}: indexed fewer rows than manifest requests")
+
+        if index_issues:
+            console.print(f"[red]Mini corpus indices need attention: {mini_release_id}[/red]")
+            for issue in index_issues:
+                console.print(f"[yellow]{issue}[/yellow]")
+            return False
+
+        console.print(f"[green]Mini corpus release matches manifest: {mini_release_id}[/green]")
+        for dataset, count in record_counts.items():
+            console.print(f"[green]{dataset}: {count:,} records[/green]")
+        return True
 
     def _parallel_extract_gzip(self, input_path: Path, output_path: Path):
         """Revert to single-thread gzip extraction to avoid misalignment issues."""
@@ -275,7 +887,7 @@ class S2DatasetDownloader:
             console.print(f"[red]Error downloading file: {str(e)}[/red]")
             return False, None
 
-    def download_dataset(self, dataset_name: str, release_id: str = 'latest', mini: bool = False, index: bool = True) -> bool:
+    def download_dataset(self, dataset_name: str, release_id: str = 'latest', index: bool = True) -> bool:
         """Download a specific dataset and optionally build index."""
         try:
             if release_id == 'latest':
@@ -305,26 +917,25 @@ class S2DatasetDownloader:
 
             # First check which files we need
             missing_files = []
-            if dataset_name == 's2orc':
-                files = dataset_info['files'][:1] if mini else dataset_info['files']
+            if dataset_name in S2ORC_DATASETS:
+                files = dataset_info['files']
                 console.print(f"\n[bold]Checking {len(files)} files for {dataset_name}...[/bold]")
                 for file_info in files:
-                    print("Shard is ", file_info['shard'])
                     output_path = dataset_dir / f"{file_info['shard']}.json"
                     if output_path.exists():
                         size = output_path.stat().st_size / (1024 * 1024)
-                        console.print(f"[green]✓ Already exists ({size:.1f} MB): {output_path.name}[/green]")
+                        console.print(f"[green]OK Already exists ({size:.1f} MB): {output_path.name}[/green]")
                     else:
                         console.print(f"[yellow]→ Needs download: {output_path.name}[/yellow]")
                         missing_files.append(file_info)
             else:
-                files_to_download = dataset_info['files'][:1] if mini else dataset_info['files']
+                files_to_download = dataset_info['files']
                 console.print(f"\n[bold]Checking {len(files_to_download)} files for {dataset_name}...[/bold]")
                 for file_url in files_to_download:
                     output_path = dataset_dir / self.get_filename_from_url(file_url).replace('.gz', '.json')
                     if output_path.exists():
                         size = output_path.stat().st_size / (1024 * 1024)
-                        console.print(f"[green]✓ Already exists ({size:.1f} MB): {output_path.name}[/green]")
+                        console.print(f"[green]OK Already exists ({size:.1f} MB): {output_path.name}[/green]")
                     else:
                         console.print(f"[yellow]→ Needs download: {output_path.name}[/yellow]")
                         missing_files.append(file_url)
@@ -337,10 +948,10 @@ class S2DatasetDownloader:
                 # Download missing files
                 downloaded_files = []
                 for file_info in missing_files:
-                    if dataset_name == 's2orc':
+                    if dataset_name in S2ORC_DATASETS:
                         url = file_info['url']
                         shard = file_info['shard']
-                        success, path = self.download_file(url, dataset_dir, f"Downloading S2ORC shard {shard}")
+                        success, path = self.download_file(url, dataset_dir, f"Downloading {dataset_name} shard {shard}")
                     else:
                         success, path = self.download_file(file_info, dataset_dir)
                     if success and path:
@@ -371,6 +982,8 @@ class S2DatasetDownloader:
 
             # Create temporary directory for chunks
             chunk_dir = self.indexer.tmp_dir / f"{release_id}_{dataset}_chunks"
+            if chunk_dir.exists():
+                shutil.rmtree(chunk_dir)
             chunk_dir.mkdir(parents=True, exist_ok=True)
 
             # Track entries for each ID type
@@ -403,20 +1016,23 @@ class S2DatasetDownloader:
 
                         # Extract IDs based on dataset type
                         if dataset == 'papers':
-                            if 'corpusid' in data:
+                            corpus_id = self._record_corpus_id(data)
+                            if corpus_id:
                                 entries_by_id_type['corpus_id'].append(
-                                    IndexEntry(str(data['corpusid']), str(file_path), offset)
+                                    IndexEntry(corpus_id, str(file_path), offset)
                                 )
                                 entries_in_file += 1
-                            if 'paperId' in data:
+                            paper_id = self._first_present(data, ["paperId", "paperid", "paper_id"])
+                            if paper_id:
                                 entries_by_id_type['paper_id'].append(
-                                    IndexEntry(data['paperId'], str(file_path), offset)
+                                    IndexEntry(str(paper_id), str(file_path), offset)
                                 )
                                 entries_in_file += 1
                         elif dataset == 'authors':
-                            if 'authorid' in data:
+                            author_id = self._record_author_id(data)
+                            if author_id:
                                 entries_by_id_type['author_id'].append(
-                                    IndexEntry(data['authorid'], str(file_path), offset)
+                                    IndexEntry(author_id, str(file_path), offset)
                                 )
                                 entries_in_file += 1
                         elif dataset == 'citations':
@@ -431,21 +1047,24 @@ class S2DatasetDownloader:
                                 )
                                 entries_in_file += 1
                         elif dataset == 'abstracts':
-                            if 'corpusid' in data:
+                            corpus_id = self._record_corpus_id(data)
+                            if corpus_id:
                                 entries_by_id_type['corpus_id'].append(
-                                    IndexEntry(str(data['corpusid']), str(file_path), offset)
+                                    IndexEntry(corpus_id, str(file_path), offset)
                                 )
                                 entries_in_file += 1
-                        elif dataset == 's2orc':
-                            if 'corpusid' in data:
+                        elif dataset == 's2orc_v2':
+                            corpus_id = self._record_corpus_id(data)
+                            if corpus_id:
                                 entries_by_id_type['corpus_id'].append(
-                                    IndexEntry(str(data['corpusid']), str(file_path), offset)
+                                    IndexEntry(corpus_id, str(file_path), offset)
                                 )
                                 entries_in_file += 1
                         elif dataset == 'tldrs':
-                            if 'corpusid' in data:
+                            corpus_id = self._record_corpus_id(data)
+                            if corpus_id:
                                 entries_by_id_type['corpus_id'].append(
-                                    IndexEntry(str(data['corpusid']), str(file_path), offset)
+                                    IndexEntry(corpus_id, str(file_path), offset)
                                 )
                                 entries_in_file += 1
                             
@@ -498,7 +1117,7 @@ class S2DatasetDownloader:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.indexer.close()
 
-    def download_all_datasets(self, release_id: str = 'latest', mini: bool = False):
+    def download_all_datasets(self, release_id: str = 'latest'):
         """Download all datasets first, then index them all."""
         if release_id == 'latest' and self.version:
             release_id = self.version
@@ -510,7 +1129,7 @@ class S2DatasetDownloader:
         # First download all datasets without indexing
         for dataset in self.datasets_to_download:
             console.print(f"\n[bold]Downloading {dataset}...[/bold]")
-            self.download_dataset(dataset, release_id, mini, index=False)
+            self.download_dataset(dataset, release_id, index=False)
         
         # Then index all datasets
         console.print(f"\n[bold cyan]Indexing all datasets...[/bold cyan]")
@@ -518,7 +1137,7 @@ class S2DatasetDownloader:
             console.print(f"\n[bold]Indexing {dataset}...[/bold]")
             self.index_dataset(dataset, release_id)
 
-    def verify_downloads(self, mini: bool = True) -> bool:
+    def verify_downloads(self) -> bool:
         """Verify that all datasets were downloaded correctly."""
         try:
             release_id = self.get_latest_release()
@@ -535,15 +1154,15 @@ class S2DatasetDownloader:
                     continue
                 
                 # Get expected files
-                if dataset == 's2orc':
+                if dataset in S2ORC_DATASETS:
                     expected_files = [
-                        self.get_filename_from_url(file_info['url']).replace('.gz', '')
-                        for file_info in (dataset_info['files'][:1] if mini else dataset_info['files'])
+                        file_info['shard']
+                        for file_info in dataset_info['files']
                     ]
                 else:
                     expected_files = [
                         self.get_filename_from_url(url).replace('.gz', '')
-                        for url in (dataset_info['files'][:1] if mini else dataset_info['files'])
+                        for url in dataset_info['files']
                     ]
                 
                 # Get actual files
@@ -624,8 +1243,8 @@ class S2DatasetDownloader:
                 # ------------------------------------------------------------------
                 # Retrieve diff manifest for this dataset
                 # ------------------------------------------------------------------
-                if dataset == 's2orc':
-                    diff_url = f"https://api.semanticscholar.org/datasets/v1/diffs/{current_release}/to/{latest_release}/s2orc/"
+                if dataset in S2ORC_DATASETS:
+                    diff_url = f"{BASE_URL}/diffs/{current_release}/to/{latest_release}/{dataset}/"
                 else:
                     diff_url = f"{BASE_URL}/diffs/{current_release}/to/{latest_release}/{dataset}"
 
@@ -635,7 +1254,7 @@ class S2DatasetDownloader:
                 except Exception as e:
                     console.print(f"[yellow]Could not retrieve diff for {dataset} (reason: {e}). Falling back to full download.[/yellow]")
                     # Full download fall-back
-                    self.download_dataset(dataset, latest_release, mini=False, index=True)
+                    self.download_dataset(dataset, latest_release, index=True)
                     continue
 
                 total_diff_files = sum(len(d.get('update_files', [])) + len(d.get('delete_files', [])) for d in diffs)
@@ -664,7 +1283,7 @@ class S2DatasetDownloader:
                         #   UPDATE  files
                         # ---------------------------
                         upd_urls = diff.get('update_files', [])
-                        if dataset == 's2orc':
+                        if dataset in S2ORC_DATASETS:
                             upd_urls = [u['url'] for u in upd_urls]
 
                         for url in upd_urls:
@@ -677,7 +1296,7 @@ class S2DatasetDownloader:
                         #   DELETE files
                         # ---------------------------
                         del_urls = diff.get('delete_files', [])
-                        if dataset == 's2orc':
+                        if dataset in S2ORC_DATASETS:
                             del_urls = [u['url'] for u in del_urls]
 
                         for url in del_urls:
@@ -711,7 +1330,7 @@ class S2DatasetDownloader:
                     console.print(f"[red]Failed to rebuild index for {dataset}")
                     return False
 
-                # Quick verification (±10 % margin).
+                # Quick verification (10% margin).
                 self.verify_index_completeness(latest_release, dataset, quick_estimate=True)
 
             console.print("\n[green]All datasets updated successfully![/green]")
@@ -822,7 +1441,7 @@ class S2DatasetDownloader:
                 
                 # Get downloaded files
                 dataset_dir = self.base_dir / release_id / dataset
-                if dataset == 's2orc':
+                if dataset in S2ORC_DATASETS:
                     downloaded_files = list(dataset_dir.glob("*.json")) if dataset_dir.exists() else []
                 else:
                     downloaded_files = [
@@ -886,7 +1505,10 @@ class S2DatasetDownloader:
         
         total_entries = 0
         for index_key, info in stats.items():
-            dataset, id_type = index_key.split('_', 1)
+            parsed = self.indexer._parse_index_key(index_key)
+            if not parsed:
+                continue
+            dataset, id_type = parsed
             total_entries += info['entry_count']
             
             status = "[green]Healthy[/green]" if info['healthy'] else "[red]Unhealthy[/red]"
@@ -923,7 +1545,21 @@ def main():
     parser = argparse.ArgumentParser(description='Download Semantic Scholar datasets')
     parser.add_argument('--release', default='latest', help='Release ID to download')
     parser.add_argument('--version', help='Specific version to download (YYYY-MM-DD format)')
-    parser.add_argument('--mini', action='store_true', help='Download minimal dataset for testing')
+    parser.add_argument(
+        '--mini',
+        action='store_true',
+        help='Build the curated manifest-driven mini corpus. Requires a local mini manifest.',
+    )
+    parser.add_argument(
+        '--mini-manifest',
+        default=str(DEFAULT_MINI_MANIFEST_PATH),
+        help='Path to the local curated mini-corpus manifest used by --mini.',
+    )
+    parser.add_argument(
+        '--datasets',
+        nargs='*',
+        help='Limit download, verify, or audit operations to specific datasets.',
+    )
     parser.add_argument('--verify', action='store_true', help='Verify downloaded datasets')
     parser.add_argument('--verify-index', nargs='*', help='Verify index completeness. Optionally specify datasets to verify')
     parser.add_argument('--audit', nargs='*', help='Audit datasets and indexing status')
@@ -940,15 +1576,50 @@ def main():
             if not dataset_list:
                 return downloader.datasets_to_download
                 
-            invalid_datasets = [d for d in dataset_list if d not in downloader.datasets_to_download]
+            supported_datasets = getattr(downloader, "supported_datasets", downloader.datasets_to_download)
+            invalid_datasets = [d for d in dataset_list if d not in supported_datasets]
             if invalid_datasets:
                 console.print(f"[red]Invalid dataset names: {', '.join(invalid_datasets)}[/red]")
-                console.print(f"[yellow]Valid datasets are: {', '.join(downloader.datasets_to_download)}[/yellow]")
+                console.print(f"[yellow]Valid datasets are: {', '.join(supported_datasets)}[/yellow]")
                 return None
             return dataset_list
 
+        def prompt_yes_no(message: str, default: str = "n") -> str:
+            """Prompt safely; default in non-interactive runs."""
+            console.print(message)
+            if not sys.stdin or not sys.stdin.isatty():
+                return default.lower()
+            try:
+                response = input().strip().lower()
+            except EOFError:
+                return default.lower()
+            return response or default.lower()
+
+        if args.mini and not any([
+            args.verify,
+            args.verify_index is not None,
+            args.audit is not None,
+            args.index_only is not None,
+            args.repair,
+            args.count,
+            args.update,
+        ]):
+            try:
+                downloader.materialize_mini_corpus(Path(args.mini_manifest))
+            except MiniCorpusManifestError as exc:
+                console.print(f"[red]{exc}[/red]")
+                sys.exit(1)
+            return
+
         if args.verify:
             # Verify downloaded files match expected files from API
+            if args.mini:
+                try:
+                    return downloader.verify_mini_corpus(Path(args.mini_manifest))
+                except MiniCorpusManifestError as exc:
+                    console.print(f"[red]{exc}[/red]")
+                    return False
+
             release_id = args.release
             if release_id == 'latest':
                 release_id = downloader.get_latest_release()
@@ -956,7 +1627,11 @@ def main():
             console.print(f"\n[bold cyan]Verifying downloads for release {release_id}...[/bold cyan]")
             missing_files = {}
             
-            for dataset in downloader.datasets_to_download:
+            datasets = validate_datasets(args.datasets)
+            if datasets is None:
+                return
+
+            for dataset in datasets:
                 try:
                     dataset_info = downloader.get_dataset_info(dataset, release_id)
                     if not dataset_info:
@@ -969,15 +1644,15 @@ def main():
                         continue
                     
                     # Get expected files
-                    if dataset == 's2orc':
+                    if dataset in S2ORC_DATASETS:
                         expected_files = [
                             f"{info['shard']}.json" 
-                            for info in (dataset_info['files'][:1] if args.mini else dataset_info['files'])
+                            for info in dataset_info['files']
                         ]
                     else:
                         expected_files = [
                             downloader.get_filename_from_url(url).replace('.gz', '.json')
-                            for url in (dataset_info['files'][:1] if args.mini else dataset_info['files'])
+                            for url in dataset_info['files']
                         ]
                     
                     # Check actual files
@@ -1021,7 +1696,10 @@ def main():
             table.add_column("Status")
             
             for index_name, info in stats.items():
-                dataset, id_type = index_name.split('_')
+                parsed = downloader.indexer._parse_index_key(index_name)
+                if not parsed:
+                    continue
+                dataset, id_type = parsed
                 status = "[green]Healthy[/green]" if info['healthy'] else "[red]Unhealthy[/red]"
                 table.add_row(
                     dataset,
@@ -1035,7 +1713,7 @@ def main():
             console.print(table)
             
         elif args.audit is not None:
-            datasets = validate_datasets(args.audit)
+            datasets = validate_datasets(args.audit or args.datasets)
             if datasets is None:
                 return
                 
@@ -1065,9 +1743,13 @@ def main():
                 
                 # Get index stats
                 stats = downloader.indexer.get_index_stats(release_id)
-                index_info = next((v for k, v in stats.items() if k.startswith(f"{dataset}_")), None)
+                index_infos = []
+                for index_key, info in stats.items():
+                    parsed = downloader.indexer._parse_index_key(index_key)
+                    if parsed and parsed[0] == dataset:
+                        index_infos.append(info)
                 
-                if not index_info:
+                if not index_infos:
                     table.add_row(
                         dataset,
                         f"{file_count} files",
@@ -1075,11 +1757,12 @@ def main():
                         "N/A"
                     )
                 else:
-                    health = "[green]Healthy[/green]" if index_info['healthy'] else "[red]Unhealthy[/red]"
+                    health = "[green]Healthy[/green]" if all(info['healthy'] for info in index_infos) else "[red]Unhealthy[/red]"
+                    entry_count = sum(info['entry_count'] for info in index_infos)
                     table.add_row(
                         dataset,
                         f"{file_count} files",
-                        f"{index_info['entry_count']:,} entries",
+                        f"{entry_count:,} entries",
                         health
                     )
             
@@ -1102,21 +1785,19 @@ def main():
             # First do a quick estimate check
             console.print(f"\n[bold]Quick estimation check...[/bold]")
             if downloader.verify_index_completeness(release_id, quick_estimate=True):
-                console.print(f"[green]✓ Quick estimate check passed[/green]")
+                console.print(f"[green]OK Quick estimate check passed[/green]")
                 
                 # If quick check passes, offer to do detailed verification
-                console.print("\nQuick check passed. Would you like to perform a detailed verification? (y/N)")
-                response = input().lower()
+                response = prompt_yes_no("\nQuick check passed. Would you like to perform a detailed verification? (y/N)")
                 if response == 'y':
                     console.print(f"\n[bold]Performing detailed verification...[/bold]")
                     if downloader.indexer.verify_all_indices(release_id, show_details=True):
-                        console.print(f"[green]✓ All indices verified successfully[/green]")
+                        console.print(f"[green]OK All indices verified successfully[/green]")
                     else:
-                        console.print(f"[red]× Indices verification failed[/red]")
+                        console.print(f"[red]FAIL Indices verification failed[/red]")
             else:
-                console.print(f"[red]× Quick estimate check failed[/red]")
-                console.print("\nWould you like to perform a detailed verification to identify issues? (y/N)")
-                response = input().lower()
+                console.print(f"[red]FAIL Quick estimate check failed[/red]")
+                response = prompt_yes_no("\nWould you like to perform a detailed verification to identify issues? (y/N)")
                 if response == 'y':
                     console.print(f"\n[bold]Performing detailed verification...[/bold]")
                     downloader.indexer.verify_all_indices(release_id, show_details=True)
@@ -1130,7 +1811,7 @@ def main():
             # Exit code indicates success (0) or failure (1) for shell scripts
             sys.exit(0 if success else 1)
         elif args.index_only is not None:
-            datasets = validate_datasets(args.index_only)
+            datasets = validate_datasets(args.index_only or args.datasets)
             if datasets is None:
                 return
                 
@@ -1146,9 +1827,9 @@ def main():
             for dataset in datasets:
                 console.print(f"\n[bold]Indexing {dataset}...[/bold]")
                 if downloader.index_dataset(dataset, release_id):
-                    console.print(f"[green]✓ Successfully indexed {dataset}[/green]")
+                    console.print(f"[green]OK Successfully indexed {dataset}[/green]")
                 else:
-                    console.print(f"[red]× Failed to index {dataset}[/red]")
+                    console.print(f"[red]FAIL Failed to index {dataset}[/red]")
                     
         elif args.repair:
             # Repair mode: re-index datasets that are missing or unhealthy for the latest local release
@@ -1180,9 +1861,9 @@ def main():
                 if needs_rebuild:
                     console.print(f"\n[bold]Re-indexing {dataset}...[/bold]")
                     if downloader.index_dataset(dataset, release_id):
-                        console.print(f"[green]✓ Successfully re-indexed {dataset}[/green]")
+                        console.print(f"[green]OK Successfully re-indexed {dataset}[/green]")
                     else:
-                        console.print(f"[red]× Failed to re-index {dataset}[/red]")
+                        console.print(f"[red]FAIL Failed to re-index {dataset}[/red]")
 
             console.print("\n[bold cyan]Repair completed[/bold cyan]")
 
@@ -1194,12 +1875,18 @@ def main():
                 
             console.print(f"[bold cyan]Downloading and indexing datasets for release {release_id}...[/bold cyan]")
             
-            for dataset in downloader.datasets_to_download:
+            datasets = validate_datasets(args.datasets)
+            if datasets is None:
+                return
+
+            for dataset in datasets:
                 console.print(f"\n[bold]Processing {dataset}...[/bold]")
-                if downloader.download_dataset(dataset, release_id, args.mini, index=True):
-                    console.print(f"[green]✓ Successfully processed {dataset}[/green]")
+                if downloader.download_dataset(dataset, release_id, index=True):
+                    console.print(f"[green]OK Successfully processed {dataset}[/green]")
                 else:
-                    console.print(f"[red]× Failed to process {dataset}[/red]")
+                    console.print(f"[red]FAIL Failed to process {dataset}[/red]")
 
 if __name__ == "__main__":
-    main() 
+    result = main()
+    if result is False:
+        sys.exit(1)

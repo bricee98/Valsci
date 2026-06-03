@@ -6,7 +6,7 @@ This guide explains how to run Valsci using Docker containers.
 
 - [Docker](https://www.docker.com/get-started)
 - [Docker Compose](https://docs.docker.com/compose/install/)
-- Semantic Scholar API key (get one at https://www.semanticscholar.org/product/api), unless you are using Mock Demo Mode
+- Semantic Scholar API key (get one at https://www.semanticscholar.org/product/api)
 
 ## Quick Start
 
@@ -51,20 +51,6 @@ All application code is mounted in the `/valsci` directory inside the containers
 - `/valsci/queued_jobs/`: Directory for claims waiting to be processed
 - `/valsci/saved_jobs/`: Directory for processed claim results and LLM debug traces/issues
 
-## Mock Demo Mode
-
-For fast local UI testing without Semantic Scholar datasets, enable these settings in `app/config/env_vars.json` before starting the stack:
-
-```json
-{
-  "MOCK_SEMANTIC_SCHOLAR_MODE": true,
-  "MOCK_SEMANTIC_SCHOLAR_FIXTURE_PACK": "happy_path",
-  "MOCK_SEMANTIC_SCHOLAR_DELAY_SECONDS": 0.4
-}
-```
-
-Mock mode drives the full claim, arena, progress, and review flow with deterministic synthetic papers and does not require a Semantic Scholar API key.
-
 ## Downloading Semantic Scholar Datasets
 
 For the application to function properly, you need to download Semantic Scholar datasets.
@@ -76,10 +62,14 @@ For the application to function properly, you need to download Semantic Scholar 
    ```
 
    Options:
-   - Download minimal datasets: `--mini`
-   - Download specific datasets: `--datasets papers abstracts authors`
-   - Download without indexing: `--download-only`
+   - Build the curated manifest-driven mini corpus: `--mini`
    - Create indices for existing datasets: `--index-only`
+
+   `--mini` uses the tracked Mendelian mini manifest at
+   `semantic_scholar/mini_corpora/mendelian_v1/manifest.json` unless you pass
+   `--mini-manifest`. The manifest records fixed dataset-specific IDs. Valsci
+   streams the matching Semantic Scholar dataset shards and writes the compact
+   runtime release under ignored local data.
 
 2. **Verify downloads**:
 

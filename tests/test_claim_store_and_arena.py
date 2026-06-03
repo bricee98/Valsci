@@ -687,6 +687,83 @@ def test_migration_route_imports_legacy_saved_claim(monkeypatch, tmp_path):
     assert run["text"] == "Legacy claim text"
 
 
+def test_migration_status_counts_transport_runs_as_imported(monkeypatch, tmp_path):
+    client, saved_jobs_dir, queued_jobs_dir, state_dir, provider_catalog_path = create_test_client(monkeypatch, tmp_path)
+    batch_dir = saved_jobs_dir / "transport-batch"
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    (batch_dir / "claim-one.txt").write_text(
+        json.dumps({"text": "Already canonical claim", "status": "processed"}, indent=2),
+        encoding="utf-8",
+    )
+
+    store = ClaimStore(
+        state_dir=str(state_dir),
+        saved_jobs_dir=str(saved_jobs_dir),
+        queued_jobs_dir=str(queued_jobs_dir),
+        trace_dir=str(saved_jobs_dir),
+    )
+    claim_record, _ = store.get_or_create_claim("Already canonical claim", batch_tags=["transport-batch"])
+    store.create_run(
+        claim_record=claim_record,
+        batch_tags=["transport-batch"],
+        transport_batch_id="transport-batch",
+        transport_claim_id="claim-one",
+        status="processed",
+        source="standard",
+    )
+
+    response = client.get("/api/v1/migration/batches")
+    assert response.status_code == 200
+    batch = next(item for item in response.get_json()["batches"] if item["batch_id"] == "transport-batch")
+    assert batch["imported_count"] == 1
+    assert batch["status"] == "imported"
+
+    delete_response = client.delete("/api/v1/migration/batches/transport-batch")
+    assert delete_response.status_code == 400
+    assert "Archive it instead" in delete_response.get_json()["error"]
+
+
+def test_import_all_migration_batches_archives_pending_by_default(monkeypatch, tmp_path):
+    client, saved_jobs_dir, queued_jobs_dir, state_dir, provider_catalog_path = create_test_client(monkeypatch, tmp_path)
+    batch_dir = saved_jobs_dir / "pending-batch"
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    (batch_dir / "claim-one.txt").write_text(
+        json.dumps(
+            {
+                "text": "Pending legacy claim",
+                "status": "processed",
+                "search_config": {"num_queries": 1, "results_per_query": 2},
+                "bibliometric_config": {"use_bibliometrics": True},
+                "usage": empty_usage(),
+                "usage_by_stage": {},
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    response = client.post("/api/v1/migration/import_all", json={})
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["archive_after"] is True
+    assert payload["batch_count"] == 1
+    assert payload["created_count"] == 1
+    assert payload["archived_count"] == 1
+    assert payload["remaining_pending_count"] == 0
+    assert not batch_dir.exists()
+    assert (state_dir / "migrations" / "archive" / "saved_jobs" / "pending-batch" / "claim-one.txt").exists()
+
+    store = ClaimStore(
+        state_dir=str(state_dir),
+        saved_jobs_dir=str(saved_jobs_dir),
+        queued_jobs_dir=str(queued_jobs_dir),
+        trace_dir=str(saved_jobs_dir),
+    )
+    run = store.find_run_by_legacy("pending-batch", "claim-one")
+    assert run is not None
+    assert run["text"] == "Pending legacy claim"
+
+
 def test_arena_page_surfaces_advanced_reuse_copy(monkeypatch, tmp_path):
     client, _, _, _, _ = create_test_client(monkeypatch, tmp_path)
 

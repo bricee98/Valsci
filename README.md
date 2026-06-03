@@ -40,7 +40,7 @@ Claims are rated on an ordinal scale:
 
 - Python 3.8 or higher
 - PM2 (for production deployment)
-- A Semantic Scholar API Key (with S2ORC access), unless you are using Mock Demo Mode
+- A Semantic Scholar API Key (with S2ORC access)
 - Disk space for Semantic Scholar datasets:
   - Papers dataset: ~200GB
   - Abstracts dataset: ~140GB
@@ -118,20 +118,6 @@ Create an `app/config/env_vars.json` file with your configuration settings. Belo
 - `SMTP_PORT`: SMTP port (default: 587)
 - `BASE_URL`: Base URL for your deployment
 
-### Mock Demo Mode
-
-If you want to validate the full claim and arena workflow locally without downloading Semantic Scholar datasets, enable mock mode in `app/config/env_vars.json`:
-
-```json
-{
-  "MOCK_SEMANTIC_SCHOLAR_MODE": true,
-  "MOCK_SEMANTIC_SCHOLAR_FIXTURE_PACK": "happy_path",
-  "MOCK_SEMANTIC_SCHOLAR_DELAY_SECONDS": 0.4
-}
-```
-
-In mock mode, Valsci uses deterministic retrieval fixtures, exposes demo claim sets in the UI, and does not require `SEMANTIC_SCHOLAR_API_KEY`.
-
 ### Downloading and Indexing Semantic Scholar Datasets
 
 Valsci requires local copies of Semantic Scholar datasets for efficient paper lookup and analysis. The datasets are downloaded and indexed using the provided downloader utility.
@@ -141,16 +127,15 @@ Valsci requires local copies of Semantic Scholar datasets for efficient paper lo
 python -m semantic_scholar.utils.downloader
 ```
 
+The full downloader includes `s2orc_v2` as the local full-text dataset. The mini-corpus manifest mirrors that production content path by listing dataset-specific IDs for `s2orc_v2`, `papers`, `abstracts`, `tldrs`, and `authors`; the downloader then streams the matching Semantic Scholar release rows.
+
 2. **Download Options:**
 ```bash
-# Download minimal datasets for testing
+# Build the curated mini corpus for local production-pipeline testing.
 python -m semantic_scholar.utils.downloader --mini
 
-# Download specific datasets
+# Download only selected full datasets
 python -m semantic_scholar.utils.downloader --datasets papers abstracts authors
-
-# Download without indexing
-python -m semantic_scholar.utils.downloader --download-only
 
 # Only create indices for downloaded datasets
 python -m semantic_scholar.utils.downloader --index-only
@@ -173,7 +158,57 @@ python -m semantic_scholar.utils.downloader --audit
 
 The datasets will be downloaded to `semantic_scholar/datasets/` and indexed for fast lookup. The indexing process creates binary indices in `semantic_scholar/datasets/binary_indices/`.
 
-**Note:** S2ORC access requires special API permissions. Visit https://api.semanticscholar.org/s2orc to request access.
+The web UI also exposes this workflow at `/data`. Use the Data page to inspect local releases, see per-dataset file and index coverage, build the curated mini corpus, download selected full datasets, rebuild indices, verify files, and watch downloader logs while a job runs.
+
+#### Curated Mini Corpus
+
+The `--mini` flag now means "build the curated local mini corpus," not "download the first dataset shard." It is designed for a focused desktop rehearsal of the real production pipeline with live Semantic Scholar search, local dataset lookup, binary indices, local Ollama models, paper analysis, scoring, and final reports.
+
+The default mini manifest path is:
+
+```text
+semantic_scholar/mini_corpora/mendelian_v1/manifest.json
+```
+
+The manifest contains only dataset-specific IDs. Running `--mini` uses the Semantic Scholar dataset API to stream the matching release shards, writes compact extracted rows into `semantic_scholar/datasets/`, and builds the normal binary indices. `semantic_scholar/datasets/` remains ignored local runtime data.
+
+The manifest describes a manually curated Mendelian-disease subset:
+
+```json
+{
+  "release_id": "2026-05-26",
+  "mini_release_id": "2026-05-26-mini-mendelian-v1",
+  "datasets": {
+    "papers": {"corpus_ids": []},
+    "abstracts": {"corpus_ids": []},
+    "tldrs": {"corpus_ids": []},
+    "s2orc_v2": {"corpus_ids": []},
+    "authors": {"author_ids": []}
+  }
+}
+```
+
+Running `--mini` fetches only the listed IDs into a compact release such as `2026-05-26-mini-mendelian-v1`, then builds the normal binary indices. A fresh checkout can therefore build the Mendelian mini corpus without first recreating the curation workflow.
+
+The helper workflow for the Mendelian corpus is:
+
+```bash
+# Capture/query provenance and candidate papers.
+python -m semantic_scholar.utils.mini_corpus_curator
+
+# Optionally expand selected seed papers through their references.
+python -m semantic_scholar.utils.mini_corpus_curator --expand-references --resume
+
+# Scan dataset shards, write ignored curation/cache artifacts, and update the minimal manifest.
+python -m semantic_scholar.utils.mini_manifest_builder
+
+# If the ignored curation cache already exists, rebuild the manifest without rescanning remote shards.
+python -m semantic_scholar.utils.mini_manifest_builder --reuse-source-extracts
+```
+
+The Data page can run the same manifest-backed downloader from the browser; its mini action executes `python -m semantic_scholar.utils.downloader --mini --mini-manifest ...`, streams Semantic Scholar dataset shards for the requested IDs, and shows the job logs.
+
+**Note:** S2ORC v2 access may require Semantic Scholar dataset API permissions. Check the Semantic Scholar Datasets API release metadata for the `s2orc_v2` dataset.
 
 ### Running the Application
 

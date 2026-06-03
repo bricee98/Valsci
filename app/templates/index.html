@@ -7,15 +7,8 @@
         <span>{{ migration_status.pending_count }} legacy batch folder(s) are still outside the canonical claim store.</span>
         <div class="inline-actions">
             <a href="{{ url_for('api.migration_page') }}" class="primary-button small-button">Review Migration</a>
-            <button type="button" class="secondary-button small-button" id="migrateAllBtn">Migrate All</button>
+            <button type="button" class="secondary-button small-button" id="migrateAllBtn">Migrate &amp; Archive</button>
         </div>
-    </section>
-    {% endif %}
-
-    {% if mock_s2_enabled %}
-    <section class="status-card info-card">
-        <strong>Mock Semantic Scholar mode is active.</strong>
-        <span>Retrieval results are synthetic so you can validate arena launch, progress, review, and history without downloading Semantic Scholar datasets.</span>
     </section>
     {% endif %}
 
@@ -115,26 +108,36 @@
 
         <div class="section-stack">
             <article class="panel">
+                <div class="panel-header">
+                    <div>
+                        <h2 class="panel-title">Data</h2>
+                        <p class="panel-subtitle">Current Semantic Scholar release and index readiness.</p>
+                    </div>
+                    <a href="{{ url_for('api.data_page') }}" class="secondary-button small-button">Open Data</a>
+                </div>
+                <div id="homeDataStatus" class="status-card info-card hidden"></div>
+                <div class="summary-strip" id="homeDataSummary">
+                    <div class="summary-cell">
+                        <span class="label">Release</span>
+                        <span class="value">Checking...</span>
+                    </div>
+                    <div class="summary-cell">
+                        <span class="label">Data</span>
+                        <span class="value">Checking...</span>
+                    </div>
+                    <div class="summary-cell">
+                        <span class="label">Index</span>
+                        <span class="value">Checking...</span>
+                    </div>
+                </div>
+            </article>
+
+            <article class="panel">
                 <div class="inline-actions">
                     <a href="{{ url_for('api.arena_submit') }}" class="primary-button">New Arena</a>
                     <a href="{{ url_for('api.arenas_page') }}" class="secondary-button">View Arenas</a>
                 </div>
             </article>
-
-            {% if mock_claim_sets %}
-            <article class="panel">
-                <div class="panel-header">
-                    <div>
-                        <h2 class="panel-title">Mock Claim Sets</h2>
-                    </div>
-                </div>
-                <div class="inline-actions">
-                    {% for claim_set in mock_claim_sets %}
-                    <button type="button" class="secondary-button small-button" data-load-claim-set="{{ claim_set.pack_id }}">{{ claim_set.label }}</button>
-                    {% endfor %}
-                </div>
-            </article>
-            {% endif %}
 
             <article class="panel">
                 <div class="panel-header">
@@ -183,7 +186,6 @@
     <script>
         window.homePageConfig = {
             providers: {{ providers|tojson }},
-            mockClaimSets: {{ mock_claim_sets|tojson }},
         };
     </script>
 {% endblock %}

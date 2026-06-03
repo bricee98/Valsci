@@ -8,7 +8,7 @@
     candidateStyle,
   } = window.ValsciUI;
 
-  const config = window.arenaBuilderConfig || { providers: [], mockClaimSets: [] };
+  const config = window.arenaBuilderConfig || { providers: [] };
   const providerCatalog = [...(config.providers || [])];
   const stageNames = ["query_generation", "paper_analysis", "venue_scoring", "final_report"];
   const candidatePalette = ["#0f766e", "#c2410c", "#1d4ed8", "#b45309", "#be123c", "#4f46e5"];
@@ -593,19 +593,6 @@
     renderClaims();
     invalidatePreflight();
     renderLaunchReview();
-  });
-
-  document.querySelectorAll("[data-load-claim-set]").forEach(button => {
-    button.addEventListener("click", () => {
-      const claimSet = (config.mockClaimSets || []).find(item => item.pack_id === button.dataset.loadClaimSet);
-      if (!claimSet) {
-        return;
-      }
-      stagedClaims = [...claimSet.claims];
-      renderClaims();
-      invalidatePreflight();
-      renderLaunchReview();
-    });
   });
 
   [

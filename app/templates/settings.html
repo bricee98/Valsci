@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="section-stack settings-page">
+    <article class="panel">
+        <div class="panel-header">
+            <div>
+                <h2 class="panel-title">Configuration File</h2>
+                <p class="panel-subtitle">Values are saved to the local env_vars.json file and applied to this web process where possible.</p>
+            </div>
+            <div class="inline-actions">
+                <button type="button" class="secondary-button small-button" id="reloadEnvVarsBtn">Reload</button>
+                <button type="button" class="primary-button small-button" id="saveEnvVarsBtn">Save Changes</button>
+            </div>
+        </div>
+
+        <div id="envVarsStatus" class="status-card info-card hidden"></div>
+        <div class="summary-strip">
+            <div class="summary-cell">
+                <span class="label">Config File</span>
+                <span class="value data-path" id="envVarsPath">Loading...</span>
+            </div>
+            <div class="summary-cell">
+                <span class="label">Template</span>
+                <span class="value data-path" id="envVarsExamplePath">Loading...</span>
+            </div>
+        </div>
+    </article>
+
+    <article class="panel">
+        <div class="panel-header">
+            <div>
+                <h2 class="panel-title">Environment Values</h2>
+                <p class="panel-subtitle">Sensitive values are masked in the editor until revealed.</p>
+            </div>
+            <span id="envVarsDirtyBadge" class="badge warning-badge hidden">Unsaved changes</span>
+        </div>
+        <div id="envVarsList" class="env-var-list"></div>
+    </article>
+</section>
+{% endblock %}
+
+{% block scripts %}
+    <script src="{{ url_for('static', filename='settings.js') }}"></script>
+{% endblock %}

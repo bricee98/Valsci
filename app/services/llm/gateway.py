@@ -936,6 +936,9 @@ class LLMGateway:
     async def _initialize_ollama_context(self) -> None:
         show_url = self.ollama_show_url or self._derive_ollama_show_url(self.base_url)
         model_name = self.default_model
+        if not model_name:
+            self._ollama_show_error = None
+            return
         try:
             details = None
             if isinstance(self.provider, OllamaProvider):

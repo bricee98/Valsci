@@ -1,18 +1,51 @@
 {
   "providers": [
     {
-      "provider_id": "openai",
+      "azure_openai_api_version": "2024-06-01",
+      "enabled": false,
       "label": "OpenAI",
+      "models": [
+        {
+          "context_window_tokens": 8192,
+          "enabled": true,
+          "input_cost_per_million": 0,
+          "label": "gpt-5.1",
+          "max_output_tokens_default": 1024,
+          "model_name": "gpt-5.1",
+          "output_cost_per_million": 0,
+          "supports_json_mode": true,
+          "supports_temperature": true
+        },
+        {
+          "context_window_tokens": 8192,
+          "enabled": true,
+          "input_cost_per_million": 0,
+          "label": "gpt-5.4-thinking",
+          "max_output_tokens_default": 1024,
+          "model_name": "gpt-5.4-thinking",
+          "output_cost_per_million": 0,
+          "supports_json_mode": true,
+          "supports_temperature": true
+        }
+      ],
+      "provider_id": "openai",
       "provider_type": "openai",
-      "api_key": "test",
+      "task_defaults": {},
+      "api_key": "test"
+    },
+    {
+      "provider_id": "ollama",
+      "label": "Ollama",
+      "provider_type": "ollama",
+      "base_url": "http://localhost:11434",
       "azure_openai_api_version": "2024-06-01",
       "task_defaults": {},
       "models": [
         {
-          "model_name": "gpt-5.1",
-          "label": "gpt-5.1",
+          "model_name": "gemma4:31b",
+          "label": "gemma4:31b",
           "context_window_tokens": 8192,
-          "max_output_tokens_default": 1024,
+          "max_output_tokens_default": 2048,
           "input_cost_per_million": 0,
           "output_cost_per_million": 0,
           "supports_temperature": true,
@@ -20,10 +53,21 @@
           "enabled": true
         },
         {
-          "model_name": "gpt-5.4-thinking",
-          "label": "gpt-5.4-thinking",
+          "model_name": "gemma4:latest",
+          "label": "gemma4:latest",
           "context_window_tokens": 8192,
-          "max_output_tokens_default": 1024,
+          "max_output_tokens_default": 2048,
+          "input_cost_per_million": 0,
+          "output_cost_per_million": 0,
+          "supports_temperature": true,
+          "supports_json_mode": true,
+          "enabled": true
+        },
+        {
+          "model_name": "llama3.1:8b",
+          "label": "llama3.1:8b",
+          "context_window_tokens": 131072,
+          "max_output_tokens_default": 8192,
           "input_cost_per_million": 0,
           "output_cost_per_million": 0,
           "supports_temperature": true,
@@ -31,24 +75,25 @@
           "enabled": true
         }
       ],
-      "enabled": true
+      "enabled": true,
+      "api_key": ""
     },
     {
-      "api_key": "",
       "azure_ai_inference_endpoint": "",
       "azure_openai_api_version": "2024-06-01",
       "azure_openai_endpoint": "",
-      "base_url": "http://localhost:11434",
+      "base_url": "https://openrouter.ai/api/v1",
       "default_model": "",
       "enabled": false,
       "http_referer": "",
-      "label": "Ollama",
+      "label": "OpenRouter",
       "local_backend": "",
       "models": [],
-      "provider_id": "ollama",
-      "provider_type": "ollama",
+      "provider_id": "openrouter",
+      "provider_type": "openrouter",
       "site_name": "",
-      "task_defaults": {}
+      "task_defaults": {},
+      "api_key": ""
     }
   ]
 }

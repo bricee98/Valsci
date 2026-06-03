@@ -5,6 +5,14 @@
   let selectedBatchId = null;
   let selectedBatchDetail = null;
 
+  function clearReview() {
+    byId("migrationReviewPanel").classList.add("hidden");
+    byId("migrationReviewActions").classList.add("hidden");
+    hideStatus(byId("migrationReviewStatus"));
+    selectedBatchId = null;
+    selectedBatchDetail = null;
+  }
+
   function renderTable() {
     const target = byId("migrationTableBody");
     if (!migrationBatches.length) {
@@ -12,21 +20,27 @@
       return;
     }
 
-    target.innerHTML = migrationBatches.map(batch => `
-      <tr>
-        <td><strong>${escapeHtml(batch.batch_id)}</strong></td>
-        <td>${batch.claim_count}</td>
-        <td>${escapeHtml(formatDateTime(batch.last_modified_at))}</td>
-        <td><span class="badge ${batch.status === "pending" ? "warning-badge" : "neutral-badge"}">${escapeHtml(batch.status.replace(/_/g, " "))}</span></td>
-        <td>${escapeHtml((batch.roots || []).join(", "))}</td>
-        <td>
-          <div class="inline-actions">
-            <button type="button" class="secondary-button small-button" data-review="${escapeHtml(batch.batch_id)}">Review contents</button>
-            <button type="button" class="primary-button small-button" data-import="${escapeHtml(batch.batch_id)}">Import</button>
-          </div>
-        </td>
-      </tr>
-    `).join("");
+    target.innerHTML = migrationBatches.map(batch => {
+      const imported = batch.status === "imported";
+      const partiallyImported = batch.status === "partially_imported";
+      const actionLabel = imported ? "Archive" : partiallyImported ? "Import Remaining" : "Import";
+      const badgeClass = batch.status === "pending" || partiallyImported ? "warning-badge" : "neutral-badge";
+      return `
+        <tr>
+          <td><strong>${escapeHtml(batch.batch_id)}</strong></td>
+          <td>${batch.claim_count}</td>
+          <td>${escapeHtml(formatDateTime(batch.last_modified_at))}</td>
+          <td><span class="badge ${badgeClass}">${escapeHtml(batch.status.replace(/_/g, " "))}</span></td>
+          <td>${escapeHtml((batch.roots || []).join(", "))}</td>
+          <td>
+            <div class="inline-actions">
+              <button type="button" class="secondary-button small-button" data-review="${escapeHtml(batch.batch_id)}">Review contents</button>
+              <button type="button" class="primary-button small-button" data-import="${escapeHtml(batch.batch_id)}">${actionLabel}</button>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join("");
   }
 
   function renderReviewActions(detail) {
@@ -40,13 +54,14 @@
 
     const imported = detail.status === "imported";
     const partiallyImported = detail.status === "partially_imported";
-    byId("reviewImportBtn").disabled = imported;
+    byId("reviewImportBtn").disabled = false;
+    byId("reviewImportBtn").textContent = imported ? "Archive Legacy Copy" : partiallyImported ? "Import Remaining & Archive" : "Import & Archive";
     byId("reviewDeleteBtn").disabled = imported || partiallyImported;
 
     if (imported) {
       setStatus(byId("migrationReviewStatus"), {
         title: "Legacy copy already imported",
-        message: "Deletion stays disabled here for safety once a batch has canonical imported runs.",
+        message: "Canonical runs already exist. Use Archive Legacy Copy to move the old folder into the migration archive.",
         tone: "info",
       });
       return;
@@ -102,18 +117,26 @@
   }
 
   async function importBatch(batchId, archiveAfter = false) {
-    await fetchJson(`/api/v1/migration/batches/${encodeURIComponent(batchId)}/import`, {
+    const data = await fetchJson(`/api/v1/migration/batches/${encodeURIComponent(batchId)}/import`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ archive_after: archiveAfter }),
     });
+    const archived = Boolean(data.archive?.archived);
+    const createdCount = (data.runs || []).filter(run => !run.already_imported).length;
     setStatus(byId("migrationStatus"), {
-      title: archiveAfter ? "Batch imported and archived" : "Batch imported",
-      message: `${batchId} has been imported into the claim store.`,
+      title: archived && !createdCount ? "Legacy copy archived" : archiveAfter ? "Batch imported and archived" : "Batch imported",
+      message: archived
+        ? `${batchId} has canonical runs and its legacy folder was moved to the migration archive.`
+        : `${batchId} has been imported into the claim store.`,
       tone: "success",
     });
     await loadBatches();
-    await reviewBatch(batchId).catch(() => {});
+    if (archived) {
+      clearReview();
+      return;
+    }
+    await reviewBatch(batchId).catch(() => clearReview());
   }
 
   async function deleteBatch(batchId) {
@@ -125,21 +148,33 @@
       message: `${batchId} was removed from the legacy transport folders.`,
       tone: "warning",
     });
-    byId("migrationReviewPanel").classList.add("hidden");
-    byId("migrationReviewActions").classList.add("hidden");
-    hideStatus(byId("migrationReviewStatus"));
-    selectedBatchId = null;
-    selectedBatchDetail = null;
+    clearReview();
     await loadBatches();
   }
 
   async function importAll() {
-    await fetchJson("/api/v1/migration/import_all", { method: "POST" });
-    setStatus(byId("migrationStatus"), {
-      title: "Pending legacy batches imported",
-      message: "All pending legacy folders were imported into the claim store.",
-      tone: "success",
+    const data = await fetchJson("/api/v1/migration/import_all", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archive_after: true }),
     });
+    const batchCount = data.batch_count || 0;
+    const remaining = data.remaining_pending_count || 0;
+    if (!batchCount) {
+      setStatus(byId("migrationStatus"), {
+        title: "No pending legacy batches",
+        message: "All detected legacy folders already have canonical runs or there are no legacy folders to migrate.",
+        tone: "info",
+      });
+      await loadBatches();
+      return;
+    }
+    setStatus(byId("migrationStatus"), {
+      title: remaining ? "Some pending batches remain" : "Pending legacy batches migrated",
+      message: `${batchCount} batch${batchCount === 1 ? "" : "es"} processed; ${data.created_count || 0} new run${data.created_count === 1 ? "" : "s"} created; ${data.already_imported_count || 0} already existed; ${data.archived_count || 0} legacy folder${data.archived_count === 1 ? "" : "s"} archived.`,
+      tone: remaining ? "warning" : "success",
+    });
+    clearReview();
     await loadBatches();
   }
 

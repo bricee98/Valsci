@@ -1,8 +1,9 @@
 import json
 import requests
 from pathlib import Path
-from typing import Any, List, Dict, Optional, Generator
+from typing import Any, List, Dict, Optional, Generator, Tuple
 import time
+import re
 from rich.console import Console
 import ijson
 from openai import OpenAI
@@ -76,7 +77,7 @@ class S2Searcher:
             metadata_files = list(binary_indices_dir.glob("*_metadata.json"))
             if metadata_files:
                 # Extract release IDs from metadata filenames
-                releases = [f.name.split('_')[0] for f in metadata_files]
+                releases = [f.name[: -len('_metadata.json')] for f in metadata_files]
                 latest = max(releases) if releases else None
                 logger.info(f"Found releases in binary_indices: {releases}, using latest: {latest}")
                 return latest
@@ -86,7 +87,11 @@ class S2Searcher:
             logger.warning(f"Base directory does not exist: {self.base_dir}")
             return None
         
-        releases = [d.name for d in self.base_dir.iterdir() if d.is_dir() and not d.name == 'binary_indices']
+        releases = [
+            d.name
+            for d in self.base_dir.iterdir()
+            if d.is_dir() and re.match(r'\d{4}-\d{2}-\d{2}', d.name)
+        ]
         logger.info(f"Found releases in base directory: {releases}")
         return max(releases) if releases else None
 
@@ -304,8 +309,24 @@ class S2Searcher:
             result['detail'] = detail
         return result
 
+    @staticmethod
+    def _first_present(data: Dict[str, Any], keys: List[str]) -> Any:
+        for key in keys:
+            if isinstance(data, dict) and key in data:
+                return data.get(key)
+        return None
+
+    @classmethod
+    def _extract_s2orc_v2_text(cls, record: Dict[str, Any]) -> Tuple[Optional[str], str]:
+        body = record.get('body') if isinstance(record, dict) else None
+        if isinstance(body, dict):
+            text = body.get('text')
+            if isinstance(text, str) and text.strip():
+                return text.strip(), 'body.text'
+        return None, 'body.text missing'
+
     def get_paper_content(self, corpus_id: str) -> Dict[str, Any]:
-        """Get full paper content from S2ORC or abstract data, using the BinaryIndexer."""
+        """Get full paper content from local S2ORC v2, abstract, or TLDR data."""
         logger.info(f"Attempting to get content for corpus ID: {corpus_id}")
         logger.info(f"Current release: {self.current_release}")
         logger.info(f"Has local data: {self.has_local_data}")
@@ -321,41 +342,36 @@ class S2Searcher:
             )
         
         try:
-            # Try S2ORC first for full text
-            logger.info("Attempting S2ORC lookup...")
-            s2orc_record = self.indexer.lookup(
+            # Try S2ORC v2 first for full text
+            logger.info("Attempting S2ORC v2 lookup...")
+            s2orc_v2_record = self.indexer.lookup(
                 release_id=self.current_release,
-                dataset='s2orc',
+                dataset='s2orc_v2',
                 id_type='corpus_id',
                 search_id=str(corpus_id)
             )
-            
-            if s2orc_record:
-                logger.info("Found record in S2ORC")
-                if s2orc_record.get('pdf_parse', {}).get('body_text'):
-                    logger.info("Found full text in S2ORC record")
-                    full_text = "\n\n".join(
-                        section.get('text', '')
-                        for section in s2orc_record['pdf_parse']['body_text']
-                    )
+
+            if s2orc_v2_record:
+                logger.info("Found record in S2ORC v2")
+                full_text, detail = self._extract_s2orc_v2_text(s2orc_v2_record)
+                if full_text:
+                    logger.info("Found full text in S2ORC v2 record")
                     return {
                         'text': full_text,
-                        'source': 's2orc',
-                        'pdf_hash': s2orc_record.get('pdf_parse', {}).get('pdf_hash'),
+                        'source': 's2orc_v2',
+                        'pdf_hash': None,
                         'status': 'ok',
                         'lookup_details': {
                             'corpus_id': str(corpus_id),
                             'release_id': self.current_release,
                             'has_local_data': bool(self.has_local_data),
-                            'attempts': attempts + [self._attempt_result('s2orc', 'found_text')],
+                            'attempts': attempts + [self._attempt_result('s2orc_v2', 'found_text', detail)],
                         },
                     }
-                else:
-                    logger.info("S2ORC record found but no body text available")
-                    attempts.append(self._attempt_result('s2orc', 'record_without_text', 'pdf_parse.body_text missing'))
+                logger.info("S2ORC v2 record found but no body text available")
+                attempts.append(self._attempt_result('s2orc_v2', 'record_without_text', detail))
             else:
-                attempts.append(self._attempt_result('s2orc', 'missing_record'))
-
+                attempts.append(self._attempt_result('s2orc_v2', 'missing_record'))
 
             # Fallback to abstracts dataset
             logger.info("Attempting abstracts lookup...")

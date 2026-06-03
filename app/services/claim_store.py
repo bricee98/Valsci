@@ -1364,12 +1364,15 @@ class ClaimStore:
                     yield root_name, batch_dir, claim_file
 
     def list_legacy_batches(self) -> List[Dict[str, Any]]:
-        imported_counts = Counter()
+        imported_claims = set()
         for run in self.list_runs():
+            transport = run.get("transport") or {}
             legacy = run.get("legacy_lookup") or {}
-            batch_id = legacy.get("batch_id")
-            if batch_id:
-                imported_counts[str(batch_id)] += 1
+            for lookup in [transport, legacy]:
+                batch_id = lookup.get("batch_id")
+                claim_id = lookup.get("claim_id")
+                if batch_id and claim_id:
+                    imported_claims.add((str(batch_id), str(claim_id)))
 
         grouped: Dict[str, Dict[str, Any]] = {}
         for root_name, batch_dir, claim_file in self._iter_legacy_claim_files():
@@ -1381,9 +1384,12 @@ class ClaimStore:
                     "roots": [],
                     "status": "pending",
                     "last_modified_at": None,
+                    "imported_count": 0,
                 },
             )
             entry["claim_count"] += 1
+            if (batch_dir.name, claim_file.stem) in imported_claims:
+                entry["imported_count"] += 1
             if root_name not in entry["roots"]:
                 entry["roots"].append(root_name)
             modified_at = datetime.fromtimestamp(claim_file.stat().st_mtime, tz=timezone.utc).isoformat()
@@ -1392,7 +1398,7 @@ class ClaimStore:
 
         summaries = []
         for batch_id, entry in grouped.items():
-            imported_count = imported_counts.get(batch_id, 0)
+            imported_count = entry.get("imported_count", 0)
             status = "imported" if imported_count else "pending"
             if imported_count and imported_count < entry["claim_count"]:
                 status = "partially_imported"
@@ -1528,9 +1534,13 @@ class ClaimStore:
 
         for run in self.list_runs():
             legacy = run.get("legacy_lookup") or {}
-            if legacy.get("batch_id") != batch_id:
+            transport = run.get("transport") or {}
+            if legacy.get("batch_id") == batch_id:
+                claim_id = legacy.get("claim_id") or transport.get("claim_id")
+            elif transport.get("batch_id") == batch_id:
+                claim_id = transport.get("claim_id")
+            else:
                 continue
-            claim_id = legacy.get("claim_id") or (run.get("transport") or {}).get("claim_id")
             if not claim_id:
                 continue
             for root_name in ["saved_jobs", "queued_jobs"]:
@@ -1540,13 +1550,23 @@ class ClaimStore:
                     run["artifact_paths"][f"{root_name}_file"] = str(archived_claim.resolve())
                     run["location"] = f"archived_{root_name}"
             for artifact_dir, key in [("traces", "trace_file"), ("issues", "issues_file")]:
-                for candidate in [
-                    self.archive_dir / "traces" / batch_id / artifact_dir / f"{claim_id}.jsonl",
-                    self.archive_dir / "traces" / batch_id / artifact_dir / f"{claim_id}.jsonl.gz",
-                ]:
-                    if candidate.exists():
-                        run.setdefault("artifact_paths", {})
-                        run["artifact_paths"][key] = str(candidate.resolve())
+                artifact_bases = [
+                    self.archive_dir / "traces" / batch_id,
+                    self.archive_dir / "saved_jobs" / batch_id,
+                    self.archive_dir / "queued_jobs" / batch_id,
+                ]
+                found_artifact = False
+                for artifact_base in artifact_bases:
+                    for candidate in [
+                        artifact_base / artifact_dir / f"{claim_id}.jsonl",
+                        artifact_base / artifact_dir / f"{claim_id}.jsonl.gz",
+                    ]:
+                        if candidate.exists():
+                            run.setdefault("artifact_paths", {})
+                            run["artifact_paths"][key] = str(candidate.resolve())
+                            found_artifact = True
+                            break
+                    if found_artifact:
                         break
             self.save_run(run)
 
@@ -1556,7 +1576,11 @@ class ClaimStore:
         }
 
     def delete_legacy_batch(self, batch_id: str) -> Dict[str, Any]:
-        imported = any((run.get("legacy_lookup") or {}).get("batch_id") == batch_id for run in self.list_runs())
+        imported = any(
+            (run.get("legacy_lookup") or {}).get("batch_id") == batch_id
+            or (run.get("transport") or {}).get("batch_id") == batch_id
+            for run in self.list_runs()
+        )
         if imported:
             raise ValueError("This legacy batch has already been imported. Archive it instead of deleting it.")
 

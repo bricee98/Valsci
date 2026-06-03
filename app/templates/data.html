@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="data-layout">
+    <div class="section-stack">
+        <article class="panel">
+            <div class="panel-header">
+                <div>
+                    <h2 class="panel-title">Local Data State</h2>
+                    <p class="panel-subtitle">Semantic Scholar releases currently available on this machine.</p>
+                </div>
+                <button type="button" class="secondary-button small-button" id="refreshDataBtn">Refresh</button>
+            </div>
+            <div id="dataStatusCard" class="status-card info-card hidden"></div>
+            <div id="dataSummary" class="summary-strip"></div>
+        </article>
+
+        <article class="panel">
+            <div class="panel-header">
+                <div>
+                    <h2 class="panel-title">Releases</h2>
+                    <p class="panel-subtitle">Choose a release to inspect files and indices.</p>
+                </div>
+                <div class="inline-actions">
+                    <select id="releaseSelect" class="compact-select"></select>
+                    <button type="button" class="primary-button small-button" id="newReleaseBtn">New Release</button>
+                </div>
+            </div>
+            <div id="releaseActionStatus" class="status-card info-card hidden"></div>
+            <div id="releaseDetails" class="stack"></div>
+        </article>
+
+        <article class="panel">
+            <div class="panel-header">
+                <div>
+                    <h2 class="panel-title">Dataset Coverage</h2>
+                    <p class="panel-subtitle">Files and binary indices for the selected release.</p>
+                </div>
+            </div>
+            <div id="datasetTable" class="data-table-wrap"></div>
+        </article>
+    </div>
+
+    <aside class="section-stack">
+        <article class="panel">
+            <div class="panel-header">
+                <div>
+                    <h2 class="panel-title">Current Job</h2>
+                    <p class="panel-subtitle">Downloader output streams here while the job runs.</p>
+                </div>
+                <span id="jobStatusBadge" class="badge neutral-badge">Idle</span>
+            </div>
+            <div id="jobSummary" class="stack"></div>
+            <pre id="jobLog" class="job-log" aria-live="polite"></pre>
+            <div class="inline-actions">
+                <button type="button" class="danger-button small-button hidden" id="cancelDataJobBtn">Cancel Job</button>
+            </div>
+        </article>
+
+        <article class="panel">
+            <div class="panel-header">
+                <div>
+                    <h2 class="panel-title">Recent Data Jobs</h2>
+                </div>
+            </div>
+            <div id="recentDataJobs" class="record-list"></div>
+        </article>
+    </aside>
+</section>
+
+<div id="newReleaseModal" class="modal hidden">
+    <div class="modal-card data-release-modal">
+        <div class="panel-header">
+            <div>
+                <h2 class="panel-title">New Release</h2>
+                <p class="panel-subtitle">Create a local Semantic Scholar release.</p>
+            </div>
+            <button type="button" class="ghost-button small-button" id="closeNewReleaseBtn">Close</button>
+        </div>
+
+        <div id="newReleaseStatus" class="status-card info-card hidden"></div>
+
+        <div class="form-row release-type-row">
+            <span class="form-label">Release Type</span>
+            <div class="release-type-options" role="radiogroup" aria-label="Release Type">
+                <label class="release-type-option">
+                    <input type="radio" name="newReleaseType" value="mini" checked>
+                    <span>
+                        <strong>Curated Mini</strong>
+                        <small>Mendelian corpus from the bundled ID manifest.</small>
+                    </span>
+                </label>
+                <label class="release-type-option">
+                    <input type="radio" name="newReleaseType" value="full">
+                    <span>
+                        <strong>Full Dataset</strong>
+                        <small>Selected Semantic Scholar datasets for a release.</small>
+                    </span>
+                </label>
+            </div>
+        </div>
+
+        <div id="miniReleaseFields" class="wizard-fields">
+            <div id="miniManifestSummary" class="status-card info-card"></div>
+            <div class="form-row">
+                <label for="miniManifestPath">Mini Manifest</label>
+                <input type="text" id="miniManifestPath">
+            </div>
+        </div>
+
+        <div id="fullReleaseFields" class="wizard-fields hidden">
+            <div class="form-row">
+                <label for="releaseInput">Release</label>
+                <input type="text" id="releaseInput" placeholder="latest">
+            </div>
+            <div class="form-row">
+                <label>Datasets</label>
+                <div id="wizardDatasetPicker" class="dataset-picker"></div>
+            </div>
+        </div>
+
+        <div class="inline-actions">
+            <button type="button" class="primary-button" id="startNewReleaseBtn">Start</button>
+            <button type="button" class="ghost-button" id="cancelNewReleaseBtn">Cancel</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+    <script src="{{ url_for('static', filename='data.js') }}"></script>
+{% endblock %}

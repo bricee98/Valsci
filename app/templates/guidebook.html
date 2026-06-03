@@ -47,6 +47,23 @@
         display: grid;
         gap: 24px;
     }
+    .guidebook-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+    }
+    .guidebook-toolbar-copy {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+    .guidebook-copy-status {
+        color: var(--ink-muted);
+        font-size: 0.9rem;
+        font-weight: 700;
+    }
     .guidebook-section h2 {
         margin: 0 0 4px;
     }
@@ -120,6 +137,7 @@
             <li><a href="#concepts">Key Concepts</a></li>
             <li><a href="#navigation">Navigation &amp; Layout</a></li>
             <li><a href="#home">Home Page</a></li>
+            <li><a href="#data">Data</a></li>
             <li><a href="#claims-browser">Claims Browser</a></li>
             <li><a href="#claim-detail">Claim Detail</a></li>
             <li><a href="#results">Claim Report</a></li>
@@ -137,6 +155,16 @@
 
     <!-- ===== MAIN CONTENT ===== -->
     <div class="guidebook-body">
+        <div class="panel guidebook-toolbar">
+            <div>
+                <h2 class="panel-title">Guidebook</h2>
+                <p class="panel-subtitle">Use the table of contents to jump around, or copy the full guide as Markdown.</p>
+            </div>
+            <div class="guidebook-toolbar-copy">
+                <button type="button" class="secondary-button small-button" id="copyGuidebookMarkdownBtn">Copy as Markdown</button>
+                <span class="guidebook-copy-status" id="copyGuidebookStatus" aria-live="polite"></span>
+            </div>
+        </div>
 
         <!-- ============================================================ -->
         <!-- SECTION: What Is Valsci?                                     -->
@@ -173,7 +201,7 @@
             <p>Before every submission, you can click <strong>Estimate Cost</strong> to see a preflight calculation. The actual cost may differ slightly because token counts are estimates until the LLM responds. All costs are tracked per run and visible in reports, batch results, and arena workspaces.</p>
 
             <div class="gb-tip">
-                <strong>Tip:</strong> If you're just exploring or testing, enable Mock Data Mode in your configuration. It uses synthetic paper data instead of real Semantic Scholar calls, so you can try every feature without incurring any cost.
+                <strong>Tip:</strong> If you're exploring locally, start with the curated mini corpus on the Data page. It keeps the production Semantic Scholar lookup path intact while using a small focused dataset.
             </div>
         </section>
 
@@ -248,9 +276,6 @@
                 <dt>Bibliometrics</dt>
                 <dd>Quantitative measures of paper and author quality, including author H-index, citation count, and journal impact. When enabled, these scores weight evidence so that higher-quality sources carry more influence in the final verdict.</dd>
 
-                <dt>Mock Data Mode</dt>
-                <dd>A testing mode that uses synthetic paper data instead of calling Semantic Scholar. Useful for validating the full pipeline without consuming API quota. Indicated by a "Mock Data" badge in the navigation bar.</dd>
-
                 <dt>Trace</dt>
                 <dd>A detailed, step-by-step log of every LLM call, API request, and processing decision made during a run. Useful for debugging, auditing prompt behavior, and understanding token usage.</dd>
 
@@ -296,7 +321,6 @@
 
             <h3>Status Indicators</h3>
             <ul>
-                <li><strong>Mock Data badge</strong> (top right) &mdash; A teal badge that appears when Mock Semantic Scholar mode is active. This means all paper retrieval uses synthetic data, not real Semantic Scholar results. Useful for testing.</li>
                 <li><strong>Logout button</strong> (top right) &mdash; Appears when password protection is enabled. Ends your session and redirects to the login page.</li>
             </ul>
 
@@ -323,7 +347,7 @@
             <p>If legacy batch folders exist from an older version of Valsci, a yellow warning banner appears at the top of the page. It shows how many legacy batches need attention and offers two actions:</p>
             <ul>
                 <li><strong>Review Migration</strong> &mdash; Opens the Migration page so you can inspect each legacy batch before importing.</li>
-                <li><strong>Migrate All</strong> &mdash; Immediately imports all pending legacy batches into the canonical claim store.</li>
+                <li><strong>Migrate &amp; Archive</strong> &mdash; Immediately imports all pending legacy batches into the canonical claim store and moves their old folders into the migration archive.</li>
             </ul>
 
             <h3>Run Claims Panel</h3>
@@ -377,9 +401,6 @@
                 <li><strong>View Arenas</strong> &mdash; Opens the Arenas Library.</li>
             </ul>
 
-            <h4>Mock Claim Sets</h4>
-            <p>When Mock Data Mode is active, preset claim sets are shown as buttons. Clicking one loads its claims into the textarea for quick testing.</p>
-
             <h4>Recent Arenas</h4>
             <p>Shows the most recently created arenas. Click <strong>Open Library</strong> to see all arenas.</p>
 
@@ -389,6 +410,117 @@
             <div class="gb-tip">
                 <strong>Tip:</strong> For best results, write claims as specific, testable scientific assertions rather than vague questions. "Omega-3 fatty acid supplementation reduces triglyceride levels in adults with hypertriglyceridemia" will produce much better results than "Is fish oil good for you?"
             </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- SECTION: Data                                                -->
+        <!-- ============================================================ -->
+        <section class="panel guidebook-section" id="data">
+            <h2 class="panel-title">Data</h2>
+            <p class="panel-subtitle">Inspect, download, index, and verify local Semantic Scholar data.</p>
+            <div class="panel-divider"></div>
+
+            <p>Navigate here using the <strong>Data</strong> link in the top navigation bar. The Data page is where you prepare Valsci for real Semantic Scholar retrieval. It shows which releases are present locally, which datasets are indexed, whether the API key is configured, and what downloader or indexer job is currently running.</p>
+
+            <h3>When to Use the Data Page</h3>
+            <ul>
+                <li><strong>First real-data setup</strong> &mdash; Build the curated Mendelian mini corpus or download full Semantic Scholar datasets before running claims.</li>
+                <li><strong>Pipeline rehearsal</strong> &mdash; Confirm that the mini release, full-text datasets, abstracts, TLDRs, authors, papers, and binary indices are all available before testing with local models such as Ollama.</li>
+                <li><strong>Maintenance</strong> &mdash; Rebuild indices after changing local dataset files, verify files after an interrupted download, or inspect which release Valsci will use.</li>
+                <li><strong>Readiness checks</strong> &mdash; Confirm that a Semantic Scholar API key, local release, and binary indices are available before running claims against real local data.</li>
+            </ul>
+
+            <h3>Semantic Scholar Readiness</h3>
+            <p>Valsci always uses the real Semantic Scholar retrieval path. The Data page shows whether the pieces needed for that path are present.</p>
+            <ul>
+                <li><strong>Semantic Scholar API key</strong> &mdash; Live search and dataset downloads need <code>SEMANTIC_SCHOLAR_API_KEY</code> in <code>app/config/env_vars.json</code>.</li>
+                <li><strong>Local release</strong> &mdash; Paper content lookup uses the latest local release unless a run selects another release.</li>
+                <li><strong>Binary indices</strong> &mdash; Dataset rows are found through corpus-ID and author-ID indices. Missing indices should be rebuilt before a rehearsal run.</li>
+            </ul>
+            <p>The app can start without the API key so the Data page remains available for setup and inspection, but live search and downloads will fail until the key is configured.</p>
+
+            <h3>Local Data State Panel</h3>
+            <p>The top-left panel summarizes the machine's Semantic Scholar setup:</p>
+            <ul>
+                <li><strong>Latest Release</strong> &mdash; The newest locally detected release ID, such as <code>2026-05-26-mini-mendelian-v1</code>.</li>
+                <li><strong>Local Releases</strong> &mdash; Count of release folders and indexed releases detected under the local Semantic Scholar dataset directory.</li>
+                <li><strong>Selected Size</strong> &mdash; Disk usage for the release currently selected in the Releases panel.</li>
+                <li><strong>S2 API Key</strong> &mdash; Shows whether <code>SEMANTIC_SCHOLAR_API_KEY</code> is configured. Downloads and live search require it.</li>
+                <li><strong>Status card</strong> &mdash; Warns when no release is present, the API key is missing, or setup work is still needed.</li>
+                <li><strong>Refresh</strong> &mdash; Re-scans local files, indices, manifest state, and data jobs.</li>
+            </ul>
+
+            <h3>Releases Panel</h3>
+            <p>The Releases panel lets you inspect one local Semantic Scholar release at a time.</p>
+            <ul>
+                <li><strong>Release selector</strong> &mdash; Choose among locally detected releases. Mini releases are labeled as mini.</li>
+                <li><strong>New Release</strong> &mdash; Opens a wizard for creating either the bundled Mendelian mini release or a selected full Semantic Scholar release.</li>
+                <li><strong>Type</strong> &mdash; Shows whether the selected release is a curated mini release or a full release.</li>
+                <li><strong>Size</strong> &mdash; Total size of dataset JSON files under that release.</li>
+                <li><strong>Topic</strong> &mdash; For manifest-backed mini releases, shows the topic label such as <code>mendelian_disease_v1</code>.</li>
+                <li><strong>Index</strong> &mdash; Summarizes whether the selected release has the binary indices needed for local lookup.</li>
+                <li><strong>Records written pills</strong> &mdash; Mini releases show counts for compact extracted datasets such as papers, authors, abstracts, TLDRs, and S2ORC v2 records.</li>
+                <li><strong>Manifest coverage card</strong> &mdash; Only appears for the bundled mini release. It compares local compact rows against the current tracked manifest. Full Semantic Scholar releases do not use a manifest; their readiness is based on downloaded dataset files and indices.</li>
+                <li><strong>Release Maintenance</strong> &mdash; Lets you verify the selected release or index/reindex selected datasets.</li>
+            </ul>
+
+            <h3>Dataset Coverage Panel</h3>
+            <p>This table is the fastest way to see whether the selected release can support production-style evidence lookup.</p>
+            <ul>
+                <li><strong>Dataset</strong> &mdash; The Semantic Scholar dataset name and label. Valsci expects papers, authors, abstracts, TLDRs, and S2ORC v2.</li>
+                <li><strong>Local Files</strong> &mdash; Shows whether JSON files exist for that dataset and how many local shard files were found.</li>
+                <li><strong>Size</strong> &mdash; Total disk footprint for that dataset in the selected release.</li>
+                <li><strong>Index</strong> &mdash; Shows binary index state by ID type, such as corpus ID or author ID. Missing index badges mean lookup will be slower or unavailable for that dataset.</li>
+                <li><strong>Role</strong> &mdash; Describes how the dataset is used. S2ORC v2 provides local full text, abstracts and TLDRs provide fallback text, papers provide metadata, and authors provide bibliometrics.</li>
+            </ul>
+
+            <h3>New Release Wizard</h3>
+            <p>The New Release wizard starts downloader and indexing jobs. Output appears in Current Job, and completed jobs appear in Recent Data Jobs.</p>
+            <ul>
+                <li><strong>Curated Mini</strong> &mdash; Runs the manifest-backed Mendelian mini builder. It reads the bundled ID manifest at <code>semantic_scholar/mini_corpora/mendelian_v1/manifest.json</code>, streams Semantic Scholar dataset shards for the fixed corpus and author IDs, writes compact dataset-shaped JSONL files into the ignored runtime datasets directory, and builds binary indices.</li>
+                <li><strong>Download Full Dataset Selection</strong> &mdash; Downloads selected full Semantic Scholar datasets for the requested release. This can consume a large amount of disk space, especially when S2ORC v2 is selected.</li>
+            </ul>
+
+            <h4>Mini Manifest</h4>
+            <p>When <strong>Curated Mini</strong> is selected, the <strong>Mini Manifest</strong> input points to the tracked Mendelian ID manifest, normally <code>semantic_scholar/mini_corpora/mendelian_v1/manifest.json</code>. Runtime release output and any source-row cache still go under <code>semantic_scholar/datasets</code>, which is ignored local data.</p>
+            <p>Full releases do not have or need a manifest. For a full release, Valsci downloads the selected Semantic Scholar datasets for the requested release ID and verifies them against the Semantic Scholar Datasets API file list.</p>
+
+            <h4>Release</h4>
+            <p>For full downloads, the <strong>Release</strong> input selects the Semantic Scholar release to download. Leaving it as <code>latest</code> uses the downloader's current latest-release behavior. Mini builds take their mini release ID from the manifest.</p>
+
+            <h4>Datasets</h4>
+            <p>The dataset picker controls which Semantic Scholar datasets a full release download touches. Selected-release verification and indexing use the dataset picker inside Release Maintenance.</p>
+
+            <h3>Current Job Panel</h3>
+            <ul>
+                <li><strong>Status badge</strong> &mdash; Shows idle, queued, running, success, failed, cancelled, or interrupted.</li>
+                <li><strong>Command</strong> &mdash; Displays the exact Python downloader command the app launched.</li>
+                <li><strong>Log stream</strong> &mdash; Shows downloader output while the job runs. It scrolls as new lines arrive.</li>
+                <li><strong>Cancel Job</strong> &mdash; Requests cancellation for queued or running jobs.</li>
+            </ul>
+
+            <h3>Recent Data Jobs Panel</h3>
+            <p>Recent jobs show their operation, status, creation time, and command. Use this history to confirm what was run after a long download or to inspect a failed command.</p>
+
+            <h3>Recommended First Real-Data Workflow</h3>
+            <ul>
+                <li>Open <strong>Data</strong> and confirm <strong>S2 API Key</strong> is configured.</li>
+                <li>Click <strong>New Release</strong>, choose <strong>Curated Mini</strong>, and confirm the Mendelian mini manifest path.</li>
+                <li>Start the job and watch <strong>Current Job</strong> until it succeeds.</li>
+                <li>Select the new mini release in <strong>Releases</strong>.</li>
+                <li>Check <strong>Dataset Coverage</strong> for papers, authors, abstracts, TLDRs, S2ORC v2, and indices.</li>
+                <li>Run a small claim batch using the same local Ollama model you plan to use in production rehearsal.</li>
+            </ul>
+
+            <h3>Troubleshooting</h3>
+            <ul>
+                <li><strong>Semantic Scholar API key is missing</strong> &mdash; Set <code>SEMANTIC_SCHOLAR_API_KEY</code> in <code>app/config/env_vars.json</code> before live search or downloads.</li>
+                <li><strong>Mini release needs rebuild</strong> &mdash; The tracked manifest changed after the selected mini release was built. Use <strong>New Release</strong> &rarr; <strong>Curated Mini</strong>, or run <code>python -m semantic_scholar.utils.downloader --mini</code>.</li>
+                <li><strong>Mini manifest missing</strong> &mdash; Restore the tracked mini package at <code>semantic_scholar/mini_corpora/mendelian_v1/manifest.json</code>, or pass a custom manifest path.</li>
+                <li><strong>Indices missing</strong> &mdash; Use <strong>Index</strong> or <strong>Reindex</strong> in Release Maintenance for the affected release and datasets.</li>
+                <li><strong>Full download feels too large</strong> &mdash; Use the curated mini corpus for desktop rehearsal. Full S2ORC datasets are large and can exceed practical local disk limits.</li>
+                <li><strong>Live search misses curated papers</strong> &mdash; Adjust the curated claims or manifest selection, then rebuild the mini corpus. The mini data is deterministic, but live search ranking can still change.</li>
+            </ul>
         </section>
 
         <!-- ============================================================ -->
@@ -630,7 +762,6 @@
                 <li><strong>Upload Claims</strong> &mdash; Load from a <code>.txt</code> file.</li>
                 <li><strong>Batch Tags</strong> &mdash; Optional labels for the arena's claims.</li>
                 <li><strong>Stage Claims</strong> / <strong>Clear</strong> &mdash; Move claims to the staging area or clear everything.</li>
-                <li><strong>Mock Claim Set buttons</strong> &mdash; Load preset claim sets (when Mock Data Mode is active).</li>
             </ul>
 
             <h3>Candidates Panel</h3>
@@ -867,11 +998,11 @@
             <h3>Header Actions</h3>
             <ul>
                 <li><strong>Refresh</strong> &mdash; Re-scan for legacy batch folders and update the status.</li>
-                <li><strong>Migrate All Pending</strong> &mdash; Import every pending legacy batch into the canonical claim store in one operation.</li>
+                <li><strong>Migrate &amp; Archive Pending</strong> &mdash; Import every pending legacy batch into the canonical claim store, then move those old folders into the migration archive.</li>
             </ul>
 
             <h3>Migration Status</h3>
-            <p>An info card showing how many legacy batches are pending migration.</p>
+            <p>An info card showing the result of the latest migration action, including how many runs were created, how many already existed, how many legacy folders were archived, and whether any pending batches remain.</p>
 
             <h3>Batch Table</h3>
             <p>A table listing all detected legacy batches with columns for:</p>
@@ -879,12 +1010,13 @@
                 <li><strong>Batch</strong> &mdash; The batch ID.</li>
                 <li><strong>Claims</strong> &mdash; Number of claims in the batch.</li>
                 <li><strong>Last Modified</strong> &mdash; When the batch was last updated.</li>
-                <li><strong>Status</strong> &mdash; Whether it's been imported or is still pending.</li>
+                <li><strong>Status</strong> &mdash; Whether the legacy folder is pending, partially imported, or already represented by canonical runs.</li>
                 <li><strong>Roots</strong> &mdash; Which legacy directories contain this batch's data.</li>
                 <li><strong>Actions</strong>:
                     <ul>
                         <li><strong>Review contents</strong> &mdash; Opens the Batch Review Panel below to inspect the claims in this batch.</li>
-                        <li><strong>Import</strong> &mdash; Import this specific batch into the canonical claim store.</li>
+                        <li><strong>Import</strong> &mdash; Import this specific pending batch into the canonical claim store and archive the legacy folder.</li>
+                        <li><strong>Archive</strong> &mdash; Move an already imported legacy folder into the migration archive without creating duplicate runs.</li>
                     </ul>
                 </li>
             </ul>
@@ -892,7 +1024,8 @@
             <h3>Batch Review Panel</h3>
             <p>Opens when you click "Review contents" on a batch. Shows each claim in the batch with its text, status, stage, and last update. Actions:</p>
             <ul>
-                <li><strong>Import</strong> &mdash; Import this reviewed batch.</li>
+                <li><strong>Import &amp; Archive</strong> &mdash; Import this reviewed batch and move the old folder into the migration archive.</li>
+                <li><strong>Archive Legacy Copy</strong> &mdash; Available when the canonical run already exists; moves the old folder into the migration archive.</li>
                 <li><strong>Delete Legacy Batch</strong> &mdash; Permanently remove the legacy batch folder without importing. Use this to clean up batches you no longer need.</li>
             </ul>
         </section>
@@ -953,4 +1086,163 @@
 
     </div><!-- .guidebook-body -->
 </div><!-- .guidebook-layout -->
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+    const button = document.getElementById("copyGuidebookMarkdownBtn");
+    const status = document.getElementById("copyGuidebookStatus");
+    if (!button || !status) {
+        return;
+    }
+
+    function squeeze(value) {
+        return String(value || "").replace(/\s+/g, " ").trim();
+    }
+
+    function inlineMarkdown(node) {
+        if (node.nodeType === Node.TEXT_NODE) {
+            return node.textContent || "";
+        }
+        if (node.nodeType !== Node.ELEMENT_NODE) {
+            return "";
+        }
+        const tag = node.tagName.toLowerCase();
+        if (tag === "br") {
+            return "\n";
+        }
+        if (tag === "code") {
+            return "`" + squeeze(node.textContent).replace(/`/g, "\\`") + "`";
+        }
+        const inner = Array.from(node.childNodes).map(inlineMarkdown).join("");
+        if (tag === "strong" || tag === "b") {
+            return "**" + squeeze(inner) + "**";
+        }
+        if (tag === "em" || tag === "i") {
+            return "*" + squeeze(inner) + "*";
+        }
+        if (tag === "a") {
+            const text = squeeze(inner);
+            const href = node.getAttribute("href") || "";
+            return href && !href.startsWith("#") ? `[${text}](${href})` : text;
+        }
+        return inner;
+    }
+
+    function inlineText(element) {
+        return squeeze(Array.from(element.childNodes).map(inlineMarkdown).join(""));
+    }
+
+    function appendList(list, lines, depth = 0) {
+        const ordered = list.tagName.toLowerCase() === "ol";
+        Array.from(list.children).filter((child) => child.tagName.toLowerCase() === "li").forEach((item, index) => {
+            const nestedLists = [];
+            const parts = [];
+            Array.from(item.childNodes).forEach((child) => {
+                if (child.nodeType === Node.ELEMENT_NODE && ["ul", "ol"].includes(child.tagName.toLowerCase())) {
+                    nestedLists.push(child);
+                } else {
+                    parts.push(inlineMarkdown(child));
+                }
+            });
+            const prefix = ordered ? `${index + 1}.` : "-";
+            lines.push(`${"  ".repeat(depth)}${prefix} ${squeeze(parts.join(""))}`);
+            nestedLists.forEach((nested) => appendList(nested, lines, depth + 1));
+        });
+        lines.push("");
+    }
+
+    function appendBlock(element, lines) {
+        if (element.nodeType !== Node.ELEMENT_NODE) {
+            return;
+        }
+        if (element.classList.contains("panel-divider") || element.classList.contains("guidebook-toolbar")) {
+            return;
+        }
+        const tag = element.tagName.toLowerCase();
+        if (tag === "h2") {
+            lines.push(`## ${inlineText(element)}`, "");
+            return;
+        }
+        if (tag === "h3") {
+            lines.push(`### ${inlineText(element)}`, "");
+            return;
+        }
+        if (tag === "h4") {
+            lines.push(`#### ${inlineText(element)}`, "");
+            return;
+        }
+        if (tag === "p") {
+            lines.push(inlineText(element), "");
+            return;
+        }
+        if (tag === "ul" || tag === "ol") {
+            appendList(element, lines);
+            return;
+        }
+        if (tag === "dl") {
+            const children = Array.from(element.children);
+            for (let index = 0; index < children.length; index += 2) {
+                const term = children[index];
+                const description = children[index + 1];
+                if (term && description) {
+                    lines.push(`- **${inlineText(term)}:** ${inlineText(description)}`);
+                }
+            }
+            lines.push("");
+            return;
+        }
+        if (element.classList.contains("gb-tip")) {
+            lines.push(`> ${inlineText(element)}`, "");
+            return;
+        }
+        Array.from(element.children).forEach((child) => appendBlock(child, lines));
+    }
+
+    function buildMarkdown() {
+        const lines = ["# Valsci Guidebook", ""];
+        document.querySelectorAll(".guidebook-section").forEach((section) => {
+            Array.from(section.children).forEach((child) => appendBlock(child, lines));
+        });
+        return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
+    }
+
+    async function copyText(text) {
+        if (navigator.clipboard?.writeText) {
+            try {
+                await navigator.clipboard.writeText(text);
+                return;
+            } catch (error) {
+                // Fall through to the textarea fallback.
+            }
+        }
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.left = "-9999px";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        textarea.remove();
+    }
+
+    button.addEventListener("click", async () => {
+        button.disabled = true;
+        status.textContent = "Copying...";
+        try {
+            await copyText(buildMarkdown());
+            status.textContent = "Copied";
+            window.setTimeout(() => {
+                status.textContent = "";
+            }, 2400);
+        } catch (error) {
+            status.textContent = "Copy failed";
+        } finally {
+            button.disabled = false;
+        }
+    });
+})();
+</script>
 {% endblock %}

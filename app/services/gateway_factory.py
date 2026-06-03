@@ -24,11 +24,12 @@ class GatewayFactory:
         return self._cache[cache_key]
 
     def _build_runtime_config(self, provider_snapshot: Dict[str, Any]) -> Dict[str, Any]:
+        default_model = self._resolve_default_model(provider_snapshot)
         return {
             "provider_name": (provider_snapshot.get("provider_type") or Config.LLM_PROVIDER or "openai").lower(),
             "api_key": provider_snapshot.get("api_key", Config.LLM_API_KEY),
             "base_url": provider_snapshot.get("base_url", Config.LLM_BASE_URL),
-            "default_model": provider_snapshot.get("default_model", Config.LLM_EVALUATION_MODEL),
+            "default_model": default_model,
             "local_backend": provider_snapshot.get("local_backend", getattr(Config, "LOCAL_BACKEND", "")),
             "routing_config": getattr(Config, "LLM_ROUTING", {}) or {},
             "model_registry_overrides": provider_snapshot.get(
@@ -64,3 +65,16 @@ class GatewayFactory:
             "local_model_context_override": getattr(Config, "LOCAL_MODEL_CONTEXT_OVERRIDE", None),
             "ollama_show_url": getattr(Config, "OLLAMA_SHOW_URL", None),
         }
+
+    @staticmethod
+    def _resolve_default_model(provider_snapshot: Dict[str, Any]) -> Any:
+        default_model = provider_snapshot.get("default_model") or Config.LLM_EVALUATION_MODEL
+        if default_model:
+            return default_model
+        for model in provider_snapshot.get("models", []) or []:
+            if not isinstance(model, dict) or model.get("enabled") is False:
+                continue
+            model_name = model.get("model_name")
+            if model_name:
+                return model_name
+        return default_model

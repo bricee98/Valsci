@@ -97,13 +97,12 @@ def test_validate_config_rejects_non_numeric_backoff(monkeypatch):
         Config.validate_config()
 
 
-def test_validate_config_allows_mock_mode_without_semantic_scholar_key(monkeypatch):
+def test_validate_config_allows_startup_without_semantic_scholar_key(monkeypatch):
     monkeypatch.setattr(Config, "LLM_PROVIDER", "openai", raising=False)
     monkeypatch.setattr(Config, "LLM_API_KEY", "test", raising=False)
     monkeypatch.setattr(Config, "SECRET_KEY", "secret", raising=False)
     monkeypatch.setattr(Config, "USER_EMAIL", "user@example.com", raising=False)
     monkeypatch.setattr(Config, "SEMANTIC_SCHOLAR_API_KEY", "", raising=False)
-    monkeypatch.setattr(Config, "MOCK_SEMANTIC_SCHOLAR_MODE", True, raising=False)
     monkeypatch.setattr(Config, "REQUIRE_PASSWORD", False, raising=False)
 
     Config.validate_config()
@@ -122,13 +121,27 @@ def test_get_paper_content_reports_missing_release():
     assert result["lookup_details"]["attempts"] == []
 
 
+def test_searcher_latest_release_keeps_full_mini_release_id(tmp_path):
+    S2Searcher = _load_searcher_class()
+    base_dir = tmp_path / "datasets"
+    index_dir = base_dir / "binary_indices"
+    index_dir.mkdir(parents=True)
+    (index_dir / "2026-05-26-mini-mendelian-v1_metadata.json").write_text("{}", encoding="utf-8")
+    (base_dir / "mini").mkdir()
+
+    searcher = S2Searcher.__new__(S2Searcher)
+    searcher.base_dir = base_dir
+
+    assert searcher._get_latest_local_release() == "2026-05-26-mini-mendelian-v1"
+
+
 def test_get_paper_content_reports_dataset_attempts_when_no_text():
     S2Searcher = _load_searcher_class()
 
     class FakeIndexer:
         def lookup(self, release_id, dataset, id_type, search_id):
-            if dataset == "s2orc":
-                return {"pdf_parse": {}}
+            if dataset == "s2orc_v2":
+                return {"body": {}}
             if dataset == "abstracts":
                 return {"abstract": ""}
             if dataset == "tldrs":
@@ -146,7 +159,7 @@ def test_get_paper_content_reports_dataset_attempts_when_no_text():
     assert result["reason_code"] == "no_accessible_content"
     attempts = result["lookup_details"]["attempts"]
     assert attempts == [
-        {"dataset": "s2orc", "status": "record_without_text", "detail": "pdf_parse.body_text missing"},
+        {"dataset": "s2orc_v2", "status": "record_without_text", "detail": "body.text missing"},
         {"dataset": "abstracts", "status": "record_without_text", "detail": "abstract missing"},
         {"dataset": "tldrs", "status": "record_without_text", "detail": "text missing"},
     ]

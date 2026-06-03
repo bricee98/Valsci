@@ -60,12 +60,23 @@ class BinaryIndexer:
         
         # Define which IDs to index for each dataset
         self.dataset_id_fields = {
-            'papers': [('corpusid', 'corpus_id')],  # Remove paper_id entry
+            'papers': [('corpusid', 'corpus_id')],
             'abstracts': [('corpusid', 'corpus_id')],
-            's2orc': [('corpusid', 'corpus_id')],
+            's2orc_v2': [('corpusid', 'corpus_id')],
             'authors': [('authorid', 'author_id')],
             'tldrs': [('corpusid', 'corpus_id')]
         }
+
+    def _parse_index_key(self, index_key: str) -> Optional[Tuple[str, str]]:
+        """Split a metadata key into dataset and id_type, preserving dataset underscores."""
+        for dataset in sorted(self.dataset_id_fields, key=len, reverse=True):
+            prefix = f"{dataset}_"
+            if index_key.startswith(prefix):
+                return dataset, index_key[len(prefix):]
+        if '_' in index_key:
+            dataset, id_type = index_key.split('_', 1)
+            return dataset, id_type
+        return None
         
     def close(self):
         """Close all open memory maps"""
@@ -421,18 +432,15 @@ class BinaryIndexer:
             console.print("\n[bold]1. Verifying index file integrity...[/bold]")
             for index_path in index_files:
                 try:
-                    # Extract dataset and id_type from filename
                     filename = index_path.name
-                    parts = filename[len(f"{release_id}_"):-4].split('_')
-                    if len(parts) < 2:
+                    index_key = filename[len(f"{release_id}_"):-4]
+                    parsed = self._parse_index_key(index_key)
+                    if not parsed:
                         continue
-                    
-                    dataset = parts[0]
-                    id_type = '_'.join(parts[1:])
+
+                    dataset, id_type = parsed
                     datasets_with_indices.add(dataset)
-                    
-                    index_key = f"{dataset}_{id_type}"
-                    
+
                     if show_details:
                         console.print(f"[white]Checking index: [bold]{index_key}[/bold][/white]")
 
@@ -491,15 +499,15 @@ class BinaryIndexer:
 
             # Finally, report datasets without indices
             console.print("\n[bold]3. Checking for missing dataset indices...[/bold]")
-            for dataset in ['papers', 'abstracts', 'citations', 'authors', 's2orc', 'tldrs']:
+            for dataset in ['papers', 'abstracts', 'citations', 'authors', 's2orc_v2', 'tldrs']:
                 if dataset not in datasets_with_indices:
                     console.print(f"[yellow]No indices found for dataset: {dataset}[/yellow]")
                     all_valid = False
 
             if all_valid:
-                console.print("\n[green]✓ All verification checks passed successfully[/green]")
+                console.print("\n[green]OK All verification checks passed successfully[/green]")
             else:
-                console.print("\n[red]× Some verification checks failed[/red]")
+                console.print("\n[red]FAIL Some verification checks failed[/red]")
 
             return all_valid
 
@@ -576,8 +584,11 @@ class BinaryIndexer:
             
             for index_key, meta in self.metadata[release_id].items():
                 try:
-                    # Split on the first underscore
-                    dataset, id_type = index_key.split('_', 1)
+                    parsed = self._parse_index_key(index_key)
+                    if not parsed:
+                        console.print(f"[yellow]Warning: Skipping malformed index key: {index_key}[/yellow]")
+                        continue
+                    dataset, id_type = parsed
                     index_path = self._get_index_path(release_id, dataset, id_type)
                     
                     if not index_path.exists():
@@ -701,10 +712,19 @@ class BinaryIndexer:
             quick_estimate: If True, estimates total by sampling first file only
         """
         try:
+            if release_id not in self.metadata:
+                self._load_metadata(release_id)
+
             # Get all relevant datasets
-            datasets_to_check = [dataset] if dataset else {
-                k.split('_')[0] for k in self.metadata[release_id].keys()
-            }
+            if dataset:
+                datasets_to_check = [dataset]
+            else:
+                datasets = set()
+                for index_key in self.metadata[release_id].keys():
+                    parsed = self._parse_index_key(index_key)
+                    if parsed:
+                        datasets.add(parsed[0])
+                datasets_to_check = sorted(datasets)
 
             total_lines = 0
             all_valid = True
@@ -744,7 +764,7 @@ class BinaryIndexer:
                     estimated_total = file_lines * len(files)
                     console.print(
                         f"\n[bold]{dataset_name}[/bold]: Estimating ~{estimated_total:,} total lines "
-                        f"(based on {file_lines:,} lines in {first_file.name} × {len(files)} files)"
+                        f"(based on {file_lines:,} lines in {first_file.name} x {len(files)} files)"
                     )
                     dataset_lines = estimated_total
                     total_lines += estimated_total
@@ -772,11 +792,11 @@ class BinaryIndexer:
                         console.print(f"{file_path.name}: {file_lines:,} lines (Running total: {total_lines:,})")
 
                 # Compare with index counts for this dataset
-                indices = {
-                    k.split('_', 1)[1]: v 
-                    for k, v in self.metadata[release_id].items() 
-                    if k.startswith(f"{dataset_name}_")
-                }
+                indices = {}
+                for index_key, meta in self.metadata[release_id].items():
+                    parsed = self._parse_index_key(index_key)
+                    if parsed and parsed[0] == dataset_name:
+                        indices[parsed[1]] = meta
 
                 if not indices:
                     console.print(f"[yellow]No indices found for {dataset_name}[/yellow]")
@@ -792,13 +812,13 @@ class BinaryIndexer:
                             f"[red]Count mismatch for {dataset_name}_{id_type}: "
                             f"Index has {index_count:,} entries, "
                             f"{'estimated' if quick_estimate else 'found'} {dataset_lines:,} lines in files "
-                            f"({'±10%' if quick_estimate else 'exact'} comparison)[/red]"
+                            f"({'within 10%' if quick_estimate else 'exact'} comparison)[/red]"
                         )
                         all_valid = False
                     else:
                         console.print(
-                            f"[green]✓ {dataset_name}_{id_type} index matches: {index_count:,} entries "
-                            f"({'±10%' if quick_estimate else 'exact'} comparison)[/green]"
+                            f"[green]OK {dataset_name}_{id_type} index matches: {index_count:,} entries "
+                            f"({'within 10%' if quick_estimate else 'exact'} comparison)[/green]"
                         )
 
             console.print(
@@ -816,7 +836,7 @@ class BinaryIndexer:
         
         Args:
             release_id: The release ID (e.g. "2023-12-01")
-            dataset: Dataset name (e.g. "papers", "abstracts", "s2orc")
+            dataset: Dataset name (e.g. "papers", "abstracts", "s2orc_v2")
             id_type: Type of ID to search for (e.g. "paper_id", "corpus_id")
             search_id: The ID to find
         

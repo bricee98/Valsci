@@ -1,7 +1,6 @@
 flask
 aiofiles
 filelock
-python-dotenv
 requests
 pandas
 beautifulsoup4

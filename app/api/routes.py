@@ -23,10 +23,11 @@ from app.services.batch_export import build_export_document
 from app.services.batch_state import build_batch_state, list_batch_ids
 from app.config.settings import Config
 from app.services.claim_store import ClaimStore
-from app.services.mock_semantic_scholar import available_mock_claim_sets
 from app.services.ollama_discovery import discover_ollama_models
 from app.services.provider_catalog import ProviderCatalog
 from app.services.submission_service import SubmissionService
+from app.services.data_manager import build_data_state, data_job_manager
+from app.services.env_config import apply_env_vars_to_runtime, build_env_config_state, update_env_vars
 
 api = Blueprint('api', __name__)
 
@@ -124,15 +125,10 @@ def _provider_for_settings_ui(provider: Dict[str, Any]) -> Dict[str, Any]:
     return public_provider
 
 
-def _mock_s2_enabled() -> bool:
-    return bool(current_app.config.get("MOCK_SEMANTIC_SCHOLAR_MODE", False))
-
-
 def _render_page(template_name: str, **context):
     page_context = {
         "config": current_app.config,
         "migration_status": _claim_store().migration_status(),
-        "mock_s2_enabled": _mock_s2_enabled(),
     }
     page_context.update(context)
     return render_template(template_name, **page_context)
@@ -582,15 +578,46 @@ def import_migration_batch(batch_id):
 @api.route('/api/v1/migration/import_all', methods=['POST'])
 @auth_required
 def import_all_migration_batches():
+    payload = request.get_json(silent=True) or {}
+    archive_after = bool(payload.get("archive_after", True))
     try:
-        results = [
-            _claim_store().migrate_legacy_batch(batch["batch_id"], apply_changes=True)
-            for batch in _claim_store().list_legacy_batches()
+        store = _claim_store()
+        pending_batches = [
+            batch for batch in store.list_legacy_batches()
             if batch.get("status") == "pending"
         ]
+        results = [
+            store.migrate_legacy_batch(
+                batch["batch_id"],
+                apply_changes=True,
+                archive_after=archive_after,
+            )
+            for batch in pending_batches
+        ]
+        remaining_status = store.migration_status()
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
-    return jsonify({"results": results, "batch_count": len(results)}), 200
+    return jsonify({
+        "results": results,
+        "batch_count": len(results),
+        "archive_after": archive_after,
+        "migrated_count": sum(result.get("migrated_count", 0) for result in results),
+        "created_count": sum(
+            1
+            for result in results
+            for run in result.get("runs", [])
+            if not run.get("already_imported")
+        ),
+        "already_imported_count": sum(
+            1
+            for result in results
+            for run in result.get("runs", [])
+            if run.get("already_imported")
+        ),
+        "archived_count": sum(1 for result in results if (result.get("archive") or {}).get("archived")),
+        "remaining_pending_count": remaining_status.get("pending_count", 0),
+        "remaining_pending_batches": remaining_status.get("pending_batches", []),
+    }), 200
 
 
 @api.route('/api/v1/migration/batches/<batch_id>', methods=['DELETE'])
@@ -871,16 +898,6 @@ def get_arena_progress_api(arena_id):
     return jsonify(progress), 200
 
 
-@api.route('/api/v1/mock/claim_sets', methods=['GET'])
-@auth_required
-def list_mock_claim_sets_api():
-    return jsonify(
-        {
-            "enabled": _mock_s2_enabled(),
-            "claim_sets": available_mock_claim_sets() if _mock_s2_enabled() else [],
-        }
-    ), 200
-
 @api.route('/api/v1/batch', methods=['POST'])
 @auth_required
 def start_batch_job():
@@ -1009,8 +1026,103 @@ def index():
         providers=_public_providers(),
         active_nav="home",
         page_title="Home",
-        mock_claim_sets=available_mock_claim_sets() if _mock_s2_enabled() else [],
     )
+
+
+@api.route('/data', methods=['GET'])
+@auth_required
+def data_page():
+    return _render_page(
+        'data.html',
+        active_nav="data",
+        page_title="Data",
+        page_subtitle="Inspect local Semantic Scholar releases, build the curated mini corpus, download full datasets, and index local data.",
+    )
+
+
+@api.route('/settings', methods=['GET'])
+@auth_required
+def settings_page():
+    return _render_page(
+        'settings.html',
+        active_nav="settings",
+        page_title="Settings",
+        page_subtitle="Edit the local app/config/env_vars.json values used by Valsci.",
+    )
+
+
+@api.route('/api/v1/settings/env', methods=['GET'])
+@auth_required
+def env_settings_api():
+    try:
+        return jsonify(build_env_config_state()), 200
+    except Exception as exc:
+        logger.exception("Failed to load env_vars.json state")
+        return jsonify({"error": str(exc)}), 500
+
+
+@api.route('/api/v1/settings/env', methods=['PUT'])
+@auth_required
+def update_env_settings_api():
+    payload = request.get_json(silent=True) or {}
+    updates = payload.get("updates") or {}
+    if not isinstance(updates, dict):
+        return jsonify({"error": "updates must be a JSON object"}), 400
+    try:
+        raw = update_env_vars(updates)
+        apply_env_vars_to_runtime(raw, current_app.config)
+        return jsonify({"message": "env_vars.json saved", **build_env_config_state()}), 200
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("Failed to save env_vars.json")
+        return jsonify({"error": str(exc)}), 500
+
+
+@api.route('/api/v1/data/status', methods=['GET'])
+@auth_required
+def data_status_api():
+    manager = data_job_manager()
+    return jsonify({
+        "state": build_data_state(),
+        "active_job": manager.active_job(),
+        "jobs": manager.list_jobs(),
+    }), 200
+
+
+@api.route('/api/v1/data/jobs', methods=['POST'])
+@auth_required
+def start_data_job_api():
+    payload = request.get_json(silent=True) or {}
+    operation = str(payload.get("operation") or "").strip()
+    try:
+        job = data_job_manager().start_job(operation, payload)
+        return jsonify({"job": job}), 202
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 409
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("Failed to start data job")
+        return jsonify({"error": str(exc)}), 500
+
+
+@api.route('/api/v1/data/jobs/<job_id>', methods=['GET'])
+@auth_required
+def data_job_api(job_id):
+    job = data_job_manager().get_job(job_id)
+    if not job:
+        return jsonify({"error": "Data job not found"}), 404
+    return jsonify({"job": job}), 200
+
+
+@api.route('/api/v1/data/jobs/<job_id>/cancel', methods=['POST'])
+@auth_required
+def cancel_data_job_api(job_id):
+    job = data_job_manager().cancel_job(job_id)
+    if not job:
+        return jsonify({"error": "Data job not found"}), 404
+    return jsonify({"job": job}), 200
 
 @api.route('/results', methods=['GET'])
 @auth_required
@@ -1035,7 +1147,6 @@ def arena_submit():
     return _render_page(
         'arena.html',
         providers=_public_providers(),
-        mock_claim_sets=available_mock_claim_sets() if _mock_s2_enabled() else [],
         active_nav="arenas",
         page_title="New Arena",
         page_subtitle="Configure and launch a model comparison.",

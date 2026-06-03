@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from app.config.settings import Config
+from app.services.gateway_factory import GatewayFactory
 from app.services.llm.gateway import ContextOverflowError, LLMGateway, LLMTask
 from app.services.llm.types import ProviderResponse
 
@@ -343,6 +344,44 @@ def test_loopback_openai_base_url_uses_local_timeout(monkeypatch, tmp_path):
 
     assert timeout_value == 600
     assert timeout_source == "local_default"
+
+
+def test_ollama_context_initialization_skips_missing_default_model(monkeypatch, tmp_path):
+    gateway = build_gateway(
+        monkeypatch,
+        tmp_path,
+        provider=FakeProvider("success"),
+        provider_name="ollama",
+        base_url="http://localhost:11434",
+    )
+    gateway.default_model = None
+
+    asyncio.run(gateway._initialize_ollama_context())
+
+    assert gateway._ollama_show_error is None
+
+
+def test_gateway_factory_falls_back_when_provider_default_model_is_null(monkeypatch):
+    monkeypatch.setattr(Config, "LLM_EVALUATION_MODEL", "llama3.1:8b", raising=False)
+
+    runtime_config = GatewayFactory()._build_runtime_config({"default_model": None})
+
+    assert runtime_config["default_model"] == "llama3.1:8b"
+
+
+def test_gateway_factory_can_use_first_enabled_provider_model(monkeypatch):
+    monkeypatch.setattr(Config, "LLM_EVALUATION_MODEL", "", raising=False)
+    provider_snapshot = {
+        "default_model": None,
+        "models": [
+            {"model_name": "disabled-model", "enabled": False},
+            {"model_name": "gemma4:31b", "enabled": True},
+        ],
+    }
+
+    runtime_config = GatewayFactory()._build_runtime_config(provider_snapshot)
+
+    assert runtime_config["default_model"] == "gemma4:31b"
 
 
 def test_timeout_failure_records_timeout_diagnostics(monkeypatch, tmp_path):

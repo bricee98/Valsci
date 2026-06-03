@@ -280,15 +280,6 @@ class Config:
     TRACE_STACKTRACE_MAX_BYTES = _int_setting("TRACE_STACKTRACE_MAX_BYTES", default=4_000)
     TRACE_ALWAYS_WRITE_FILES = _bool_setting("TRACE_ALWAYS_WRITE_FILES", default=True)
     TRACE_COMPRESS_ON_COMPLETE = _bool_setting("TRACE_COMPRESS_ON_COMPLETE", default=False)
-    MOCK_SEMANTIC_SCHOLAR_MODE = _bool_setting("MOCK_SEMANTIC_SCHOLAR_MODE", default=False)
-    MOCK_SEMANTIC_SCHOLAR_FIXTURE_PACK = _string_setting(
-        "MOCK_SEMANTIC_SCHOLAR_FIXTURE_PACK",
-        default="happy_path",
-    )
-    MOCK_SEMANTIC_SCHOLAR_DELAY_SECONDS = _float_setting(
-        "MOCK_SEMANTIC_SCHOLAR_DELAY_SECONDS",
-        default=0.0,
-    )
 
     LLM_ROUTING = _dict_setting("LLM_ROUTING", default={})
     MODEL_REGISTRY_OVERRIDES = _dict_setting("MODEL_REGISTRY_OVERRIDES", default={})
@@ -392,8 +383,6 @@ class Config:
 
         errors = []
         required_keys = ["LLM_PROVIDER", "SECRET_KEY", "USER_EMAIL"]
-        if not cls.MOCK_SEMANTIC_SCHOLAR_MODE:
-            required_keys.append("SEMANTIC_SCHOLAR_API_KEY")
         if cls.LLM_PROVIDER == "azure-openai":
             required_keys.extend(["LLM_API_KEY", "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_VERSION"])
         elif cls.LLM_PROVIDER == "openai":

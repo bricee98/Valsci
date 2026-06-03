@@ -63,7 +63,7 @@ This package contains a pre-built Docker image for running Valsci without needin
 
 7. **Download required datasets**:
    ```bash
-   # For minimal test datasets (~2GB)
+   # For the curated local mini corpus.
    docker-compose exec web python -m semantic_scholar.utils.downloader --mini
    
    # Or for full datasets (requires ~1.6TB of disk space)

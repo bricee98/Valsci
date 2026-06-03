@@ -9,7 +9,6 @@ from app.services.claim_store import ClaimStore
 from app.services.gateway_factory import GatewayFactory
 from semantic_scholar.utils.searcher import S2Searcher
 from app.services.email_service import EmailService
-from app.services.mock_semantic_scholar import MockSemanticScholarSearcher
 from app.services.llm.gateway import LLMTask
 from app.services.llm.types import empty_usage, merge_usage, normalize_usage
 from app.services.llm.validators import OutputValidationError, validate_query_list
@@ -35,18 +34,7 @@ SAVED_JOBS_DIR = settings.Config.SAVED_JOBS_DIR
 
 class ValsciProcessor:
     def __init__(self):
-        if settings.Config.MOCK_SEMANTIC_SCHOLAR_MODE:
-            self.s2_searcher = MockSemanticScholarSearcher(
-                fixture_pack=settings.Config.MOCK_SEMANTIC_SCHOLAR_FIXTURE_PACK,
-                delay_seconds=settings.Config.MOCK_SEMANTIC_SCHOLAR_DELAY_SECONDS,
-                trace_root=str(SAVED_JOBS_DIR),
-            )
-            logger.info(
-                "Using mock Semantic Scholar mode with fixture pack '%s'.",
-                settings.Config.MOCK_SEMANTIC_SCHOLAR_FIXTURE_PACK,
-            )
-        else:
-            self.s2_searcher = S2Searcher()
+        self.s2_searcher = S2Searcher()
         self.paper_analyzer = PaperAnalyzer()
         self.evidence_scorer = EvidenceScorer()
         self.claim_processor = ClaimProcessor()

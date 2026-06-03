@@ -8,7 +8,7 @@
     setStatus,
   } = window.ValsciUI;
 
-  const config = window.homePageConfig || { providers: [], mockClaimSets: [] };
+  const config = window.homePageConfig || { providers: [] };
   const providerCatalog = config.providers || [];
   const stagedClaims = [];
   let preflightPayload = null;
@@ -149,7 +149,7 @@
   function renderStagedClaims() {
     const target = byId("stagedClaims");
     if (!stagedClaims.length) {
-      target.innerHTML = `<div class="empty-state"><strong>No claims staged yet.</strong><span>Paste claims or load a mock claim set to get started.</span></div>`;
+      target.innerHTML = `<div class="empty-state"><strong>No claims staged yet.</strong><span>Paste claims or upload a text file to get started.</span></div>`;
       return;
     }
     target.innerHTML = stagedClaims.map((claim, index) => `
@@ -320,6 +320,97 @@
     }).join("");
   }
 
+  function dataBadge(label, tone) {
+    const cls = {
+      success: "success-badge",
+      warning: "warning-badge",
+      error: "error-badge",
+      neutral: "neutral-badge",
+    }[tone || "neutral"] || "neutral-badge";
+    return `<span class="badge ${cls}">${escapeHtml(label)}</span>`;
+  }
+
+  function indexTone(indexStatus) {
+    if (!indexStatus) return "neutral";
+    if (indexStatus.state === "ready") return "success";
+    if (indexStatus.state === "missing" || indexStatus.state === "needs_attention") return "warning";
+    return "neutral";
+  }
+
+  function dataCoverageSummary(release) {
+    if (!release) {
+      return { label: "No release", tone: "warning", message: "Create a mini release or download a full release before running real-data checks." };
+    }
+    const coverage = release.manifest_coverage;
+    if (coverage?.state === "stale") {
+      const missing = Object.entries(coverage.missing || {})
+        .map(([dataset, count]) => `${dataset}: ${Number(count || 0).toLocaleString()}`)
+        .join(", ");
+      return {
+        label: "Rebuild needed",
+        tone: "warning",
+        message: missing ? `The current mini manifest has missing local rows (${missing}).` : "The selected mini release is stale versus the current manifest.",
+      };
+    }
+    const missingDatasets = (release.datasets || []).filter(dataset => !dataset.exists || !dataset.file_count);
+    if (missingDatasets.length) {
+      return {
+        label: "Incomplete",
+        tone: "warning",
+        message: `Missing dataset files: ${missingDatasets.map(dataset => dataset.name).join(", ")}.`,
+      };
+    }
+    return { label: "Ready", tone: "success", message: "" };
+  }
+
+  function renderDataReadiness(state) {
+    const target = byId("homeDataSummary");
+    if (!target) return;
+    const release = state.active_release || (state.releases || [])[0] || null;
+    const coverage = dataCoverageSummary(release);
+    const indexStatus = release?.index_status || null;
+    const releaseLabel = release?.release_id || "None";
+    const releaseType = release ? (release.is_mini ? "Mini" : "Full") : "";
+    target.innerHTML = `
+      <div class="summary-cell">
+        <span class="label">Release</span>
+        <span class="value data-path">${escapeHtml(releaseLabel)}</span>
+        ${releaseType ? `<span class="record-meta">${escapeHtml(releaseType)}</span>` : ""}
+      </div>
+      <div class="summary-cell">
+        <span class="label">Data</span>
+        <span class="value">${dataBadge(coverage.label, coverage.tone)}</span>
+      </div>
+      <div class="summary-cell">
+        <span class="label">Index</span>
+        <span class="value">${dataBadge(indexStatus?.label || "Unknown", indexTone(indexStatus))}</span>
+      </div>
+    `;
+
+    const statusTarget = byId("homeDataStatus");
+    if (!statusTarget) return;
+    if (coverage.message) {
+      setStatus(statusTarget, {
+        title: coverage.label,
+        message: coverage.message,
+        tone: coverage.tone,
+      });
+    } else if (!state.api_key_present) {
+      setStatus(statusTarget, {
+        title: "Semantic Scholar API key missing",
+        message: "Existing data can be inspected, but live search and downloads need an API key.",
+        tone: "warning",
+      });
+    } else {
+      hideStatus(statusTarget);
+    }
+  }
+
+  async function loadDataReadiness() {
+    const data = await fetchJson("/api/v1/data/status");
+    renderDataReadiness(data.state || {});
+  }
+
   async function loadRecents() {
     const [arenaData, claimData] = await Promise.all([
       fetchJson("/api/v1/arenas?limit=4"),
@@ -330,7 +421,11 @@
   }
 
   async function migrateAll() {
-    await fetchJson("/api/v1/migration/import_all", { method: "POST" });
+    await fetchJson("/api/v1/migration/import_all", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archive_after: true }),
+    });
     window.location.href = "/migration";
   }
 
@@ -388,25 +483,11 @@
     migrateAll().catch(error => setStatus(byId("homeRunStatus"), { title: "Migration failed", message: error.message, tone: "error" }));
   });
 
-  document.querySelectorAll("[data-load-claim-set]").forEach(button => {
-    button.addEventListener("click", () => {
-      const claimSet = (config.mockClaimSets || []).find(item => item.pack_id === button.dataset.loadClaimSet);
-      if (!claimSet) {
-        return;
-      }
-      stagedClaims.splice(0, stagedClaims.length, ...claimSet.claims);
-      renderStagedClaims();
-      invalidatePreflight();
-      setStatus(byId("homeRunStatus"), {
-        title: "Mock claim set loaded",
-        message: `${claimSet.label} added ${claimSet.claims.length} claims to the quick runner.`,
-        tone: "info",
-      });
-    });
-  });
-
   syncProviderOptions();
   renderStagedClaims();
+  loadDataReadiness().catch(error => {
+    setStatus(byId("homeDataStatus"), { title: "Data status failed to load", message: error.message, tone: "error" });
+  });
   loadRecents().catch(error => {
     setStatus(byId("homeRunStatus"), { title: "Home panels failed to load", message: error.message, tone: "error" });
   });

@@ -1,13 +1,6 @@
 {% extends "base.html" %}
 
 {% block content %}
-    {% if mock_s2_enabled %}
-    <section class="status-card info-card">
-        <strong>Mock Data mode is active.</strong>
-        <span>These arenas use synthetic retrieval fixtures so you can validate end-to-end flow locally without Semantic Scholar datasets.</span>
-    </section>
-    {% endif %}
-
     <section class="panel">
         <div class="stepper">
             <div class="step-item active">
@@ -71,13 +64,6 @@
                     <button type="button" class="secondary-button" id="stageClaimsBtn">Stage Claims</button>
                     <button type="button" class="ghost-button" id="clearClaimsBtn">Clear</button>
                 </div>
-                {% if mock_claim_sets %}
-                <div class="inline-actions">
-                    {% for claim_set in mock_claim_sets %}
-                    <button type="button" class="ghost-button small-button" data-load-claim-set="{{ claim_set.pack_id }}">{{ claim_set.label }}</button>
-                    {% endfor %}
-                </div>
-                {% endif %}
                 <div id="stagedClaims" class="staged-list"></div>
             </div>
         </article>
@@ -198,7 +184,6 @@
     <script>
         window.arenaBuilderConfig = {
             providers: {{ providers|tojson }},
-            mockClaimSets: {{ mock_claim_sets|tojson }},
         };
     </script>
 {% endblock %}
