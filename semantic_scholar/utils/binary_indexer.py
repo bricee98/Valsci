@@ -3,6 +3,7 @@ import json
 import mmap
 import struct
 import shutil
+import time
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Set
 from dataclasses import dataclass
@@ -18,8 +19,35 @@ import heapq
 import logging
 from itertools import count
 
+from app.config.settings import Config
+
 console = Console()
 logger = logging.getLogger(__name__)
+
+
+def remove_scratch_path(path: Path, *, attempts: int = 2, delay: float = 0.5) -> None:
+    """Remove a scratch directory/file with bounded retries.
+
+    Transient filesystem errors (locks, AV scanners) are retried once; if the
+    path still cannot be removed the error is raised so the calling job fails
+    loudly instead of silently leaving scratch behind.
+    """
+    path = Path(path)
+    last_exc: Optional[Exception] = None
+    for attempt in range(max(1, attempts)):
+        try:
+            if not path.exists():
+                return
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+            return
+        except OSError as exc:  # transient: locks, in-use files, AV scanners
+            last_exc = exc
+            if attempt + 1 < attempts:
+                time.sleep(delay)
+    raise OSError(f"Failed to clean up scratch path {path} after {attempts} attempts: {last_exc}")
 
 @dataclass
 class IndexEntry:
@@ -45,15 +73,21 @@ class IndexEntry:
         return struct.pack(self.ENTRY_FORMAT, id_bytes, path_bytes, self.offset)
 
 class BinaryIndexer:
-    def __init__(self, base_dir: Path):
+    def __init__(self, base_dir: Path, work_dir: Optional[Path] = None):
         self.base_dir = Path(base_dir)
         self.index_dir = self.base_dir / "binary_indices"
         self.index_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Create tmp directory
-        self.tmp_dir = self.index_dir / "tmp"
-        self.tmp_dir.mkdir(exist_ok=True)
-        
+
+        # Scratch directory for in-progress index writes. It lives OUTSIDE the
+        # verified index directory (default: STATE_DIR/data_work/index_tmp) so a
+        # crashed or interrupted build never leaves partial files next to the
+        # validated indices. Cleanup is explicit and job-scoped (see
+        # cleanup_chunk_dir); there is intentionally no destructor cleanup.
+        if work_dir is None:
+            work_dir = Path(Config.STATE_DIR) / "data_work" / "index_tmp"
+        self.tmp_dir = Path(work_dir)
+        self.tmp_dir.mkdir(parents=True, exist_ok=True)
+
         # Track open memory maps
         self._mmaps: Dict[str, mmap.mmap] = {}
         self.metadata: Dict[str, Dict] = {}
@@ -515,18 +549,16 @@ class BinaryIndexer:
             console.print(f"[red]Error verifying indices: {str(e)}[/red]")
             return False
 
-    def __del__(self):
-        """Ensure cleanup of resources"""
-        self.close()
-        
-        # Clean up temporary directory
-        if hasattr(self, 'tmp_dir') and self.tmp_dir.exists():
-            try:
-                shutil.rmtree(self.tmp_dir)
-            except Exception as e:
-                console.print(f"[yellow]Warning: Could not clean up temp directory: {e}[/yellow]")
+    def cleanup_chunk_dir(self, chunk_dir: Path) -> None:
+        """Explicitly remove a job's chunk scratch directory (bounded retry).
 
-    def batch_search(self, release_id: str, dataset: str, id_type: str, 
+        Replaces the previous destructor-based cleanup: callers invoke this when
+        an index build finishes so cleanup is deterministic and job-scoped.
+        Raises if the scratch cannot be removed so the job fails visibly.
+        """
+        remove_scratch_path(chunk_dir)
+
+    def batch_search(self, release_id: str, dataset: str, id_type: str,
                     search_ids: List[str]) -> Dict[str, Optional[IndexEntry]]:
         """
         Binary search for multiple IDs in the index.

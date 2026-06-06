@@ -42,6 +42,7 @@ This guide explains how to run Valsci using Docker containers.
   - `semantic_scholar_data`: Stores downloaded Semantic Scholar datasets
   - `queued_jobs`: Stores claims waiting to be processed
   - `saved_jobs`: Stores processed claim results, plus per-claim `traces/*.jsonl` and `issues/*.jsonl`
+  - `./semantic_scholar/manifests` (read-only): Curated corpus manifests, mounted read-only into both services. The manifest used is selected by the `SEMANTIC_SCHOLAR_MANIFEST` filename setting (default `mendelian_v1.json`).
 
 ## Directory Structure in the Container
 
@@ -66,7 +67,7 @@ For the application to function properly, you need to download Semantic Scholar 
    - Create indices for existing datasets: `--index-only`
 
    `--mini` uses the tracked Mendelian mini manifest at
-   `semantic_scholar/mini_corpora/mendelian_v1/manifest.json` unless you pass
+   `semantic_scholar/manifests/mendelian_v1.json` unless you pass
    `--mini-manifest`. The manifest records fixed dataset-specific IDs. Valsci
    streams the matching Semantic Scholar dataset shards and writes the compact
    runtime release under ignored local data.
@@ -117,19 +118,44 @@ The application is configured through `app/config/env_vars.json`. See the commen
 - `TRACE_ENABLED` / `TRACE_EMBED_MODE`: Control trace persistence and report embedding behavior
 - And more...
 
-### Ollama from Docker
+### Ollama (or any local LLM) from Docker
 
-If Ollama runs on your host machine instead of inside Compose:
+Inside a container, `localhost` refers to the **container**, not your host — so a
+host-run Ollama is **not** reachable at `http://localhost:11434`. Use the special
+hostname `host.docker.internal` instead. The Compose files already declare
+`extra_hosts: ["host.docker.internal:host-gateway"]` for both services, so this
+resolves on macOS, Windows, **and** Linux.
 
-- macOS/Windows: set `LLM_BASE_URL` to `http://host.docker.internal:11434/v1`
-- Linux: use your Docker bridge gateway IP or run Ollama as another Compose service
+For a host-run Ollama, set in `app/config/env_vars.json`:
+
+```json
+"LLM_PROVIDER": "local",
+"LOCAL_BACKEND": "ollama",
+"LLM_BASE_URL": "http://host.docker.internal:11434/v1",
+"OLLAMA_SHOW_URL": "http://host.docker.internal:11434/api/show",
+"LLM_EVALUATION_MODEL": "llama3.1:8b"
+```
+
+Heads-up: the same `env_vars.json` is shared between bare-metal and Docker runs,
+so these two URLs must use `localhost` when running directly on the host and
+`host.docker.internal` when running in Docker — flip them depending on how you
+launch. (`LLM_API_KEY` can be any non-empty placeholder; Ollama ignores it.)
+
+Verify the container can reach Ollama:
+
+```bash
+docker-compose exec web curl -s http://host.docker.internal:11434/api/tags
+```
 
 ## Persistent Data
 
 All persistent data is stored in Docker volumes:
 
 - `semantic_scholar_data`: Contains downloaded datasets and indices
+- `valsci_state`: Canonical claim store, run records, traces, arenas, and data-job history (`/valsci/state`)
 - `queued_jobs`: Contains claims waiting to be processed
 - `saved_jobs`: Contains processed claim results
+
+> Without the `valsci_state` volume, recreating the container (e.g. `docker compose down` then `up`) would discard your results and job history, since they live under `/valsci/state`.
 
 To back up this data, you can use Docker's volume backup features.

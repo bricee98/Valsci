@@ -228,6 +228,11 @@ class Config:
     PROJECT_ROOT = str(PROJECT_ROOT.resolve())
     SECRET_KEY = _string_setting("SECRET_KEY", env_key="FLASK_SECRET_KEY")
     SEMANTIC_SCHOLAR_API_KEY = _string_setting("SEMANTIC_SCHOLAR_API_KEY")
+    # Plain filename (no path separators) of the curated corpus manifest to use,
+    # resolved only from semantic_scholar/manifests/. See downloader.resolve_manifest_path.
+    SEMANTIC_SCHOLAR_MANIFEST = _string_setting(
+        "SEMANTIC_SCHOLAR_MANIFEST", default="mendelian_v1.json"
+    )
     USER_EMAIL = _string_setting("USER_EMAIL")
 
     AZURE_OPENAI_ENDPOINT = _string_setting("AZURE_OPENAI_ENDPOINT")

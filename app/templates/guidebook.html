@@ -477,12 +477,12 @@
             <h3>New Release Wizard</h3>
             <p>The New Release wizard starts downloader and indexing jobs. Output appears in Current Job, and completed jobs appear in Recent Data Jobs.</p>
             <ul>
-                <li><strong>Curated Mini</strong> &mdash; Runs the manifest-backed Mendelian mini builder. It reads the bundled ID manifest at <code>semantic_scholar/mini_corpora/mendelian_v1/manifest.json</code>, streams Semantic Scholar dataset shards for the fixed corpus and author IDs, writes compact dataset-shaped JSONL files into the ignored runtime datasets directory, and builds binary indices.</li>
+                <li><strong>Curated Mini</strong> &mdash; Runs the manifest-backed Mendelian mini builder. It reads the bundled ID manifest at <code>semantic_scholar/manifests/mendelian_v1.json</code>, streams Semantic Scholar dataset shards for the fixed corpus and author IDs, writes compact dataset-shaped JSONL files into the ignored runtime datasets directory, and builds binary indices.</li>
                 <li><strong>Download Full Dataset Selection</strong> &mdash; Downloads selected full Semantic Scholar datasets for the requested release. This can consume a large amount of disk space, especially when S2ORC v2 is selected.</li>
             </ul>
 
             <h4>Mini Manifest</h4>
-            <p>When <strong>Curated Mini</strong> is selected, the <strong>Mini Manifest</strong> input points to the tracked Mendelian ID manifest, normally <code>semantic_scholar/mini_corpora/mendelian_v1/manifest.json</code>. Runtime release output and any source-row cache still go under <code>semantic_scholar/datasets</code>, which is ignored local data.</p>
+            <p>When <strong>Curated Mini</strong> is selected, the <strong>Mini Manifest</strong> input points to the tracked Mendelian ID manifest, normally <code>semantic_scholar/manifests/mendelian_v1.json</code>. Runtime release output and any source-row cache still go under <code>semantic_scholar/datasets</code>, which is ignored local data.</p>
             <p>Full releases do not have or need a manifest. For a full release, Valsci downloads the selected Semantic Scholar datasets for the requested release ID and verifies them against the Semantic Scholar Datasets API file list.</p>
 
             <h4>Release</h4>
@@ -516,7 +516,7 @@
             <ul>
                 <li><strong>Semantic Scholar API key is missing</strong> &mdash; Set <code>SEMANTIC_SCHOLAR_API_KEY</code> in <code>app/config/env_vars.json</code> before live search or downloads.</li>
                 <li><strong>Mini release needs rebuild</strong> &mdash; The tracked manifest changed after the selected mini release was built. Use <strong>New Release</strong> &rarr; <strong>Curated Mini</strong>, or run <code>python -m semantic_scholar.utils.downloader --mini</code>.</li>
-                <li><strong>Mini manifest missing</strong> &mdash; Restore the tracked mini package at <code>semantic_scholar/mini_corpora/mendelian_v1/manifest.json</code>, or pass a custom manifest path.</li>
+                <li><strong>Mini manifest missing</strong> &mdash; Restore the tracked mini package at <code>semantic_scholar/manifests/mendelian_v1.json</code>, or pass a custom manifest path.</li>
                 <li><strong>Indices missing</strong> &mdash; Use <strong>Index</strong> or <strong>Reindex</strong> in Release Maintenance for the affected release and datasets.</li>
                 <li><strong>Full download feels too large</strong> &mdash; Use the curated mini corpus for desktop rehearsal. Full S2ORC datasets are large and can exceed practical local disk limits.</li>
                 <li><strong>Live search misses curated papers</strong> &mdash; Adjust the curated claims or manifest selection, then rebuild the mini corpus. The mini data is deterministic, but live search ranking can still change.</li>

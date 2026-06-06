@@ -19,7 +19,10 @@ def _build_downloader(tmp_path: Path) -> S2DatasetDownloader:
     downloader.base_dir.mkdir(parents=True, exist_ok=True)
     downloader.index_dir = downloader.base_dir / "binary_indices"
     downloader.index_dir.mkdir(parents=True, exist_ok=True)
-    downloader.indexer = BinaryIndexer(downloader.base_dir)
+    # Keep scratch/build work isolated under the test's tmp dir.
+    downloader.work_dir = tmp_path / "data_work"
+    downloader.work_dir.mkdir(parents=True, exist_ok=True)
+    downloader.indexer = BinaryIndexer(downloader.base_dir, work_dir=downloader.work_dir / "index_tmp")
     return downloader
 
 

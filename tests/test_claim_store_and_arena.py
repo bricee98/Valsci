@@ -209,6 +209,26 @@ def test_reuse_retrieval_preflight_only_charges_query_generation_once(monkeypatc
     catalog = ProviderCatalog(str(provider_catalog_path))
     catalog.upsert_provider(
         {
+            "provider_id": "default",
+            "label": "OpenAI Baseline",
+            "provider_type": "openai",
+            "api_key": "openai-key",
+            "default_model": "gpt-4o-mini",
+            "models": [
+                {
+                    "model_name": "gpt-4o-mini",
+                    "context_window_tokens": 128000,
+                    "max_output_tokens_default": 4096,
+                    "supports_temperature": True,
+                    "supports_json_mode": True,
+                    "input_cost_per_million": 0.15,
+                    "output_cost_per_million": 0.60,
+                }
+            ],
+        }
+    )
+    catalog.upsert_provider(
+        {
             "provider_id": "openrouter-alt",
             "label": "OpenRouter Alt",
             "provider_type": "openrouter",

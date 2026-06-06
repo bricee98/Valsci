@@ -40,8 +40,11 @@ def _fake_data_state(tmp_path: Path):
             {"name": "s2orc_v2", "label": "S2ORC v2", "note": "Preferred full text.", "default": True},
         ],
         "mini_manifest": {
-            "path": str(tmp_path / "semantic_scholar" / "mini_corpora" / "mendelian_v1" / "manifest.json"),
+            "manifest": "mendelian_v1.json",
+            "path": str(tmp_path / "semantic_scholar" / "manifests" / "mendelian_v1.json"),
             "exists": False,
+            "hash": None,
+            "error": None,
         },
     }
 
@@ -191,18 +194,20 @@ def test_data_job_manager_builds_dataset_commands(tmp_path):
 
     mini_command = manager.build_command(
         "mini",
-        {"manifest_path": str(tmp_path / "mendelian_v1.json")},
+        {"manifest": "mendelian_v1.json"},
     )
 
     assert "--mini" in mini_command
     assert "--mini-manifest" in mini_command
+    # The manifest is passed as a bare filename, never a path.
+    assert mini_command[mini_command.index("--mini-manifest") + 1] == "mendelian_v1.json"
 
     full_verify_command = manager.build_command(
         "verify",
         {
             "release": "2026-05-26",
             "datasets": ["papers", "s2orc_v2"],
-            "manifest_path": str(tmp_path / "mendelian_v1.json"),
+            "manifest": "mendelian_v1.json",
         },
     )
 
@@ -220,7 +225,7 @@ def test_data_job_manager_builds_dataset_commands(tmp_path):
         {
             "release": "2026-05-26-mini-mendelian-v1",
             "mini": True,
-            "manifest_path": str(tmp_path / "mendelian_v1.json"),
+            "manifest": "mendelian_v1.json",
         },
     )
 
@@ -228,6 +233,14 @@ def test_data_job_manager_builds_dataset_commands(tmp_path):
     assert "--mini" in mini_verify_command
     assert "--mini-manifest" in mini_verify_command
     assert "--release" not in mini_verify_command
+
+    # A path-like manifest override is rejected loudly at command-build time.
+    try:
+        manager.build_command("mini", {"manifest": "../escape.json"})
+    except ValueError as exc:
+        assert "plain filename" in str(exc)
+    else:
+        raise AssertionError("path-like manifest override must be rejected")
 
     try:
         manager.build_command("first_shard", {"datasets": ["papers"]})
@@ -270,3 +283,55 @@ def test_release_id_pattern_excludes_mini_workspace():
     assert RELEASE_ID_PATTERN.match("2026-05-26")
     assert not RELEASE_ID_PATTERN.match("mini")
     assert not RELEASE_ID_PATTERN.match("binary_indices")
+
+
+def test_data_page_reindex_button_and_confirmation():
+    data_js = Path("app/static/data.js").read_text(encoding="utf-8")
+    # The maintenance action is renamed to "Re-index" (no conditional Index/Reindex label).
+    assert '>Re-index</button>' in data_js
+    assert 'indexStatus.state === "ready" ? "Reindex"' not in data_js
+    # Re-index requires a confirmation that states data files are unchanged.
+    assert "window.confirm(" in data_js
+    assert "Dataset files are not changed" in data_js
+    assert "only the binary indices are rebuilt" in data_js
+
+
+def test_data_page_persists_dataset_checkbox_selection_per_release():
+    data_js = Path("app/static/data.js").read_text(encoding="utf-8")
+    assert "releaseDatasetSelection" in data_js
+    assert "ensureReleaseSelection" in data_js
+    # Selection is keyed by release and reset when the selected release changes.
+    assert "releaseDatasetSelection.releaseId !== release.release_id" in data_js
+    assert "releaseDatasetSelection = null;" in data_js
+    # A change listener keeps the stored selection in sync across re-renders.
+    assert 'addEventListener("change"' in data_js
+
+
+def test_data_page_surfaces_exit_code_and_stderr():
+    data_js = Path("app/static/data.js").read_text(encoding="utf-8")
+    assert "Exit Code" in data_js
+    assert "stderr_tail" in data_js
+    assert 'entry.stream === "stderr"' in data_js
+
+
+def test_data_page_recent_jobs_have_view_log_button():
+    data_js = Path("app/static/data.js").read_text(encoding="utf-8")
+    # A "View log" button per recent job loads that job's full log into the panel.
+    assert "data-view-log" in data_js
+    assert "View log" in data_js
+    assert "viewJobLog" in data_js
+    # The Current Job panel keeps the most recent job visible when idle, so a
+    # finished job's log (e.g. a failure) does not vanish on completion.
+    assert "jobToDisplay" in data_js
+    assert "selectedJobId" in data_js
+
+
+def test_migration_page_scroll_and_report_preview_markup():
+    migration_js = Path("app/static/migration.js").read_text(encoding="utf-8")
+    # After "Review contents" the review panel scrolls into view.
+    assert "scrollIntoView" in migration_js
+    # Claims with a report expose an inline "Preview report" action.
+    assert "Preview report" in migration_js
+    assert "data-preview-claim" in migration_js
+    assert "previewReport" in migration_js
+    assert "report_preview" in migration_js

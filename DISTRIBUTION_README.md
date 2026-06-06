@@ -5,8 +5,27 @@ This package contains a pre-built Docker image for running Valsci without needin
 ## Contents
 - `valsci-image.tar.gz` - The pre-built Docker image
 - `docker-compose.yml` - Configuration for running the application
+- `Dockerfile` - Image build recipe (for reference / rebuilds)
+- `requirements.lock` - Hash-pinned Python dependencies (installed with `--require-hashes`)
+- `semantic_scholar/manifests/` - Curated corpus manifests (mounted read-only)
 - `env_vars.json.example` - Template for configuration
 - `DOCKER_README.md` - Detailed documentation about the Docker setup
+- `SHA256SUMS` / `release_manifest.json` - Integrity metadata for the artifacts above
+
+## Verifying integrity
+
+After extracting, confirm the artifacts were not tampered with or truncated:
+
+```bash
+# With the standard coreutils tool:
+sha256sum -c SHA256SUMS
+
+# Or, if you have the Valsci source checked out:
+python -m scripts.release_integrity verify --dist .
+```
+
+Both checks must pass before loading the image. A mismatch means the file
+differs from what was published — do not load it.
 
 ## Prerequisites
 - [Docker](https://www.docker.com/get-started)

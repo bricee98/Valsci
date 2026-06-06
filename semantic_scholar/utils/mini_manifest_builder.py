@@ -30,7 +30,7 @@ DEFAULT_CLAIM_BANK_PATH = (
     project_root / "semantic_scholar/datasets/mini/curation/mendelian_v1_claims.json"
 )
 DEFAULT_OUTPUT_MANIFEST_PATH = (
-    project_root / "semantic_scholar/mini_corpora/mendelian_v1/manifest.json"
+    project_root / "semantic_scholar/manifests/mendelian_v1.json"
 )
 DEFAULT_SHARD_MAP_PATH = (
     project_root / "semantic_scholar/datasets/mini/curation/mendelian_v1_shard_map.json"

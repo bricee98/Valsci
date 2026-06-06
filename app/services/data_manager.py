@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -16,8 +17,12 @@ from typing import Any, Dict, Iterable, List, Optional
 from app.config.settings import Config
 from semantic_scholar.utils.binary_indexer import BinaryIndexer
 from semantic_scholar.utils.downloader import (
-    DEFAULT_MINI_MANIFEST_PATH,
+    MANIFESTS_DIR,
+    MiniCorpusManifestError,
     S2DatasetDownloader,
+    configured_manifest_name,
+    resolve_manifest_name,
+    resolve_manifest_path,
 )
 
 
@@ -38,6 +43,7 @@ DATASET_NOTES = {
 }
 
 JOB_LOG_LIMIT = 600
+STDERR_TAIL_LIMIT = 20
 RELEASE_ID_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}")
 
 
@@ -121,10 +127,22 @@ def dataset_options() -> List[Dict[str, Any]]:
         downloader.indexer.close()
 
 
+def _file_sha256(path: Path) -> Optional[str]:
+    try:
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(65536), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except Exception:
+        return None
+
+
 def _manifest_summary(path: Path) -> Dict[str, Any]:
     summary = {
         "path": str(path),
         "exists": path.exists(),
+        "hash": None,
         "release_id": None,
         "topic_label": None,
         "mini_release_id": None,
@@ -136,9 +154,19 @@ def _manifest_summary(path: Path) -> Dict[str, Any]:
         "error": None,
     }
     if not path.exists():
+        summary["error"] = f"Manifest not found: {path}"
         return summary
+    summary["hash"] = _file_sha256(path)
     try:
-        data = _json_file(path)
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except json.JSONDecodeError as exc:
+            summary["error"] = f"Manifest is not valid JSON: {exc}"
+            return summary
+        if not isinstance(data, dict):
+            summary["error"] = "Manifest must be a JSON object."
+            return summary
         summary["release_id"] = data.get("release_id")
         summary["mini_release_id"] = data.get("mini_release_id")
         summary["topic_label"] = data.get("topic_label")
@@ -169,8 +197,41 @@ def _manifest_summary(path: Path) -> Dict[str, Any]:
                     files = value.get("files") or value.get("source_files") or []
                     total += len(files) if isinstance(files, list) else 0
             summary["source_file_count"] = total
+        if not str(summary["release_id"] or "").strip():
+            summary["error"] = "Manifest must include release_id."
+        elif not summary["dataset_id_counts"] and not summary["corpus_id_count"] and not summary["author_id_count"]:
+            summary["error"] = "Manifest must include dataset-specific corpus_ids or author_ids."
     except Exception as exc:
         summary["error"] = str(exc)
+    return summary
+
+
+def _manifest_status() -> Dict[str, Any]:
+    """Resolve the configured manifest and build a status summary for the Data page."""
+    configured = str(getattr(Config, "SEMANTIC_SCHOLAR_MANIFEST", "") or "").strip() or configured_manifest_name()
+    try:
+        name = resolve_manifest_name()
+        path = resolve_manifest_path()
+    except MiniCorpusManifestError as exc:
+        return {
+            "manifest": configured,
+            "manifests_dir": str(MANIFESTS_DIR),
+            "path": None,
+            "exists": False,
+            "hash": None,
+            "error": str(exc),
+            "release_id": None,
+            "topic_label": None,
+            "mini_release_id": None,
+            "claim_count": 0,
+            "corpus_id_count": 0,
+            "author_id_count": 0,
+            "dataset_id_counts": {},
+            "source_file_count": 0,
+        }
+    summary = _manifest_summary(path)
+    summary["manifest"] = name
+    summary["manifests_dir"] = str(path.parent)
     return summary
 
 
@@ -263,8 +324,7 @@ def build_data_state() -> Dict[str, Any]:
     try:
         base_dir = downloader.base_dir
         index_dir = downloader.index_dir
-        manifest_path = Path(DEFAULT_MINI_MANIFEST_PATH)
-        manifest_summary = _manifest_summary(manifest_path)
+        manifest_summary = _manifest_status()
         metadata_releases = {
             path.name[: -len("_metadata.json")]
             for path in index_dir.glob("*_metadata.json")
@@ -429,7 +489,7 @@ class DataJobManager:
             self._write_job(job)
             return job
 
-    def _append_log(self, job_id: str, line: str) -> None:
+    def _append_log(self, job_id: str, line: str, stream: str = "system") -> None:
         clean = line.rstrip("\r\n")
         if not clean:
             return
@@ -438,7 +498,9 @@ class DataJobManager:
             if not job:
                 return
             logs = list(job.get("logs") or [])
-            logs.append({"timestamp": _utc_now(), "line": clean})
+            # `line` is kept for backward compatibility; `stream` distinguishes
+            # stdout / stderr / system (orchestration) output.
+            logs.append({"timestamp": _utc_now(), "line": clean, "stream": stream})
             job["logs"] = logs[-JOB_LOG_LIMIT:]
             job["updated_at"] = _utc_now()
             self._write_job(job)
@@ -451,7 +513,11 @@ class DataJobManager:
                 job["ended_at"] = _utc_now()
                 job["updated_at"] = _utc_now()
                 job.setdefault("logs", []).append(
-                    {"timestamp": _utc_now(), "line": "Valsci restarted while this data job was active."}
+                    {
+                        "timestamp": _utc_now(),
+                        "line": "Valsci restarted while this data job was active.",
+                        "stream": "system",
+                    }
                 )
                 self._write_job(job)
 
@@ -470,16 +536,29 @@ class DataJobManager:
     def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
         return self._read_job(job_id)
 
+    @staticmethod
+    def _manifest_arg(payload: Dict[str, Any]) -> str:
+        """Return a validated bare manifest filename from the payload, or '' for the default.
+
+        Accepts the new ``manifest`` key (filename); tolerates a legacy ``manifest_path``
+        value only when it is already a bare filename. Any path-like override is rejected.
+        """
+        raw = str(payload.get("manifest") or payload.get("manifest_path") or "").strip()
+        if not raw:
+            return ""
+        # Validates filename-only; raises MiniCorpusManifestError (a ValueError) on paths.
+        return resolve_manifest_name(raw)
+
     def build_command(self, operation: str, payload: Dict[str, Any]) -> List[str]:
         command = [sys.executable, "-u", "-m", "semantic_scholar.utils.downloader"]
         release = str(payload.get("release") or "").strip()
 
         datasets = _validate_datasets(payload.get("datasets") or [])
+        manifest_name = self._manifest_arg(payload)
         if operation == "mini":
             command.append("--mini")
-            manifest_path = str(payload.get("manifest_path") or "").strip()
-            if manifest_path:
-                command.extend(["--mini-manifest", manifest_path])
+            if manifest_name:
+                command.extend(["--mini-manifest", manifest_name])
             return command
         if operation == "full":
             if release and release != "latest":
@@ -496,9 +575,8 @@ class DataJobManager:
         if operation == "verify":
             if payload.get("mini"):
                 command.append("--mini")
-                manifest_path = str(payload.get("manifest_path") or "").strip()
-                if manifest_path:
-                    command.extend(["--mini-manifest", manifest_path])
+                if manifest_name:
+                    command.extend(["--mini-manifest", manifest_name])
             elif release and release != "latest":
                 command.extend(["--release", release])
             command.append("--verify")
@@ -523,14 +601,18 @@ class DataJobManager:
                 "started_at": None,
                 "ended_at": None,
                 "exit_code": None,
+                "error": None,
+                "stderr_tail": [],
                 "command": command,
                 "command_display": " ".join(command),
                 "options": {
                     "datasets": payload.get("datasets") or [],
                     "release": payload.get("release") or "latest",
-                    "manifest_path": payload.get("manifest_path") or "",
+                    "manifest": self._manifest_arg(payload),
                 },
-                "logs": [{"timestamp": _utc_now(), "line": f"Queued data job: {operation}"}],
+                "logs": [
+                    {"timestamp": _utc_now(), "line": f"Queued data job: {operation}", "stream": "system"}
+                ],
             }
             self._write_job(job)
 
@@ -542,8 +624,10 @@ class DataJobManager:
         job = self._update_job(job_id, status="running", started_at=_utc_now())
         if not job:
             return
-        self._append_log(job_id, f"Command: {job['command_display']}")
+        self._append_log(job_id, f"Command: {job['command_display']}", stream="system")
         process = None
+        stderr_lines: List[str] = []
+        stderr_lock = threading.Lock()
         try:
             env = dict(os.environ)
             env.setdefault("PYTHONUNBUFFERED", "1")
@@ -552,7 +636,7 @@ class DataJobManager:
                 job["command"],
                 cwd=str(self.project_root),
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
@@ -561,20 +645,60 @@ class DataJobManager:
             )
             with self._lock:
                 self._processes[job_id] = process
-            if process.stdout:
-                for line in process.stdout:
-                    self._append_log(job_id, line)
+
+            def pump(pipe, stream: str) -> None:
+                try:
+                    for line in pipe:
+                        self._append_log(job_id, line, stream=stream)
+                        if stream == "stderr":
+                            text = line.rstrip("\r\n")
+                            if text:
+                                with stderr_lock:
+                                    stderr_lines.append(text)
+                finally:
+                    try:
+                        pipe.close()
+                    except Exception:
+                        pass
+
+            readers: List[threading.Thread] = []
+            for pipe, stream in ((process.stdout, "stdout"), (process.stderr, "stderr")):
+                if pipe is None:
+                    continue
+                reader = threading.Thread(target=pump, args=(pipe, stream), daemon=True)
+                reader.start()
+                readers.append(reader)
+
             exit_code = process.wait()
+            for reader in readers:
+                reader.join()
+
+            with stderr_lock:
+                tail = stderr_lines[-STDERR_TAIL_LIMIT:]
+
             latest = self._read_job(job_id) or {}
             if latest.get("status") == "cancel_requested":
                 status = "cancelled"
             else:
                 status = "success" if exit_code == 0 else "failed"
-            self._update_job(job_id, status=status, exit_code=exit_code, ended_at=_utc_now())
-            self._append_log(job_id, f"Data job {status} with exit code {exit_code}.")
+
+            updates: Dict[str, Any] = {
+                "status": status,
+                "exit_code": exit_code,
+                "ended_at": _utc_now(),
+                "stderr_tail": tail,
+            }
+            if status == "failed":
+                updates["error"] = (
+                    " ".join(tail[-3:]) if tail else f"Process exited with code {exit_code}."
+                )
+            self._update_job(job_id, **updates)
+            self._append_log(
+                job_id, f"Data job {status} with exit code {exit_code}.", stream="system"
+            )
         except Exception as exc:
             self._update_job(job_id, status="failed", ended_at=_utc_now(), error=str(exc))
-            self._append_log(job_id, f"Data job failed: {exc}")
+            self._append_log(job_id, f"Data job failed: {exc}", stream="system")
         finally:
             with self._lock:
                 self._processes.pop(job_id, None)

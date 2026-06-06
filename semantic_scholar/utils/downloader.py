@@ -1,6 +1,9 @@
 import os
+import io
 import json
 import requests
+import urllib3
+from http.client import IncompleteRead
 from typing import Any, List, Dict, Optional, Tuple, Set
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -27,13 +30,18 @@ project_root = str(Path(__file__).parent.parent.parent)
 sys.path.append(project_root)
 
 # Now we can import using the full package path
-from semantic_scholar.utils.binary_indexer import BinaryIndexer, IndexEntry
+from semantic_scholar.utils.binary_indexer import BinaryIndexer, IndexEntry, remove_scratch_path
 from app.config.settings import Config
 
 BASE_URL = "https://api.semanticscholar.org/datasets/v1"
 console = Console()
 
-DEFAULT_MINI_MANIFEST_PATH = Path(project_root) / "semantic_scholar/mini_corpora/mendelian_v1/manifest.json"
+# Curated corpus manifests are tracked, immutable inputs and live ONLY here.
+MANIFESTS_DIR = Path(project_root) / "semantic_scholar" / "manifests"
+DEFAULT_MINI_MANIFEST_NAME = "mendelian_v1.json"
+# Scratch/build work lives under STATE_DIR so it never pollutes the verified
+# dataset/index directories. Cleanup is explicit and job-scoped.
+DATA_WORK_DIR = Path(Config.STATE_DIR) / "data_work"
 MINI_SUPPORTED_DATASETS = {"papers", "abstracts", "authors", "s2orc_v2", "tldrs"}
 S2ORC_DATASETS = {"s2orc_v2"}
 DEFAULT_DATASETS = ["papers", "abstracts", "authors", "s2orc_v2", "tldrs"]
@@ -42,6 +50,50 @@ SUPPORTED_DATASETS = ["papers", "abstracts", "authors", "s2orc_v2", "tldrs"]
 
 class MiniCorpusManifestError(ValueError):
     """Raised when the curated mini-corpus manifest is missing or invalid."""
+
+
+def configured_manifest_name() -> str:
+    """Return the manifest filename selected via SEMANTIC_SCHOLAR_MANIFEST."""
+    name = str(getattr(Config, "SEMANTIC_SCHOLAR_MANIFEST", "") or "").strip()
+    return name or DEFAULT_MINI_MANIFEST_NAME
+
+
+def resolve_manifest_name(name: Optional[str] = None) -> str:
+    """Validate that ``name`` (or the configured default) is a bare manifest filename.
+
+    Manifests are resolved only from ``semantic_scholar/manifests/``; anything that
+    looks like a path (separators, parent refs, drive/absolute) is rejected loudly.
+    """
+    candidate = configured_manifest_name() if name is None else str(name).strip()
+    if not candidate:
+        candidate = DEFAULT_MINI_MANIFEST_NAME
+    invalid = (
+        candidate in {".", ".."}
+        or "/" in candidate
+        or "\\" in candidate
+        or candidate != os.path.basename(candidate)
+        or os.path.isabs(candidate)
+        or Path(candidate).name != candidate
+    )
+    if invalid:
+        raise MiniCorpusManifestError(
+            "SEMANTIC_SCHOLAR_MANIFEST must be a plain filename with no path separators "
+            f"(got {candidate!r}). Place curated manifests in {MANIFESTS_DIR} and "
+            "reference them by filename only."
+        )
+    return candidate
+
+
+def resolve_manifest_path(name: Optional[str] = None) -> Path:
+    """Resolve a manifest filename to an absolute path under ``MANIFESTS_DIR``."""
+    return MANIFESTS_DIR / resolve_manifest_name(name)
+
+
+# Backwards-compatible default path (configured filename resolved within MANIFESTS_DIR).
+try:
+    DEFAULT_MINI_MANIFEST_PATH = resolve_manifest_path()
+except MiniCorpusManifestError:
+    DEFAULT_MINI_MANIFEST_PATH = MANIFESTS_DIR / DEFAULT_MINI_MANIFEST_NAME
 
 class RateLimiter:
     def __init__(self, requests_per_second: float = 1.0):
@@ -57,6 +109,130 @@ class RateLimiter:
             sleep_time = self.min_interval - elapsed
             time.sleep(sleep_time)
         self.last_request = time.time()
+
+# Transient errors that indicate a dropped/interrupted byte stream (as opposed
+# to a clean EOF). These are recoverable by resuming or re-requesting.
+TRANSIENT_STREAM_ERRORS = (
+    urllib3.exceptions.ProtocolError,
+    urllib3.exceptions.ReadTimeoutError,
+    urllib3.exceptions.IncompleteRead,
+    IncompleteRead,
+    requests.exceptions.ChunkedEncodingError,
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+    ConnectionError,
+    TimeoutError,
+    OSError,
+)
+
+
+class ResumeNotSupported(Exception):
+    """Raised when an interrupted stream cannot be resumed via HTTP Range
+    (e.g. the server ignored the Range header), so the whole download must
+    restart from the beginning instead."""
+
+
+class _ResumableHTTPReader(io.RawIOBase):
+    """A raw, file-like reader over an HTTP source that transparently resumes
+    via HTTP Range requests when the underlying connection drops mid-stream.
+
+    It exposes the *raw* (still-compressed) bytes, so a gzip/decompression
+    layer wrapped on top is oblivious to reconnects: the byte stream it sees is
+    continuous even though it was stitched from multiple HTTP responses.
+
+    Byte-level resume requires the server to honor Range requests (S3/CloudFront
+    do). If a resume request is answered with a full 200 instead of 206, we
+    raise ResumeNotSupported so the caller can restart the whole download.
+    """
+
+    def __init__(
+        self,
+        downloader: "S2DatasetDownloader",
+        url: str,
+        *,
+        max_resume_attempts: int = 6,
+        max_total_resumes: Optional[int] = None,
+        backoff_base: float = 1.0,
+        backoff_max: float = 30.0,
+    ):
+        super().__init__()
+        self._downloader = downloader
+        self._url = url
+        # Cap on *consecutive* failures without forward progress, and an overall
+        # ceiling so a server that dribbles a few bytes before each drop cannot
+        # make us reconnect forever.
+        self._max_resume_attempts = max_resume_attempts
+        self._max_total_resumes = (
+            max_total_resumes if max_total_resumes is not None else max(max_resume_attempts * 10, 30)
+        )
+        self._backoff_base = backoff_base
+        self._backoff_max = backoff_max
+        self._pos = 0  # raw (compressed) bytes successfully consumed
+        self._consecutive_failures = 0
+        self._total_resumes = 0
+        self._resp = None
+        self._raw = None
+        self._open()
+
+    def _open(self) -> None:
+        headers = {}
+        if self._pos > 0:
+            headers["Range"] = f"bytes={self._pos}-"
+        resp = self._downloader.make_request(self._url, stream=True, headers=headers)
+        if self._pos > 0 and getattr(resp, "status_code", None) != 206:
+            try:
+                resp.close()
+            except Exception:
+                pass
+            raise ResumeNotSupported(
+                f"Server did not honor Range at byte {self._pos} "
+                f"(status {getattr(resp, 'status_code', '?')}); cannot resume."
+            )
+        self._resp = resp
+        self._raw = resp.raw
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer) -> int:
+        while True:
+            try:
+                chunk = self._raw.read(len(buffer), decode_content=False)
+            except TRANSIENT_STREAM_ERRORS as exc:
+                self._consecutive_failures += 1
+                self._total_resumes += 1
+                if (
+                    self._consecutive_failures > self._max_resume_attempts
+                    or self._total_resumes > self._max_total_resumes
+                ):
+                    raise
+                wait = min(self._backoff_max, self._backoff_base * (2 ** (self._consecutive_failures - 1)))
+                console.print(
+                    f"[yellow]Stream interrupted at byte {self._pos:,} ({exc}); resuming in "
+                    f"{wait:.0f}s (attempt {self._consecutive_failures}/{self._max_resume_attempts})[/yellow]"
+                )
+                time.sleep(wait)
+                self._close_response()
+                self._open()  # may raise ResumeNotSupported -> caller restarts
+                continue
+            count = len(chunk)
+            if count:
+                buffer[:count] = chunk
+                self._pos += count
+                self._consecutive_failures = 0  # forward progress resets the streak
+            return count
+
+    def _close_response(self) -> None:
+        try:
+            if self._resp is not None:
+                self._resp.close()
+        except Exception:
+            pass
+
+    def close(self) -> None:
+        self._close_response()
+        super().close()
+
 
 class S2DatasetDownloader:
     def __init__(self, version: Optional[str] = None):
@@ -81,7 +257,11 @@ class S2DatasetDownloader:
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.index_dir = self.base_dir / "binary_indices"
         self.index_dir.mkdir(parents=True, exist_ok=True)
-        
+
+        # Scratch/build work area, kept out of the verified dataset/index dirs.
+        self.work_dir = DATA_WORK_DIR
+        self.work_dir.mkdir(parents=True, exist_ok=True)
+
         # Define which IDs to index for each dataset
         self.dataset_id_fields = {
             'papers': [('corpusid', 'corpus_id')],
@@ -90,10 +270,17 @@ class S2DatasetDownloader:
             'authors': [('authorid', 'author_id')],
             'tldrs': [('corpusid', 'corpus_id')]
         }
-        
-        # Initialize binary indexer
-        self.indexer = BinaryIndexer(self.base_dir)
-        
+
+        # Initialize binary indexer (its scratch lives under the same work area)
+        self.indexer = BinaryIndexer(self.base_dir, work_dir=self.work_dir / "index_tmp")
+
+    @property
+    def scratch_root(self) -> Path:
+        """Root for build/backup/cache scratch, outside verified dataset dirs."""
+        root = Path(getattr(self, "work_dir", None) or DATA_WORK_DIR)
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
     def make_request(self, url: str, method: str = 'get', max_retries: int = 5, **kwargs) -> requests.Response:
         """Make a request with retry logic for rate limits and expired credentials."""
         for attempt in range(max_retries):
@@ -305,9 +492,12 @@ class S2DatasetDownloader:
         )
 
     def _load_mini_manifest(self, manifest_path: Optional[Path] = None) -> Tuple[Path, Dict[str, Any]]:
-        path = Path(manifest_path or DEFAULT_MINI_MANIFEST_PATH).expanduser()
-        if not path.is_absolute():
-            path = Path(project_root) / path
+        if manifest_path is None:
+            path = resolve_manifest_path()
+        else:
+            path = Path(manifest_path).expanduser()
+            if not path.is_absolute():
+                path = Path(project_root) / path
         path = path.resolve()
         if not path.exists():
             raise MiniCorpusManifestError(self._mini_manifest_setup_instructions(path))
@@ -455,19 +645,7 @@ class S2DatasetDownloader:
 
     def _iter_source_lines(self, source: str):
         if self._is_remote_source(source):
-            response = self.make_request(source, stream=True)
-            response.raw.decode_content = True
-            try:
-                raw_stream = response.raw
-                if self.get_filename_from_url(source).endswith(".gz"):
-                    with gzip.GzipFile(fileobj=raw_stream) as gzip_stream:
-                        for line in gzip_stream:
-                            yield line
-                else:
-                    for line in raw_stream:
-                        yield line
-            finally:
-                response.close()
+            yield from self._iter_remote_source_lines(source)
             return
 
         source_path = Path(source)
@@ -477,6 +655,46 @@ class S2DatasetDownloader:
         with opener(source_path, "rb") as handle:
             for line in handle:
                 yield line
+
+    def _iter_remote_source_lines(self, source: str, whole_restart_attempts: int = 2):
+        """Stream lines from a remote shard, resilient to dropped connections.
+
+        Primary recovery is byte-level resume via HTTP Range (see
+        _ResumableHTTPReader). If the stream still cannot be completed (e.g. the
+        server ignores Range, or the gzip ends up truncated), the whole shard is
+        re-downloaded from the start up to ``whole_restart_attempts`` times.
+        Re-emitting already-seen lines on a restart is safe: callers de-duplicate
+        by record ID, so duplicates are skipped downstream.
+        """
+        is_gz = self.get_filename_from_url(source).endswith(".gz")
+        restartable_errors = TRANSIENT_STREAM_ERRORS + (
+            ResumeNotSupported,
+            EOFError,
+            gzip.BadGzipFile,
+        )
+        for restart in range(whole_restart_attempts + 1):
+            reader = _ResumableHTTPReader(self, source)
+            buffered = io.BufferedReader(reader)
+            stream = gzip.GzipFile(fileobj=buffered) if is_gz else buffered
+            try:
+                for line in stream:
+                    yield line
+                return  # completed cleanly
+            except restartable_errors as exc:
+                if restart >= whole_restart_attempts:
+                    raise
+                wait = min(30, 2 ** restart)
+                console.print(
+                    f"[yellow]Shard stream failed ({exc}); re-downloading from the start "
+                    f"in {wait}s (restart {restart + 1}/{whole_restart_attempts})[/yellow]"
+                )
+                time.sleep(wait)
+            finally:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+                reader.close()
 
     def _record_matches_manifest(
         self,
@@ -563,7 +781,7 @@ class S2DatasetDownloader:
         target_ids: Set[str],
     ) -> List[str]:
         sources = list(configured_sources)
-        cache_path = self.base_dir / "mini" / "source_extracts" / self._safe_slug(mini_release_id) / f"{dataset}.jsonl"
+        cache_path = self.scratch_root / "mini" / "source_extracts" / self._safe_slug(mini_release_id) / f"{dataset}.jsonl"
         cache_resolved = str(cache_path.resolve())
         if cache_path.exists() and cache_resolved not in sources:
             sources.append(cache_resolved)
@@ -637,7 +855,7 @@ class S2DatasetDownloader:
                 )
             console.print(f"[cyan]Existing mini release will be replaced after rebuild succeeds: {release_dir}[/cyan]")
 
-        build_root = self.base_dir / "mini" / "builds"
+        build_root = self.scratch_root / "mini" / "builds"
         build_root.mkdir(parents=True, exist_ok=True)
         build_dir = build_root / f"{self._safe_slug(mini_release_id)}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
         if build_dir.exists():
@@ -713,7 +931,7 @@ class S2DatasetDownloader:
         backup_dir: Optional[Path] = None
         try:
             if release_dir.exists():
-                backup_root = self.base_dir / "mini" / "release_backups"
+                backup_root = self.scratch_root / "mini" / "release_backups"
                 backup_root.mkdir(parents=True, exist_ok=True)
                 backup_dir = backup_root / f"{self._safe_slug(mini_release_id)}-{uuid.uuid4().hex[:8]}"
                 shutil.move(str(release_dir), str(backup_dir))
@@ -722,7 +940,7 @@ class S2DatasetDownloader:
             if backup_dir and backup_dir.exists() and not release_dir.exists():
                 shutil.move(str(backup_dir), str(release_dir))
             if build_dir.exists():
-                shutil.rmtree(build_dir)
+                shutil.rmtree(build_dir, ignore_errors=True)
             raise
 
         for dataset, count in written_by_dataset.items():
@@ -732,8 +950,16 @@ class S2DatasetDownloader:
             if not self.index_dataset(dataset, mini_release_id):
                 raise MiniCorpusManifestError(f"Failed to index mini-corpus dataset: {dataset}")
 
+        # Housekeeping: remove the now-redundant backup (bounded retry). A failure
+        # here means scratch is piling up in a verified-data-adjacent area, so the
+        # job must fail loudly rather than report success.
         if backup_dir and backup_dir.exists():
-            shutil.rmtree(backup_dir)
+            try:
+                remove_scratch_path(backup_dir)
+            except OSError as exc:
+                raise MiniCorpusManifestError(
+                    f"Mini corpus built but housekeeping failed: {exc}"
+                ) from exc
 
         console.print(
             f"[green]Curated mini corpus ready: {mini_release_id} "
@@ -944,9 +1170,10 @@ class S2DatasetDownloader:
             if missing_files:
                 console.print(f"\n[cyan]Getting fresh download URLs for {len(missing_files)} missing files...[/cyan]")
                 dataset_info = self.get_dataset_info(dataset_name, release_id)
-                
+
                 # Download missing files
                 downloaded_files = []
+                download_failures = 0
                 for file_info in missing_files:
                     if dataset_name in S2ORC_DATASETS:
                         url = file_info['url']
@@ -956,10 +1183,20 @@ class S2DatasetDownloader:
                         success, path = self.download_file(file_info, dataset_dir)
                     if success and path:
                         downloaded_files.append(path)
+                    else:
+                        download_failures += 1
+
+                if download_failures:
+                    console.print(
+                        f"[red]{download_failures} of {len(missing_files)} {dataset_name} files failed to download[/red]"
+                    )
+                    return False
 
                 if index and downloaded_files:
-                    self.index_dataset(dataset_name, release_id)
-                
+                    if not self.index_dataset(dataset_name, release_id):
+                        console.print(f"[red]Indexing failed for {dataset_name}[/red]")
+                        return False
+
             return True
                 
         except Exception as e:
@@ -1099,8 +1336,14 @@ class S2DatasetDownloader:
                     console.print(f"[red]Failed to create index for {dataset}_{id_type}[/red]")
                     return False
 
-            # Comment out or remove the cleanup:
-            # shutil.rmtree(chunk_dir)
+            # Explicit, job-scoped cleanup of the chunk scratch (bounded retry).
+            # A cleanup failure fails the index step rather than silently leaving
+            # scratch behind.
+            try:
+                remove_scratch_path(chunk_dir)
+            except OSError as exc:
+                console.print(f"[red]Failed to clean up index scratch for {dataset}: {exc}[/red]")
+                return False
 
             console.print(f"[green]Successfully created {total_entries:,} total index entries for {dataset}[/green]")
             return True
@@ -1108,7 +1351,7 @@ class S2DatasetDownloader:
         except Exception as e:
             console.print(f"[red]Error indexing dataset {dataset}: {str(e)}[/red]")
             if 'chunk_dir' in locals() and chunk_dir.exists():
-                shutil.rmtree(chunk_dir)
+                shutil.rmtree(chunk_dir, ignore_errors=True)
             return False
 
     def __enter__(self):
@@ -1552,8 +1795,11 @@ def main():
     )
     parser.add_argument(
         '--mini-manifest',
-        default=str(DEFAULT_MINI_MANIFEST_PATH),
-        help='Path to the local curated mini-corpus manifest used by --mini.',
+        default=None,
+        help=(
+            'Filename (no path) of the curated manifest in semantic_scholar/manifests/ '
+            'used by --mini. Defaults to the SEMANTIC_SCHOLAR_MANIFEST setting.'
+        ),
     )
     parser.add_argument(
         '--datasets',
@@ -1605,17 +1851,22 @@ def main():
             args.update,
         ]):
             try:
-                downloader.materialize_mini_corpus(Path(args.mini_manifest))
+                manifest_path = resolve_manifest_path(args.mini_manifest)
+                downloader.materialize_mini_corpus(manifest_path)
             except MiniCorpusManifestError as exc:
                 console.print(f"[red]{exc}[/red]")
-                sys.exit(1)
-            return
+                return False
+            except Exception as exc:
+                console.print(f"[red]Mini corpus build failed: {exc}[/red]")
+                return False
+            return True
 
         if args.verify:
             # Verify downloaded files match expected files from API
             if args.mini:
                 try:
-                    return downloader.verify_mini_corpus(Path(args.mini_manifest))
+                    manifest_path = resolve_manifest_path(args.mini_manifest)
+                    return downloader.verify_mini_corpus(manifest_path)
                 except MiniCorpusManifestError as exc:
                     console.print(f"[red]{exc}[/red]")
                     return False
@@ -1626,10 +1877,11 @@ def main():
             
             console.print(f"\n[bold cyan]Verifying downloads for release {release_id}...[/bold cyan]")
             missing_files = {}
-            
+            verify_errors = False
+
             datasets = validate_datasets(args.datasets)
             if datasets is None:
-                return
+                return False
 
             for dataset in datasets:
                 try:
@@ -1637,16 +1889,16 @@ def main():
                     if not dataset_info:
                         console.print(f"[yellow]Could not get info for dataset: {dataset}[/yellow]")
                         continue
-                        
+
                     dataset_dir = downloader.base_dir / release_id / dataset
                     if not dataset_dir.exists():
                         missing_files[dataset] = ["entire dataset missing"]
                         continue
-                    
+
                     # Get expected files
                     if dataset in S2ORC_DATASETS:
                         expected_files = [
-                            f"{info['shard']}.json" 
+                            f"{info['shard']}.json"
                             for info in dataset_info['files']
                         ]
                     else:
@@ -1654,22 +1906,26 @@ def main():
                             downloader.get_filename_from_url(url).replace('.gz', '.json')
                             for url in dataset_info['files']
                         ]
-                    
+
                     # Check actual files
                     actual_files = {f.name for f in dataset_dir.glob('*.json') if f.name != 'metadata.json'}
                     missing = set(expected_files) - actual_files
                     if missing:
                         missing_files[dataset] = missing
-                        
+
                 except Exception as e:
                     console.print(f"[red]Error verifying {dataset}: {str(e)}[/red]")
-            
-            if missing_files:
-                console.print("\n[red]Missing files found:[/red]")
-                for dataset, files in missing_files.items():
-                    console.print(f"\n[yellow]{dataset}:[/yellow]")
-                    for f in files:
-                        console.print(f"  • {f}")
+                    verify_errors = True
+
+            if missing_files or verify_errors:
+                if missing_files:
+                    console.print("\n[red]Missing files found:[/red]")
+                    for dataset, files in missing_files.items():
+                        console.print(f"\n[yellow]{dataset}:[/yellow]")
+                        for f in files:
+                            console.print(f"  • {f}")
+                if verify_errors:
+                    console.print("\n[red]Verification encountered errors (see above).[/red]")
                 return False
             else:
                 console.print("\n[green]All expected files are present![/green]")
@@ -1682,10 +1938,10 @@ def main():
                 release_id = downloader._get_latest_local_release()
             if not release_id:
                 console.print("[red]No local releases found[/red]")
-                return
-                
+                return False
+
             stats = downloader.indexer.get_index_stats(release_id)
-            
+
             # Create a rich table to display stats
             table = Table(title=f"Index Statistics for Release {release_id}")
             table.add_column("Dataset")
@@ -1715,15 +1971,15 @@ def main():
         elif args.audit is not None:
             datasets = validate_datasets(args.audit or args.datasets)
             if datasets is None:
-                return
-                
+                return False
+
             release_id = args.release
             if release_id == 'latest':
                 release_id = downloader._get_latest_local_release()
             if not release_id:
                 console.print("[red]No local releases found[/red]")
-                return
-                
+                return False
+
             # Create audit table
             table = Table(title=f"Dataset Audit for Release {release_id}")
             table.add_column("Dataset")
@@ -1771,37 +2027,42 @@ def main():
         elif args.verify_index is not None:
             datasets = validate_datasets(args.verify_index)
             if datasets is None:
-                return
-                
+                return False
+
             release_id = args.release
             if release_id == 'latest':
                 release_id = downloader._get_latest_local_release()
             if not release_id:
                 console.print("[red]No local releases found[/red]")
-                return
-                
+                return False
+
             console.print(f"[cyan]Verifying indices for {len(datasets)} datasets...[/cyan]")
-            
+
             # First do a quick estimate check
             console.print(f"\n[bold]Quick estimation check...[/bold]")
             if downloader.verify_index_completeness(release_id, quick_estimate=True):
                 console.print(f"[green]OK Quick estimate check passed[/green]")
-                
+
                 # If quick check passes, offer to do detailed verification
                 response = prompt_yes_no("\nQuick check passed. Would you like to perform a detailed verification? (y/N)")
                 if response == 'y':
                     console.print(f"\n[bold]Performing detailed verification...[/bold]")
                     if downloader.indexer.verify_all_indices(release_id, show_details=True):
                         console.print(f"[green]OK All indices verified successfully[/green]")
-                    else:
-                        console.print(f"[red]FAIL Indices verification failed[/red]")
+                        return True
+                    console.print(f"[red]FAIL Indices verification failed[/red]")
+                    return False
+                return True
             else:
                 console.print(f"[red]FAIL Quick estimate check failed[/red]")
                 response = prompt_yes_no("\nWould you like to perform a detailed verification to identify issues? (y/N)")
                 if response == 'y':
                     console.print(f"\n[bold]Performing detailed verification...[/bold]")
                     downloader.indexer.verify_all_indices(release_id, show_details=True)
-                    
+                # A failed quick estimate is a verification failure regardless of
+                # whether the optional detailed pass was run.
+                return False
+
         elif args.update:
             # Perform an incremental update (diff-based). This downloads only the changes
             # between the current local release and the latest available release, then
@@ -1813,24 +2074,29 @@ def main():
         elif args.index_only is not None:
             datasets = validate_datasets(args.index_only or args.datasets)
             if datasets is None:
-                return
-                
+                return False
+
             release_id = args.release
             if release_id == 'latest':
                 release_id = downloader._get_latest_local_release()
             if not release_id:
                 console.print("[red]No local releases found[/red]")
-                return
-                
+                return False
+
             console.print(f"[cyan]Indexing {len(datasets)} datasets...[/cyan]")
-            
+
+            index_failed = False
             for dataset in datasets:
                 console.print(f"\n[bold]Indexing {dataset}...[/bold]")
                 if downloader.index_dataset(dataset, release_id):
                     console.print(f"[green]OK Successfully indexed {dataset}[/green]")
                 else:
                     console.print(f"[red]FAIL Failed to index {dataset}[/red]")
-                    
+                    index_failed = True
+            if index_failed:
+                return False
+            return True
+
         elif args.repair:
             # Repair mode: re-index datasets that are missing or unhealthy for the latest local release
             release_id = args.release
@@ -1839,13 +2105,14 @@ def main():
 
             if not release_id:
                 console.print("[red]No local releases found to repair[/red]")
-                return
+                return False
 
             console.print(f"[bold cyan]Repairing indices for release {release_id}...[/bold cyan]")
 
             # Get current index stats (may be empty)
             stats = downloader.indexer.get_index_stats(release_id)
 
+            repair_failed = False
             for dataset in downloader.datasets_to_download:
                 # Determine for every id_type if index exists and is healthy
                 needs_rebuild = False
@@ -1864,27 +2131,36 @@ def main():
                         console.print(f"[green]OK Successfully re-indexed {dataset}[/green]")
                     else:
                         console.print(f"[red]FAIL Failed to re-index {dataset}[/red]")
+                        repair_failed = True
 
             console.print("\n[bold cyan]Repair completed[/bold cyan]")
+            if repair_failed:
+                return False
+            return True
 
         else:
             # Download and index all datasets
             release_id = args.release
             if release_id == 'latest':
                 release_id = downloader.get_latest_release()
-                
+
             console.print(f"[bold cyan]Downloading and indexing datasets for release {release_id}...[/bold cyan]")
-            
+
             datasets = validate_datasets(args.datasets)
             if datasets is None:
-                return
+                return False
 
+            download_failed = False
             for dataset in datasets:
                 console.print(f"\n[bold]Processing {dataset}...[/bold]")
                 if downloader.download_dataset(dataset, release_id, index=True):
                     console.print(f"[green]OK Successfully processed {dataset}[/green]")
                 else:
                     console.print(f"[red]FAIL Failed to process {dataset}[/red]")
+                    download_failed = True
+            if download_failed:
+                return False
+            return True
 
 if __name__ == "__main__":
     result = main()

@@ -46,7 +46,7 @@
             <div class="panel-header">
                 <div>
                     <h2 class="panel-title">Current Job</h2>
-                    <p class="panel-subtitle">Downloader output streams here while the job runs.</p>
+                    <p class="panel-subtitle">Downloader output streams here while the job runs; the most recent job stays visible when idle.</p>
                 </div>
                 <span id="jobStatusBadge" class="badge neutral-badge">Idle</span>
             </div>
@@ -103,8 +103,9 @@
         <div id="miniReleaseFields" class="wizard-fields">
             <div id="miniManifestSummary" class="status-card info-card"></div>
             <div class="form-row">
-                <label for="miniManifestPath">Mini Manifest</label>
-                <input type="text" id="miniManifestPath">
+                <label for="miniManifestPath">Mini Manifest (filename)</label>
+                <input type="text" id="miniManifestPath" placeholder="mendelian_v1.json">
+                <small class="form-hint">Filename only, resolved from semantic_scholar/manifests/. Leave as the default unless overriding.</small>
             </div>
         </div>
 

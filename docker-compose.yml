@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   web:
     image: valsci:latest
@@ -8,9 +6,16 @@ services:
       - "3000:3000"
     environment:
       - FLASK_APP=run.py
+    # Lets the container reach host services (e.g. a host-run Ollama) at
+    # http://host.docker.internal:<port>. Auto-provided on Docker Desktop;
+    # this mapping makes it work on Linux hosts too.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./app/config/env_vars.json:/valsci/app/config/env_vars.json
+      - ./semantic_scholar/manifests:/valsci/semantic_scholar/manifests:ro
       - semantic_scholar_data:/valsci/semantic_scholar/datasets
+      - valsci_state:/valsci/state
       - queued_jobs:/valsci/queued_jobs
       - saved_jobs:/valsci/saved_jobs
     restart: unless-stopped
@@ -19,9 +24,13 @@ services:
     image: valsci:latest
     container_name: valsci-processor
     command: python processor.py
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./app/config/env_vars.json:/valsci/app/config/env_vars.json
+      - ./semantic_scholar/manifests:/valsci/semantic_scholar/manifests:ro
       - semantic_scholar_data:/valsci/semantic_scholar/datasets
+      - valsci_state:/valsci/state
       - queued_jobs:/valsci/queued_jobs
       - saved_jobs:/valsci/saved_jobs
     restart: unless-stopped
@@ -30,5 +39,6 @@ services:
 
 volumes:
   semantic_scholar_data:
+  valsci_state:
   queued_jobs:
   saved_jobs:

@@ -1442,6 +1442,57 @@ class ClaimStore:
             "claims": claims,
         }
 
+    def preview_legacy_report(
+        self,
+        batch_id: str,
+        claim_id: str,
+        root: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Return a lightweight preview of a legacy claim's report (rating,
+        explanation, evidence counts) without importing the batch.
+
+        ``root`` optionally restricts the lookup to ``saved_jobs`` or
+        ``queued_jobs``. Returns ``None`` if the claim file cannot be found.
+        """
+        root = (root or "").strip() or None
+        if root and root not in {"saved_jobs", "queued_jobs"}:
+            raise ValueError("root must be 'saved_jobs' or 'queued_jobs'")
+
+        for root_name, _batch_dir, claim_file in self._iter_legacy_claim_files(batch_id=batch_id):
+            if claim_file.stem != claim_id:
+                continue
+            if root and root_name != root:
+                continue
+            claim_data = _read_json(claim_file)
+            report = claim_data.get("report")
+            report = report if isinstance(report, dict) else None
+            preview = None
+            if report:
+                relevant = len(report.get("relevantPapers") or [])
+                non_relevant = len(report.get("nonRelevantPapers") or [])
+                inaccessible = len(report.get("inaccessiblePapers") or [])
+                preview = {
+                    "rating": report.get("claimRating"),
+                    "explanation": report.get("explanation") or "",
+                    "evidence": {
+                        "relevant": relevant,
+                        "non_relevant": non_relevant,
+                        "inaccessible": inaccessible,
+                        "search_queries": len(report.get("searchQueries") or []),
+                        "total_papers": relevant + non_relevant + inaccessible,
+                    },
+                }
+            return {
+                "batch_id": batch_id,
+                "claim_id": claim_id,
+                "source_root": root_name,
+                "status": claim_data.get("status", "unknown"),
+                "text": claim_data.get("text", ""),
+                "has_report": bool(report),
+                "report_preview": preview,
+            }
+        return None
+
     def discover_legacy_batches(self) -> List[str]:
         return [batch["batch_id"] for batch in self.list_legacy_batches() if batch["status"] == "pending"]
 

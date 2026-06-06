@@ -87,7 +87,7 @@
     byId("migrationReviewSubtitle").textContent = `${detail.batch_id} / ${detail.claim_count} claim${detail.claim_count === 1 ? "" : "s"} / ${detail.status.replace(/_/g, " ")}`;
     renderReviewActions(detail);
     byId("migrationReviewContent").innerHTML = (detail.claims || []).map(claim => `
-      <article class="record-card">
+      <article class="record-card" data-claim-card="${escapeHtml(claim.claim_id)}">
         <div class="panel-header">
           <div>
             <strong>${escapeHtml(claim.text || claim.claim_id)}</strong>
@@ -101,8 +101,57 @@
           <span>${escapeHtml(formatDateTime(claim.updated_at))}</span>
           <span>${claim.has_report ? "Has report" : "No report yet"}</span>
         </div>
+        ${claim.has_report ? `
+        <div class="inline-actions">
+          <button type="button" class="secondary-button small-button"
+            data-preview-claim="${escapeHtml(claim.claim_id)}"
+            data-preview-root="${escapeHtml(claim.source_root || "")}">Preview report</button>
+        </div>` : ""}
+        <div class="migration-report-preview hidden" data-preview-for="${escapeHtml(claim.claim_id)}"></div>
       </article>
     `).join("") || `<div class="empty-state"><strong>No claim preview available.</strong></div>`;
+  }
+
+  async function previewReport(button) {
+    const card = button.closest("[data-claim-card]");
+    const container = card ? card.querySelector("[data-preview-for]") : null;
+    if (!container) return;
+    const claimId = button.dataset.previewClaim;
+    const root = button.dataset.previewRoot || "";
+    const batchId = selectedBatchId;
+    if (!batchId) return;
+    button.disabled = true;
+    const originalLabel = button.textContent;
+    button.textContent = "Loading…";
+    try {
+      const query = root ? `?root=${encodeURIComponent(root)}` : "";
+      const data = await fetchJson(
+        `/api/v1/migration/batches/${encodeURIComponent(batchId)}/claims/${encodeURIComponent(claimId)}/report${query}`
+      );
+      container.classList.remove("hidden");
+      if (!data.has_report || !data.report_preview) {
+        container.innerHTML = `<div class="empty-state"><strong>No report available for this claim yet.</strong></div>`;
+      } else {
+        const preview = data.report_preview;
+        const evidence = preview.evidence || {};
+        const rating = (preview.rating === null || preview.rating === undefined) ? "—" : String(preview.rating);
+        container.innerHTML = `
+          <div class="report-preview-grid">
+            <div class="summary-cell"><span class="label">Rating</span><span class="value">${escapeHtml(rating)}</span></div>
+            <div class="summary-cell"><span class="label">Relevant</span><span class="value">${Number(evidence.relevant || 0)}</span></div>
+            <div class="summary-cell"><span class="label">Non-relevant</span><span class="value">${Number(evidence.non_relevant || 0)}</span></div>
+            <div class="summary-cell"><span class="label">Inaccessible</span><span class="value">${Number(evidence.inaccessible || 0)}</span></div>
+          </div>
+          <p class="report-preview-explanation">${escapeHtml(preview.explanation || "")}</p>
+        `;
+      }
+    } catch (error) {
+      container.classList.remove("hidden");
+      container.innerHTML = `<div class="status-card error-card"><strong>Could not load report preview.</strong><span>${escapeHtml(error.message)}</span></div>`;
+    } finally {
+      button.disabled = false;
+      button.textContent = originalLabel;
+    }
   }
 
   async function loadBatches() {
@@ -114,6 +163,10 @@
   async function reviewBatch(batchId) {
     const detail = await fetchJson(`/api/v1/migration/batches/${encodeURIComponent(batchId)}`);
     renderReview(detail);
+    const panel = byId("migrationReviewPanel");
+    if (panel && typeof panel.scrollIntoView === "function") {
+      panel.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
   }
 
   async function importBatch(batchId, archiveAfter = false) {
@@ -189,6 +242,13 @@
     const importButton = event.target.closest("[data-import]");
     if (importButton) {
       importBatch(importButton.dataset.import, true).catch(error => setStatus(byId("migrationStatus"), { title: "Import failed", message: error.message, tone: "error" }));
+    }
+  });
+
+  byId("migrationReviewContent").addEventListener("click", event => {
+    const previewButton = event.target.closest("[data-preview-claim]");
+    if (previewButton) {
+      previewReport(previewButton).catch(error => setStatus(byId("migrationReviewStatus"), { title: "Preview failed", message: error.message, tone: "error" }));
     }
   });
 

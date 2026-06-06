@@ -1,0 +1,14 @@
+{
+  "FLASK_SECRET_KEY": "dev-secret",
+  "USER_EMAIL": "dev@example.com",
+  "SEMANTIC_SCHOLAR_API_KEY": "E1BnR2DNAB2XraNYhdAMQahPwueN1vdw6XwxC4eI",
+  "LLM_PROVIDER": "local",
+  "LOCAL_BACKEND": "ollama",
+  "LLM_BASE_URL": "http://localhost:11434/v1",
+  "LLM_EVALUATION_MODEL": "llama3.1:8b",
+  "OLLAMA_SHOW_URL": "http://localhost:11434/api/show",
+  "REQUIRE_PASSWORD": false,
+  "LLM_ROUTING": {
+    "enabled": false
+  }
+}

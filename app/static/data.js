@@ -30,6 +30,15 @@
   let selectedReleaseId = null;
   let activeJobId = null;
   let pollTimer = null;
+  // Dataset checkbox selection for the currently selected release. Preserved
+  // across polling/rerenders; reset (re-defaulted) only when the release changes.
+  let releaseDatasetSelection = null; // { releaseId, names: Set<string> }
+  // The Current Job panel shows the active job, or — when idle — the job the
+  // user pinned via "View log", or the most recent job. This keeps a finished
+  // job's log (e.g. a failure) reachable instead of vanishing on completion.
+  let selectedJobId = null; // job pinned to the Current Job panel by the user
+  let displayedJobId = null; // job currently rendered in the Current Job panel
+  let currentRecentJobs = []; // last-seen recent jobs list (for re-highlighting)
 
   function setApiKeyMissingStatus() {
     const target = byId("dataStatusCard");
@@ -173,16 +182,31 @@
     return base;
   }
 
+  function pickerDatasets(release) {
+    return (release.datasets || []).filter((dataset) => dataset.indices?.length || dataset.exists);
+  }
+
+  function ensureReleaseSelection(release) {
+    if (!releaseDatasetSelection || releaseDatasetSelection.releaseId !== release.release_id) {
+      const defaults = pickerDatasets(release)
+        .filter((dataset) => dataset.exists)
+        .map((dataset) => dataset.name);
+      releaseDatasetSelection = { releaseId: release.release_id, names: new Set(defaults) };
+    }
+    return releaseDatasetSelection;
+  }
+
   function releaseDatasetPicker(release) {
-    const datasets = (release.datasets || []).filter((dataset) => dataset.indices?.length || dataset.exists);
+    const datasets = pickerDatasets(release);
     if (!datasets.length) {
       return `<div class="empty-state"><strong>No datasets found for this release.</strong></div>`;
     }
+    const selection = ensureReleaseSelection(release);
     return `
       <div class="release-dataset-picker" id="releaseDatasetPicker">
         ${datasets.map((dataset) => `
           <label class="dataset-option">
-            <input type="checkbox" value="${escapeHtml(dataset.name)}" ${dataset.exists ? "checked" : ""}>
+            <input type="checkbox" value="${escapeHtml(dataset.name)}" ${selection.names.has(dataset.name) ? "checked" : ""}>
             <span>
               <strong>${escapeHtml(dataset.label || dataset.name)}</strong>
               <small>${escapeHtml(dataset.size_label || "0 B")} · ${dataset.fully_indexed ? "indexed" : "index needed"}</small>
@@ -225,7 +249,7 @@
           </div>
           <div class="inline-actions">
             <button type="button" class="secondary-button small-button" id="verifyReleaseBtn">Verify</button>
-            <button type="button" class="primary-button small-button" id="indexReleaseBtn">${indexStatus.state === "ready" ? "Reindex" : "Index"}</button>
+            <button type="button" class="primary-button small-button" id="indexReleaseBtn">Re-index</button>
           </div>
         </div>
         ${releaseDatasetPicker(release)}
@@ -288,18 +312,28 @@
 
   function renderManifest(state) {
     const manifest = state.mini_manifest || {};
-    byId("miniManifestPath").value = manifest.path || "";
+    // The manifest is selected by filename only (resolved from semantic_scholar/manifests/).
+    byId("miniManifestPath").value = manifest.manifest || "";
     const counts = manifest.dataset_id_counts || {};
     const countText = Object.keys(counts).length
       ? Object.entries(counts).map(([dataset, count]) => `${dataset}: ${Number(count || 0).toLocaleString()}`).join(", ")
       : `${manifest.corpus_id_count || 0} corpus IDs, ${manifest.author_id_count || 0} author IDs`;
-    const message = manifest.exists
-      ? `Manifest IDs: ${countText}. Valsci will fetch matching rows from Semantic Scholar dataset shards.`
-      : "The default manifest is missing.";
+    let message;
+    let tone;
+    if (manifest.error) {
+      message = `Manifest problem: ${manifest.error}`;
+      tone = "warning";
+    } else if (manifest.exists) {
+      message = `Manifest ${manifest.manifest || ""}: ${countText}. Valsci will fetch matching rows from Semantic Scholar dataset shards.`;
+      tone = "info";
+    } else {
+      message = `The selected manifest (${manifest.manifest || "unknown"}) is missing from semantic_scholar/manifests/.`;
+      tone = "warning";
+    }
     setStatus(byId("miniManifestSummary"), {
       title: "Curated Mendelian mini",
       message,
-      tone: manifest.exists ? "info" : "warning",
+      tone,
     });
   }
 
@@ -361,6 +395,7 @@
   function renderJob(job) {
     const isActive = Boolean(job && ["queued", "running", "cancel_requested"].includes(job.status));
     activeJobId = isActive ? job.job_id : null;
+    displayedJobId = job ? job.job_id : null;
     setBadge(byId("jobStatusBadge"), job?.status || "idle");
     byId("cancelDataJobBtn").classList.toggle("hidden", !job || !["queued", "running", "cancel_requested"].includes(job.status));
     if (!job) {
@@ -369,14 +404,25 @@
       syncActionButtons();
       return;
     }
+    const exitCodeCell = (job.exit_code === null || job.exit_code === undefined)
+      ? ""
+      : `<div class="summary-cell"><span class="label">Exit Code</span><span class="value">${escapeHtml(String(job.exit_code))}</span></div>`;
+    const stderrTail = Array.isArray(job.stderr_tail) ? job.stderr_tail : [];
+    const stderrBlock = stderrTail.length
+      ? `<div class="status-card warning-card"><strong>stderr (last ${stderrTail.length})</strong><pre class="job-log stderr-log">${escapeHtml(stderrTail.join("\n"))}</pre></div>`
+      : "";
     byId("jobSummary").innerHTML = `
       <div class="summary-strip">
         <div class="summary-cell"><span class="label">Operation</span><span class="value">${escapeHtml(job.operation)}</span></div>
         <div class="summary-cell"><span class="label">Started</span><span class="value">${escapeHtml(formatDateTime(job.started_at || job.created_at))}</span></div>
+        ${exitCodeCell}
       </div>
       <span class="data-path">${escapeHtml(job.command_display || "")}</span>
+      ${stderrBlock}
     `;
-    const logText = (job.logs || []).map((entry) => entry.line).join("\n");
+    const logText = (job.logs || [])
+      .map((entry) => (entry.stream === "stderr" ? `[stderr] ${entry.line}` : entry.line))
+      .join("\n");
     byId("jobLog").textContent = logText;
     byId("jobLog").scrollTop = byId("jobLog").scrollHeight;
     syncActionButtons();
@@ -384,20 +430,39 @@
 
   function renderRecentJobs(jobs) {
     const recent = jobs || [];
+    currentRecentJobs = recent;
     if (!recent.length) {
       byId("recentDataJobs").innerHTML = `<div class="empty-state"><strong>No data jobs yet.</strong><span>Downloader runs will appear here.</span></div>`;
       return;
     }
     byId("recentDataJobs").innerHTML = recent.map((job) => `
-      <article class="record-card">
+      <article class="record-card ${job.job_id === displayedJobId ? "record-card-active" : ""}">
         <div class="record-meta">
           <span class="badge ${statusBadgeClass[job.status] || "neutral-badge"}">${escapeHtml(statusLabel(job.status))}</span>
           <span>${escapeHtml(job.operation || "operation")}</span>
           <span>${escapeHtml(formatDateTime(job.created_at))}</span>
+          ${(job.exit_code === null || job.exit_code === undefined) ? "" : `<span>exit ${escapeHtml(String(job.exit_code))}</span>`}
         </div>
         <span class="data-path">${escapeHtml(job.command_display || "")}</span>
+        ${job.status === "failed" && job.error ? `<span class="data-path error-text">${escapeHtml(job.error)}</span>` : ""}
+        <div class="inline-actions">
+          <button type="button" class="secondary-button small-button" data-view-log="${escapeHtml(job.job_id)}">
+            ${job.job_id === displayedJobId ? "Viewing log" : "View log"}
+          </button>
+        </div>
       </article>
     `).join("");
+  }
+
+  function jobToDisplay(data) {
+    // Prefer a live job; otherwise the user's pinned job, otherwise the latest.
+    if (data.active_job) return data.active_job;
+    const jobs = data.jobs || [];
+    if (selectedJobId) {
+      const pinned = jobs.find((job) => job.job_id === selectedJobId);
+      if (pinned) return pinned;
+    }
+    return jobs[0] || null;
   }
 
   function renderAll(data) {
@@ -408,7 +473,7 @@
     renderDatasetTable();
     renderManifest(currentState);
     renderWizardDatasetPicker(currentState);
-    renderJob(data.active_job || null);
+    renderJob(jobToDisplay(data));
     renderRecentJobs(data.jobs || []);
     byId("releaseInput").placeholder = currentState.latest_release || "latest";
   }
@@ -486,7 +551,7 @@
     if (job.status === "failed") {
       setStatus(byId("releaseActionStatus"), {
         title: `${statusLabel(job.operation)} failed`,
-        message: "Open the Current Job log for details.",
+        message: "The full output is shown in the Current Job panel. You can also reopen it anytime with “View log” under Recent Data Jobs.",
         tone: "error",
       });
     }
@@ -499,6 +564,7 @@
       body: JSON.stringify(payload),
     });
     activeJobId = data.job.job_id;
+    selectedJobId = null; // follow the new active job in the Current Job panel
     renderJob(data.job);
     hideStatus(statusTarget);
     poll();
@@ -513,7 +579,7 @@
       datasets: selectedWizardDatasets(),
     };
     if (type === "mini") {
-      payload.manifest_path = byId("miniManifestPath").value.trim();
+      payload.manifest = byId("miniManifestPath").value.trim();
     }
     if (type === "full") {
       if (!payload.datasets.length) {
@@ -533,16 +599,16 @@
   }
 
   async function rebuildMiniRelease() {
-    const manifestPath = currentState?.mini_manifest?.path || "";
-    if (!manifestPath) {
+    const manifestName = currentState?.mini_manifest?.manifest || "";
+    if (currentState?.mini_manifest?.error) {
       setStatus(byId("releaseActionStatus"), {
         title: "Mini manifest unavailable",
-        message: "The bundled mini manifest path could not be found.",
+        message: currentState.mini_manifest.error,
         tone: "warning",
       });
       return;
     }
-    await startJob({ operation: "mini", manifest_path: manifestPath }, byId("releaseActionStatus"));
+    await startJob({ operation: "mini", manifest: manifestName }, byId("releaseActionStatus"));
   }
 
   async function startSelectedReleaseJob(operation) {
@@ -564,7 +630,7 @@
       mini: operation === "verify" && release.is_mini,
     };
     if (payload.mini) {
-      payload.manifest_path = currentState?.mini_manifest?.path || "";
+      payload.manifest = currentState?.mini_manifest?.manifest || "";
     }
     await startJob(payload, byId("releaseActionStatus"));
   }
@@ -575,10 +641,23 @@
     renderJob(data.job);
   }
 
+  async function viewJobLog(jobId) {
+    // Pin the job so polling keeps it in the Current Job panel, then load it.
+    selectedJobId = jobId;
+    const data = await fetchJson(`/api/v1/data/jobs/${jobId}`).catch(() => null);
+    if (data?.job) {
+      renderJob(data.job);
+      renderRecentJobs(currentRecentJobs);
+      byId("jobLog").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }
+
   function bindEvents() {
     byId("refreshDataBtn").addEventListener("click", refreshData);
     byId("releaseSelect").addEventListener("change", (event) => {
       selectedReleaseId = event.target.value;
+      // Switching releases resets dataset checkbox selections to defaults.
+      releaseDatasetSelection = null;
       renderSummary(currentState || {});
       renderReleaseDetails();
       renderDatasetTable();
@@ -612,16 +691,42 @@
         }));
       }
       if (event.target.closest("#indexReleaseBtn")) {
+        const confirmed = window.confirm(
+          "Re-index rebuilds only the lookup indices for this release. " +
+          "Dataset files are not changed, re-downloaded, or deleted — only the binary indices are rebuilt. Continue?"
+        );
+        if (!confirmed) return;
         startSelectedReleaseJob("index").catch((error) => setStatus(byId("releaseActionStatus"), {
-          title: "Index failed",
+          title: "Re-index failed",
           message: error.message,
           tone: "error",
         }));
       }
     });
+    byId("releaseDetails").addEventListener("change", (event) => {
+      const input = event.target;
+      if (!input || !input.matches("#releaseDatasetPicker input[type='checkbox']")) return;
+      const release = selectedRelease();
+      if (!release) return;
+      const selection = ensureReleaseSelection(release);
+      if (input.checked) {
+        selection.names.add(input.value);
+      } else {
+        selection.names.delete(input.value);
+      }
+    });
     byId("cancelDataJobBtn").addEventListener("click", () => {
       cancelJob().catch((error) => setStatus(byId("dataStatusCard"), {
         title: "Could not cancel data job",
+        message: error.message,
+        tone: "error",
+      }));
+    });
+    byId("recentDataJobs").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-view-log]");
+      if (!button) return;
+      viewJobLog(button.dataset.viewLog).catch((error) => setStatus(byId("dataStatusCard"), {
+        title: "Could not load job log",
         message: error.message,
         tone: "error",
       }));

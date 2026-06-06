@@ -559,6 +559,21 @@ def inspect_migration_batch(batch_id):
     return jsonify(detail), 200
 
 
+@api.route('/api/v1/migration/batches/<batch_id>/claims/<claim_id>/report', methods=['GET'])
+@auth_required
+def migration_batch_claim_report(batch_id, claim_id):
+    root = (request.args.get("root") or "").strip() or None
+    if root and root not in {"saved_jobs", "queued_jobs"}:
+        return jsonify({"error": "root must be saved_jobs or queued_jobs"}), 400
+    try:
+        preview = _claim_store().preview_legacy_report(batch_id, claim_id, root=root)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if preview is None:
+        return jsonify({"error": "Legacy claim not found"}), 404
+    return jsonify(preview), 200
+
+
 @api.route('/api/v1/migration/batches/<batch_id>/import', methods=['POST'])
 @auth_required
 def import_migration_batch(batch_id):

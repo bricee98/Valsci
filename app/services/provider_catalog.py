@@ -13,6 +13,10 @@ from app.config.settings import Config
 from app.services.llm.model_registry import DEFAULT_MODEL_INFO, ModelInfo
 
 
+OPENAI_SEEDED_PROVIDER_TYPES = {"openai", "azure-openai"}
+LOCAL_PROVIDER_TYPES = {"local", "llamacpp", "ollama"}
+
+
 def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_suffix(path.suffix + ".tmp")
@@ -51,6 +55,8 @@ class ProviderCatalog:
         with self.path.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
         payload.setdefault("providers", [])
+        if self._repair_seeded_default_provider(payload):
+            self.save(payload)
         return payload
 
     def save(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -165,30 +171,7 @@ class ProviderCatalog:
         return overrides
 
     def _seed_catalog(self) -> Dict[str, Any]:
-        model_entries: List[Dict[str, Any]] = []
-        for model_name, model_info in DEFAULT_MODEL_INFO.items():
-            model_entries.append(self._model_entry(model_name, model_info))
-        overrides = getattr(Config, "MODEL_REGISTRY_OVERRIDES", {}) or {}
-        for model_name, values in overrides.items():
-            model_entries.append(
-                {
-                    "model_name": model_name,
-                    "label": model_name,
-                    "enabled": True,
-                    "context_window_tokens": int(values.get("context_window_tokens", 8192)),
-                    "max_output_tokens_default": int(values.get("max_output_tokens_default", 1024)),
-                    "supports_temperature": bool(values.get("supports_temperature", True)),
-                    "supports_json_mode": bool(
-                        values.get(
-                            "supports_json_schema_or_json_mode",
-                            values.get("supports_json_mode", True),
-                        )
-                    ),
-                    "input_cost_per_million": float(values.get("input_cost_per_million", 0.0)),
-                    "output_cost_per_million": float(values.get("output_cost_per_million", 0.0)),
-                }
-            )
-
+        provider_type = str(Config.LLM_PROVIDER or "").strip().lower()
         provider = {
             "provider_id": "default",
             "label": "Default Config Provider",
@@ -204,9 +187,50 @@ class ProviderCatalog:
             "azure_openai_endpoint": Config.AZURE_OPENAI_ENDPOINT,
             "azure_openai_api_version": Config.AZURE_OPENAI_API_VERSION,
             "azure_ai_inference_endpoint": Config.AZURE_AI_INFERENCE_ENDPOINT,
-            "models": _dedupe_models(model_entries),
+            "models": _dedupe_models(self._seed_model_entries(provider_type, Config.LLM_EVALUATION_MODEL)),
         }
         return {"providers": [provider]}
+
+    def _seed_model_entries(self, provider_type: str, default_model: Optional[str] = None) -> List[Dict[str, Any]]:
+        model_entries: List[Dict[str, Any]] = []
+        if provider_type in OPENAI_SEEDED_PROVIDER_TYPES:
+            for model_name, model_info in DEFAULT_MODEL_INFO.items():
+                model_entries.append(self._model_entry(model_name, model_info))
+
+        configured_default = (
+            default_model
+            if default_model is not None
+            else getattr(Config, "LLM_EVALUATION_MODEL", "")
+        )
+        default_model = str(configured_default or "").strip()
+        if default_model:
+            model_entries.append(self._configured_model_entry(default_model, {}))
+
+        overrides = getattr(Config, "MODEL_REGISTRY_OVERRIDES", {}) or {}
+        for model_name, values in overrides.items():
+            model_entries.append(self._configured_model_entry(model_name, values))
+        return model_entries
+
+    def _repair_seeded_default_provider(self, payload: Dict[str, Any]) -> bool:
+        repaired = False
+        default_names = set(DEFAULT_MODEL_INFO.keys())
+        for provider in payload.get("providers", []):
+            provider_type = str(provider.get("provider_type") or "").strip().lower()
+            if provider_type not in LOCAL_PROVIDER_TYPES:
+                continue
+            if provider.get("provider_id") != "default" or provider.get("label") != "Default Config Provider":
+                continue
+            model_names = {
+                str(model.get("model_name") or "").strip()
+                for model in provider.get("models", [])
+                if isinstance(model, dict) and model.get("model_name")
+            }
+            default_model = str(provider.get("default_model") or Config.LLM_EVALUATION_MODEL or "").strip()
+            if not model_names or default_model in model_names or not model_names.issubset(default_names):
+                continue
+            provider["models"] = _dedupe_models(self._seed_model_entries(provider_type, default_model))
+            repaired = True
+        return repaired
 
     @staticmethod
     def _model_entry(model_name: str, model_info: ModelInfo) -> Dict[str, Any]:
@@ -220,4 +244,23 @@ class ProviderCatalog:
             "supports_json_mode": model_info.supports_json_mode,
             "input_cost_per_million": model_info.input_cost_per_million,
             "output_cost_per_million": model_info.output_cost_per_million,
+        }
+
+    @staticmethod
+    def _configured_model_entry(model_name: str, values: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "model_name": model_name,
+            "label": model_name,
+            "enabled": True,
+            "context_window_tokens": int(values.get("context_window_tokens", 8192)),
+            "max_output_tokens_default": int(values.get("max_output_tokens_default", 1024)),
+            "supports_temperature": bool(values.get("supports_temperature", True)),
+            "supports_json_mode": bool(
+                values.get(
+                    "supports_json_schema_or_json_mode",
+                    values.get("supports_json_mode", True),
+                )
+            ),
+            "input_cost_per_million": float(values.get("input_cost_per_million", 0.0)),
+            "output_cost_per_million": float(values.get("output_cost_per_million", 0.0)),
         }

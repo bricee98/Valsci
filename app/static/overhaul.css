@@ -837,6 +837,46 @@ th {
   color: var(--ink-muted);
 }
 
+.record-card-active {
+  border-color: var(--accent, #0a7);
+  box-shadow: 0 0 0 1px var(--accent, #0a7) inset;
+}
+
+.migration-report-preview {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: 10px;
+}
+
+.report-preview-grid {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.report-preview-explanation {
+  margin: 0;
+  color: var(--ink-muted);
+  white-space: pre-wrap;
+}
+
+.stderr-log {
+  margin-top: 6px;
+  max-height: 160px;
+}
+
+.error-text {
+  color: var(--danger, #b00020);
+}
+
+.form-hint {
+  color: var(--ink-muted);
+  font-size: 0.85em;
+}
+
 .pill-row {
   display: flex;
   gap: 8px;

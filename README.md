@@ -167,7 +167,7 @@ The `--mini` flag now means "build the curated local mini corpus," not "download
 The default mini manifest path is:
 
 ```text
-semantic_scholar/mini_corpora/mendelian_v1/manifest.json
+semantic_scholar/manifests/mendelian_v1.json
 ```
 
 The manifest contains only dataset-specific IDs. Running `--mini` uses the Semantic Scholar dataset API to stream the matching release shards, writes compact extracted rows into `semantic_scholar/datasets/`, and builds the normal binary indices. `semantic_scholar/datasets/` remains ignored local runtime data.
