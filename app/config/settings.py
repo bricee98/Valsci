@@ -4,7 +4,12 @@ from pathlib import Path
 from typing import Any, Dict
 
 
-env_file_path = Path(__file__).parent.parent / "config/env_vars.json"
+# The editable config file. Defaults to app/config/env_vars.json, but can be
+# pointed elsewhere with VALSCI_ENV_FILE. In Docker this is set to a file inside
+# a bind-mounted *directory* (not a single-file bind mount), so the Settings page
+# can rewrite it via atomic rename — single-file bind mounts cannot be replaced.
+_default_env_file = Path(__file__).parent.parent / "config/env_vars.json"
+env_file_path = Path(os.environ.get("VALSCI_ENV_FILE") or _default_env_file)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _MISSING = object()
 _SENSITIVE_KEYS = {
@@ -233,6 +238,9 @@ class Config:
     SEMANTIC_SCHOLAR_MANIFEST = _string_setting(
         "SEMANTIC_SCHOLAR_MANIFEST", default="mendelian_v1.json"
     )
+    # When a paper's content is not in the local corpus, fetch it from the live
+    # Semantic Scholar API (abstract/TLDR) instead of marking it inaccessible.
+    FETCH_REMOTE_CONTENT_ON_MISS = _bool_setting("FETCH_REMOTE_CONTENT_ON_MISS", default=False)
     USER_EMAIL = _string_setting("USER_EMAIL")
 
     AZURE_OPENAI_ENDPOINT = _string_setting("AZURE_OPENAI_ENDPOINT")
@@ -256,7 +264,6 @@ class Config:
     LLM_EVALUATION_MODEL = _string_setting("LLM_EVALUATION_MODEL", default="gpt-4o")
     LLM_HTTP_REFERER = _string_setting("LLM_HTTP_REFERER")
     LLM_SITE_NAME = _string_setting("LLM_SITE_NAME")
-    LOCAL_BACKEND = _string_setting("LOCAL_BACKEND", default="")
     LOCAL_MODEL_CONTEXT_OVERRIDE = _int_setting("LOCAL_MODEL_CONTEXT_OVERRIDE", default=0)
     if LOCAL_MODEL_CONTEXT_OVERRIDE == 0:
         LOCAL_MODEL_CONTEXT_OVERRIDE = None
@@ -290,7 +297,7 @@ class Config:
     MODEL_REGISTRY_OVERRIDES = _dict_setting("MODEL_REGISTRY_OVERRIDES", default={})
     LLM_CONTEXT_SAFETY_MARGIN_TOKENS = _int_setting("LLM_CONTEXT_SAFETY_MARGIN_TOKENS", default=256)
 
-    local_defaults = bool(LOCAL_BACKEND) or LLM_PROVIDER in {"local", "llamacpp", "ollama"}
+    local_defaults = LLM_PROVIDER in {"llamacpp", "ollama"}
     LLM_MAX_CONCURRENCY = _int_setting("LLM_MAX_CONCURRENCY", default=1 if local_defaults else 5)
     LLM_REQUESTS_PER_MINUTE = _int_setting("LLM_REQUESTS_PER_MINUTE", default=45 if local_defaults else 240)
     LLM_TOKENS_PER_MINUTE = _int_setting(
@@ -306,6 +313,12 @@ class Config:
         "LLM_TIMEOUT_SECONDS_LOCAL",
         default=600 if local_defaults else None,
     )
+    # Constrain structured outputs with a JSON schema (response_format json_schema)
+    # so models emit exactly the required fields instead of inventing their own.
+    LLM_STRICT_JSON_SCHEMA = _bool_setting("LLM_STRICT_JSON_SCHEMA", default=True)
+    # Optional extra pass: if a structured output still fails validation, ask the
+    # model to reformat it into the required schema without changing the content.
+    LLM_JSON_REPAIR_PASS = _bool_setting("LLM_JSON_REPAIR_PASS", default=False)
     OLLAMA_SHOW_URL = _string_setting("OLLAMA_SHOW_URL")
 
     _CONFIG_METADATA = _CONFIG_METADATA
@@ -388,13 +401,18 @@ class Config:
 
         errors = []
         required_keys = ["LLM_PROVIDER", "SECRET_KEY", "USER_EMAIL"]
+        supported_providers = {"openai", "openrouter", "ollama", "llamacpp", "azure-openai", "azure-inference"}
+        if cls.LLM_PROVIDER not in supported_providers:
+            errors.append(
+                "LLM_PROVIDER must be one of: " + ", ".join(sorted(supported_providers))
+            )
         if cls.LLM_PROVIDER == "azure-openai":
             required_keys.extend(["LLM_API_KEY", "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_VERSION"])
         elif cls.LLM_PROVIDER == "openai":
             required_keys.append("LLM_API_KEY")
         elif cls.LLM_PROVIDER == "openrouter":
             required_keys.append("LLM_API_KEY")
-        elif cls.LLM_PROVIDER == "llamacpp" or cls.LLM_PROVIDER == "local":
+        elif cls.LLM_PROVIDER in {"llamacpp", "ollama"}:
             required_keys.append("LLM_BASE_URL")
         elif cls.LLM_PROVIDER == "azure-inference":
             required_keys.extend(["AZURE_AI_INFERENCE_ENDPOINT", "LLM_API_KEY"])

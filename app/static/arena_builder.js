@@ -5,6 +5,8 @@
     formatCurrency,
     hideStatus,
     setStatus,
+    flashButton,
+    buttonBusy,
     candidateStyle,
   } = window.ValsciUI;
 
@@ -21,6 +23,8 @@
   let candidateEdits = {};
   let preflightPayload = null;
   let blockCounter = 0;
+  // Candidate cards whose per-stage editor is expanded (opt-in customization).
+  const expandedCandidates = new Set();
 
   function candidatePrefix(index) {
     return String.fromCharCode(65 + index);
@@ -36,7 +40,6 @@
 
   function invalidatePreflight() {
     preflightPayload = null;
-    byId("launchArenaBtn").disabled = true;
   }
 
   function currentSearchConfig() {
@@ -103,7 +106,7 @@
             providerLabel: provider.label || provider.provider_id,
             provider,
             modelName: model.model_name,
-            label: edits.label || model.label || model.model_name,
+            label: (edits.label || "").trim() || model.label || model.model_name,
             overrides: { ...edits.overrides },
           });
         });
@@ -220,63 +223,81 @@
   function renderCandidatePreview() {
     const candidates = derivedCandidates();
     const preview = byId("candidatePreview");
-    const advanced = byId("advancedCandidateEditor");
     if (!candidates.length) {
-      const emptyMarkup = `<div class="empty-state"><strong>No candidates yet.</strong><span>Select one or more models from a provider block to create comparison candidates automatically.</span></div>`;
-      preview.innerHTML = emptyMarkup;
-      advanced.innerHTML = emptyMarkup;
+      preview.innerHTML = `<div class="empty-state"><strong>No candidates yet.</strong><span>Check one or more models in a provider block above. Each checked model becomes a candidate that runs on every staged claim.</span></div>`;
       renderLaunchReview();
       return;
     }
 
-    preview.innerHTML = candidates.map(candidate => `
-      <article class="record-card" style="${candidateStyle({ color: candidate.candidate_color })}">
-        <div class="panel-header">
-          <div class="candidate-chip">
-            <span class="candidate-dot"></span>
-            <strong>${escapeHtml(candidate.candidate_prefix)}</strong>
-            <span>${escapeHtml(candidate.label)}</span>
-          </div>
-          <span class="badge neutral-badge">${escapeHtml(candidate.providerLabel)}</span>
-        </div>
-        <div class="record-meta">
-          <span>${escapeHtml(candidate.modelName)}</span>
-          <span>${escapeHtml(stageNames.every(stageName => candidate.overrides[stageName] === candidate.modelName) ? "Default mode" : "Advanced stage overrides")}</span>
-        </div>
-      </article>
-    `).join("");
-
-    advanced.innerHTML = candidates.map(candidate => {
+    preview.innerHTML = candidates.map(candidate => {
       const providerModels = enabledModels(candidate.provider);
+      const uniform = isUniformCandidate(candidate);
+      const expanded = expandedCandidates.has(candidate.key);
       const candidateLabelId = `candidate-label-${domId(candidate.key)}`;
-      return `
-        <article class="record-card" data-candidate-editor="${escapeHtml(candidate.key)}" style="${candidateStyle({ color: candidate.candidate_color })}">
-          <div class="panel-header">
-            <div class="candidate-chip">
-              <span class="candidate-dot"></span>
-              <strong>${escapeHtml(candidate.candidate_prefix)}</strong>
-              <span>${escapeHtml(candidate.providerLabel)}</span>
-            </div>
-            <span class="badge neutral-badge">${escapeHtml(candidate.modelName)}</span>
-          </div>
+
+      // What this candidate actually runs — stated plainly.
+      const runSummary = uniform
+        ? `<div class="candidate-run-line">
+             <span class="badge success-badge">One model</span>
+             <span>Runs <strong>${escapeHtml(candidate.modelName)}</strong> for all four stages.</span>
+           </div>`
+        : `<div class="candidate-run-line">
+             <span class="badge warning-badge">Per-stage models</span>
+             <span>Uses different models across the pipeline:</span>
+           </div>
+           <ul class="stage-model-list">
+             ${stageNames.map(stageName => `
+               <li>
+                 <span class="stage-model-name">${escapeHtml(window.ValsciUI.stageLabel(stageName))}</span>
+                 <strong>${escapeHtml(candidate.overrides[stageName] || candidate.modelName)}</strong>
+               </li>`).join("")}
+           </ul>`;
+
+      const editor = expanded ? `
+        <div class="candidate-stage-editor">
           <div class="form-row">
-            <label for="${escapeHtml(candidateLabelId)}">Candidate Label</label>
+            <label for="${escapeHtml(candidateLabelId)}">Candidate label</label>
             <input id="${escapeHtml(candidateLabelId)}" type="text" value="${escapeHtml(candidate.label)}" data-candidate-label="${escapeHtml(candidate.key)}">
           </div>
+          <p class="helper-text">By default this candidate runs <strong>${escapeHtml(candidate.modelName)}</strong> for every stage. Change a stage below only if you want to compare a different model on part of the pipeline.</p>
           <div class="grid-two">
             ${stageNames.map(stageName => {
               const stageSelectId = `candidate-${domId(candidate.key)}-${domId(stageName)}`;
+              const current = candidate.overrides[stageName] || candidate.modelName;
+              const changed = current !== candidate.modelName;
               return `
               <div class="form-row">
-                <label for="${escapeHtml(stageSelectId)}">${escapeHtml(window.ValsciUI.stageLabel(stageName))}</label>
+                <label for="${escapeHtml(stageSelectId)}">
+                  ${escapeHtml(window.ValsciUI.stageLabel(stageName))}
+                  ${changed ? `<span class="badge warning-badge tiny-badge">changed</span>` : ""}
+                </label>
                 <select id="${escapeHtml(stageSelectId)}" data-candidate-stage="${escapeHtml(candidate.key)}" data-stage-name="${escapeHtml(stageName)}">
-                  ${providerModels.map(model => `<option value="${escapeHtml(model.model_name)}" ${candidate.overrides[stageName] === model.model_name ? "selected" : ""}>${escapeHtml(model.label || model.model_name)}</option>`).join("")}
+                  ${providerModels.map(model => `<option value="${escapeHtml(model.model_name)}" ${current === model.model_name ? "selected" : ""}>${escapeHtml(model.label || model.model_name)}${model.model_name === candidate.modelName ? " · default" : ""}</option>`).join("")}
                 </select>
               </div>
             `;}).join("")}
           </div>
-        </article>
-      `;
+          ${uniform ? "" : `<div class="inline-actions"><button type="button" class="ghost-button small-button" data-candidate-reset="${escapeHtml(candidate.key)}">Reset all stages to ${escapeHtml(candidate.modelName)}</button></div>`}
+        </div>` : "";
+
+      return `
+        <article class="record-card candidate-card" style="${candidateStyle({ color: candidate.candidate_color })}">
+          <div class="panel-header">
+            <div class="candidate-chip">
+              <span class="candidate-dot"></span>
+              <strong>${escapeHtml(candidate.candidate_prefix)}</strong>
+              <span>${escapeHtml(candidate.label)}</span>
+            </div>
+            <span class="badge neutral-badge">${escapeHtml(candidate.providerLabel)}</span>
+          </div>
+          ${runSummary}
+          <div class="inline-actions">
+            <button type="button" class="ghost-button small-button" data-candidate-customize="${escapeHtml(candidate.key)}" aria-expanded="${expanded}">
+              ${expanded ? "Done — hide stage settings" : (uniform ? "Use a different model per stage…" : "Edit per-stage models…")}
+            </button>
+          </div>
+          ${editor}
+        </article>`;
     }).join("");
 
     renderLaunchReview();
@@ -296,7 +317,7 @@
           <div class="summary-cell"><span class="label">Candidates</span><span class="value">${candidates.length}</span></div>
           <div class="summary-cell"><span class="label">Reuse Retrieval</span><span class="value">${byId("executionMode").value === "reuse_retrieval" ? "Enabled" : "Off"}</span></div>
         </div>
-        <p class="helper-text">Estimate the arena to review total runs, expected cost, and duplicate handling before launch.</p>
+        <p class="helper-text">Review &amp; Launch estimates total runs and expected cost, then asks you to approve the spend before anything queues.</p>
       `;
       return;
     }
@@ -326,7 +347,6 @@
         <span>Duplicate handling: ${escapeHtml(byId("duplicateStrategy").value)}</span>
       </div>
     `;
-    byId("launchArenaBtn").disabled = !preflightPayload.totals.pricing_complete;
   }
 
   function claimsFromTextarea() {
@@ -341,7 +361,7 @@
         message: "Paste one claim per line or upload a text file before staging.",
         tone: "warning",
       });
-      return;
+      return 0;
     }
     let addedCount = 0;
     let duplicateCount = 0;
@@ -364,6 +384,7 @@
       message: `${addedCount} added${duplicateCount ? `, ${duplicateCount} duplicate${duplicateCount === 1 ? "" : "s"} skipped` : ""}.`,
       tone: addedCount ? "success" : "warning",
     });
+    return addedCount;
   }
 
   function serializeCandidatesForApi() {
@@ -374,8 +395,19 @@
       candidate_index: candidate.candidate_index,
       candidate_prefix: candidate.candidate_prefix,
       candidate_color: candidate.candidate_color,
+      // The model this candidate runs (its identity), so the stored default_model
+      // matches the per-stage models instead of the provider's global default.
+      default_model: candidate.modelName,
       model_overrides: { ...candidate.overrides },
     }));
+  }
+
+  function isUniformCandidate(candidate) {
+    return stageNames.every(stageName => (candidate.overrides[stageName] || candidate.modelName) === candidate.modelName);
+  }
+
+  function findCandidate(key) {
+    return derivedCandidates().find(candidate => candidate.key === key) || null;
   }
 
   async function estimateArena() {
@@ -526,15 +558,6 @@
       renderCandidatePreview();
       return;
     }
-
-    const stageSelect = event.target.closest("[data-candidate-stage]");
-    if (stageSelect) {
-      const key = stageSelect.dataset.candidateStage;
-      candidateEdits[key] = candidateEdits[key] || { label: "", overrides: {} };
-      candidateEdits[key].overrides[stageSelect.dataset.stageName] = stageSelect.value;
-      invalidatePreflight();
-      renderCandidatePreview();
-    }
   });
   byId("providerBlocks").addEventListener("input", event => {
     const searchInput = event.target.closest("[data-provider-search]");
@@ -558,19 +581,65 @@
     }
   });
 
-  byId("advancedCandidateEditor").addEventListener("input", event => {
+  // Per-stage model override (inline in each candidate card).
+  byId("candidatePreview").addEventListener("change", event => {
+    const stageSelect = event.target.closest("[data-candidate-stage]");
+    if (!stageSelect) {
+      return;
+    }
+    const key = stageSelect.dataset.candidateStage;
+    candidateEdits[key] = candidateEdits[key] || { label: "", overrides: {} };
+    candidateEdits[key].overrides[stageSelect.dataset.stageName] = stageSelect.value;
+    invalidatePreflight();
+    renderCandidatePreview();
+  });
+  // Candidate label edit — update state without re-rendering so the field keeps
+  // focus while typing; the chip refreshes on the next interaction.
+  byId("candidatePreview").addEventListener("input", event => {
     const labelInput = event.target.closest("[data-candidate-label]");
     if (!labelInput) {
       return;
     }
     const key = labelInput.dataset.candidateLabel;
     candidateEdits[key] = candidateEdits[key] || { label: "", overrides: {} };
-    candidateEdits[key].label = labelInput.value.trim();
+    candidateEdits[key].label = labelInput.value;
     invalidatePreflight();
-    renderCandidatePreview();
+    renderLaunchReview();
+  });
+  byId("candidatePreview").addEventListener("click", event => {
+    const customizeButton = event.target.closest("[data-candidate-customize]");
+    if (customizeButton) {
+      const key = customizeButton.dataset.candidateCustomize;
+      if (expandedCandidates.has(key)) {
+        expandedCandidates.delete(key);
+      } else {
+        expandedCandidates.add(key);
+      }
+      renderCandidatePreview();
+      return;
+    }
+    const resetButton = event.target.closest("[data-candidate-reset]");
+    if (resetButton) {
+      const key = resetButton.dataset.candidateReset;
+      const candidate = findCandidate(key);
+      if (candidate) {
+        candidateEdits[key] = candidateEdits[key] || { label: candidate.label, overrides: {} };
+        candidateEdits[key].overrides = stageNames.reduce((accumulator, stageName) => {
+          accumulator[stageName] = candidate.modelName;
+          return accumulator;
+        }, {});
+        invalidatePreflight();
+        renderCandidatePreview();
+      }
+    }
   });
 
-  byId("stageClaimsBtn").addEventListener("click", () => stageClaims(byId("claimInput").value));
+  byId("stageClaimsBtn").addEventListener("click", () => {
+    const added = stageClaims(byId("claimInput").value);
+    flashButton(byId("stageClaimsBtn"), added
+      ? { label: `Staged ${added} ✓` }
+      : { label: "Nothing staged", tone: "error", duration: 1400 });
+  });
   byId("clearClaimsBtn").addEventListener("click", () => {
     stagedClaims = [];
     renderClaims();
@@ -615,24 +684,45 @@
     });
   });
 
-  byId("estimateArenaBtn").addEventListener("click", () => {
-    estimateArena().catch(error => {
+  byId("launchArenaBtn").addEventListener("click", () => {
+    const button = byId("launchArenaBtn");
+    // Step 1: estimate (skipped when a fresh estimate already exists),
+    // Step 2: review and approve the cost in the confirmation modal.
+    const openWhenPriced = () => {
+      if (!preflightPayload.totals.pricing_complete) {
+        setStatus(byId("arenaStatus"), {
+          title: "Pricing metadata is incomplete",
+          message: `Missing pricing for ${preflightPayload.totals.missing_pricing_models.join(", ")}. Add it on the Providers page, then try again.`,
+          tone: "error",
+        });
+        return;
+      }
+      hideStatus(byId("arenaStatus"));
+      openCostModal();
+    };
+    if (preflightPayload) {
+      openWhenPriced();
+      return;
+    }
+    const restore = buttonBusy(button, "Estimating…");
+    estimateArena().then(() => {
+      restore();
+      openWhenPriced();
+    }).catch(error => {
+      restore();
+      flashButton(button, { label: "Estimate failed ✗", tone: "error" });
       setStatus(byId("arenaStatus"), { title: "Arena estimate failed", message: error.message, tone: "error" });
     });
-  });
-  byId("launchArenaBtn").addEventListener("click", () => {
-    try {
-      openCostModal();
-    } catch (error) {
-      setStatus(byId("arenaStatus"), { title: "Launch blocked", message: error.message, tone: "error" });
-    }
   });
   byId("cancelCostBtn").addEventListener("click", () => byId("costModal").classList.add("hidden"));
   byId("confirmCostCheckbox").addEventListener("change", event => {
     byId("confirmCostBtn").disabled = !event.target.checked;
   });
   byId("confirmCostBtn").addEventListener("click", () => {
+    const restore = buttonBusy(byId("confirmCostBtn"), "Launching…");
     launchArena().catch(error => {
+      restore();
+      byId("costModal").classList.add("hidden");
       setStatus(byId("arenaStatus"), { title: "Arena launch failed", message: error.message, tone: "error" });
     });
   });

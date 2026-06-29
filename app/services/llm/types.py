@@ -79,6 +79,8 @@ class ProviderResponse:
     usage: Dict[str, Any] = field(default_factory=dict)
     http_status: Optional[int] = None
     raw_response: Any = None
+    # Chain-of-thought emitted by reasoning models into a side channel (not content).
+    reasoning: Optional[str] = None
 
 
 @dataclass

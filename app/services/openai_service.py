@@ -60,10 +60,12 @@ class OpenAIService:
                     self.extra_headers["X-Title"] = site_name
                 self.client = openai.OpenAI(base_url=self.base_url, api_key=Config.LLM_API_KEY)
                 self.async_client = openai.AsyncOpenAI(base_url=self.base_url, api_key=Config.LLM_API_KEY)
-            elif self.provider == "llamacpp" or self.provider == "local":
+            elif self.provider == "llamacpp":
                 print(f"Using Alternative Model with model {self.model}")
                 self.client = openai.OpenAI(base_url=self.base_url, api_key="sk-no-key-required")
                 self.async_client = openai.AsyncOpenAI(base_url=self.base_url, api_key="sk-no-key-required")
+            else:
+                raise ValueError(f"Unsupported LLM provider: {self.provider}")
         
 
     async def generate_json_async(self, prompt: str, system_prompt: Optional[str] = None, model: str = None) -> Any:

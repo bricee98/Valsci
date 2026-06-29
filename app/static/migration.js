@@ -1,5 +1,5 @@
 (() => {
-  const { escapeHtml, fetchJson, formatDateTime, hideStatus, setStatus } = window.ValsciUI;
+  const { escapeHtml, fetchJson, formatDateTime, hideStatus, setStatus, revealPanel, flashButton, buttonBusy } = window.ValsciUI;
   const byId = (id) => document.getElementById(id);
   let migrationBatches = [];
   let selectedBatchId = null;
@@ -128,7 +128,7 @@
       const data = await fetchJson(
         `/api/v1/migration/batches/${encodeURIComponent(batchId)}/claims/${encodeURIComponent(claimId)}/report${query}`
       );
-      container.classList.remove("hidden");
+      revealPanel(container);
       if (!data.has_report || !data.report_preview) {
         container.innerHTML = `<div class="empty-state"><strong>No report available for this claim yet.</strong></div>`;
       } else {
@@ -146,7 +146,7 @@
         `;
       }
     } catch (error) {
-      container.classList.remove("hidden");
+      revealPanel(container);
       container.innerHTML = `<div class="status-card error-card"><strong>Could not load report preview.</strong><span>${escapeHtml(error.message)}</span></div>`;
     } finally {
       button.disabled = false;
@@ -231,17 +231,49 @@
     await loadBatches();
   }
 
-  byId("refreshMigrationBtn").addEventListener("click", () => loadBatches().catch(error => setStatus(byId("migrationStatus"), { title: "Refresh failed", message: error.message, tone: "error" })));
-  byId("importAllBtn").addEventListener("click", () => importAll().catch(error => setStatus(byId("migrationStatus"), { title: "Import failed", message: error.message, tone: "error" })));
+  byId("refreshMigrationBtn").addEventListener("click", () => {
+    const button = byId("refreshMigrationBtn");
+    const restore = buttonBusy(button, "Refreshing…");
+    loadBatches().then(() => {
+      restore();
+      flashButton(button, { label: "Refreshed ✓", duration: 1200 });
+    }).catch(error => {
+      restore();
+      flashButton(button, { label: "Refresh failed ✗", tone: "error" });
+      setStatus(byId("migrationStatus"), { title: "Refresh failed", message: error.message, tone: "error" });
+    });
+  });
+  byId("importAllBtn").addEventListener("click", () => {
+    const button = byId("importAllBtn");
+    const restore = buttonBusy(button, "Migrating…");
+    importAll().then(() => {
+      restore();
+      flashButton(button, { label: "Done ✓" });
+    }).catch(error => {
+      restore();
+      flashButton(button, { label: "Import failed ✗", tone: "error" });
+      setStatus(byId("migrationStatus"), { title: "Import failed", message: error.message, tone: "error" });
+    });
+  });
   byId("migrationTableBody").addEventListener("click", event => {
     const reviewButton = event.target.closest("[data-review]");
     if (reviewButton) {
-      reviewBatch(reviewButton.dataset.review).catch(error => setStatus(byId("migrationStatus"), { title: "Review failed", message: error.message, tone: "error" }));
+      const restore = buttonBusy(reviewButton, "Loading…");
+      reviewBatch(reviewButton.dataset.review).then(restore).catch(error => {
+        restore();
+        flashButton(reviewButton, { label: "Failed ✗", tone: "error" });
+        setStatus(byId("migrationStatus"), { title: "Review failed", message: error.message, tone: "error" });
+      });
       return;
     }
     const importButton = event.target.closest("[data-import]");
     if (importButton) {
-      importBatch(importButton.dataset.import, true).catch(error => setStatus(byId("migrationStatus"), { title: "Import failed", message: error.message, tone: "error" }));
+      const restore = buttonBusy(importButton, "Importing…");
+      importBatch(importButton.dataset.import, true).then(restore).catch(error => {
+        restore();
+        flashButton(importButton, { label: "Failed ✗", tone: "error" });
+        setStatus(byId("migrationStatus"), { title: "Import failed", message: error.message, tone: "error" });
+      });
     }
   });
 
@@ -256,7 +288,18 @@
     if (!selectedBatchId) {
       return;
     }
-    importBatch(selectedBatchId, true).catch(error => setStatus(byId("migrationStatus"), { title: "Import failed", message: error.message, tone: "error" }));
+    const button = byId("reviewImportBtn");
+    const restore = buttonBusy(button, "Importing…");
+    importBatch(selectedBatchId, true).then(() => {
+      restore();
+      // importBatch re-renders the review actions with a fresh label; restore()
+      // put the stale pre-click label back, so re-sync from the current detail.
+      if (selectedBatchDetail) renderReviewActions(selectedBatchDetail);
+    }).catch(error => {
+      restore();
+      flashButton(button, { label: "Import failed ✗", tone: "error" });
+      setStatus(byId("migrationStatus"), { title: "Import failed", message: error.message, tone: "error" });
+    });
   });
 
   byId("reviewDeleteBtn").addEventListener("click", () => {

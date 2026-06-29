@@ -7,8 +7,12 @@ from semantic_scholar.utils.searcher import S2Searcher
 from app.services.paper_analyzer import PaperAnalyzer
 from app.services.evidence_scorer import EvidenceScorer
 from app.services.llm.gateway import LLMTask
-from app.services.llm.types import empty_usage
-from app.services.llm.validators import validate_final_report_payload
+from app.services.llm.types import empty_usage, merge_usage
+from app.services.llm.validators import (
+    validate_final_report_payload,
+    OutputValidationError,
+    FINAL_REPORT_RESPONSE_SCHEMA,
+)
 from app.services.prompt_store import load_prompt, render_prompt
 import os
 import json
@@ -142,9 +146,44 @@ class ClaimProcessor:
                 batch_id=batch_id,
                 claim_id=claim_id,
                 model_override=model_override,
+                response_schema=FINAL_REPORT_RESPONSE_SCHEMA,
+                schema_name="final_report",
             )
-            response = validate_final_report_payload(result['content'])
             usage = result['usage']
+            try:
+                response = validate_final_report_payload(result['content'])
+            except OutputValidationError as validation_error:
+                # The model returned valid JSON but with the wrong fields. If the
+                # opt-in repair pass is enabled, ask the model to reshape its own
+                # output into the required schema (without changing the content)
+                # and validate again before giving up.
+                if not getattr(ai_service, "json_repair_enabled", False):
+                    raise
+                logger.warning(
+                    "Final report failed schema validation (%s); attempting JSON repair pass.",
+                    validation_error,
+                )
+                if batch_id and claim_id and hasattr(ai_service, "add_issue"):
+                    await ai_service.add_issue(
+                        batch_id=batch_id,
+                        claim_id=claim_id,
+                        severity="WARN",
+                        stage=LLMTask.FINAL_REPORT,
+                        message="Final report output did not match schema; running repair pass.",
+                        details={"error": str(validation_error)},
+                    )
+                repair_result = await ai_service.repair_json_to_schema(
+                    bad_content=result['content'],
+                    response_schema=FINAL_REPORT_RESPONSE_SCHEMA,
+                    schema_name="final_report",
+                    task=LLMTask.FINAL_REPORT,
+                    batch_id=batch_id,
+                    claim_id=claim_id,
+                    stage=LLMTask.FINAL_REPORT,
+                    model_override=model_override,
+                )
+                response = validate_final_report_payload(repair_result['content'])
+                usage = merge_usage(usage, repair_result['usage'])
             logger.info("Generated final report")
 
             # Convert the claimRating to a number
@@ -166,43 +205,7 @@ class ClaimProcessor:
                 use_bibliometrics = bibliometric_config.get('use_bibliometrics')
 
             # Format the final report
-            relevant_papers = []
-            for p in (processed_papers or []):
-                if not p.get('paper'):
-                    continue
-                    
-                paper_info = {
-                    "title": p['paper'].get('title', 'Unknown Title'),
-                    "authors": [
-                        {
-                            "name": author.get('name', 'Unknown'),
-                            "hIndex": author.get('hIndex', 0)
-                        }
-                        for author in p['paper'].get('authors', [])
-                    ],
-                    "link": p['paper'].get('url'),
-                    "relevance": p.get('relevance', 0),
-                    "content_type": p.get('content_type', 'unknown'),
-                    "excerpts": p.get('excerpts', []),
-                    "explanations": p.get('explanations', []),
-                    "citations": [
-                        {
-                            "text": excerpt,
-                            "page": page,
-                            "citation": self._format_citation(p['paper'], page)
-                        }
-                        for excerpt, page in zip(
-                            p.get('excerpts', []), 
-                            p.get('excerpt_pages', []) or [None] * len(p.get('excerpts', []))
-                        )
-                    ]
-                }
-                
-                # Add bibliometric impact (renamed from weight_score)
-                if use_bibliometrics:
-                    paper_info["bibliometric_impact"] = p.get('score', 0)
-                
-                relevant_papers.append(paper_info)
+            relevant_papers = self._format_relevant_papers(processed_papers, use_bibliometrics)
 
             return {
                 "relevantPapers": relevant_papers,
@@ -227,17 +230,52 @@ class ClaimProcessor:
                     message="Final report output failed validation or generation.",
                     details={"error": str(e)},
                 )
-            # Return a safe fallback response with usage stats
+            # Fallback report. Preserve the work that DID complete (queries, the
+            # analyzed papers, the inaccessible ones) instead of blanking it — only
+            # the final synthesis failed — and mark it as a failure so it reads
+            # "Failed" rather than a misleading "Unrated"/"No Evidence" verdict.
+            use_bibliometrics = not (bibliometric_config and bibliometric_config.get('use_bibliometrics') is False)
             return {
-                "relevantPapers": [],
-                "nonRelevantPapers": [],
-                "inaccessiblePapers": [],
+                "relevantPapers": self._format_relevant_papers(processed_papers, use_bibliometrics),
+                "nonRelevantPapers": self._format_non_relevant_papers(non_relevant_papers or []),
+                "inaccessiblePapers": self._format_inaccessible_papers(inaccessible_papers or []),
                 "explanation": f"Error generating final report: {str(e)}",
-                "claimRating": -1,
-                "searchQueries": [],
+                "finalReasoning": f"Final report generation failed: {str(e)}",
+                "claimRating": None,
+                "evaluation_failed": True,
+                "searchQueries": queries or [],
                 "usage_stats": {},
                 "bibliometric_config": bibliometric_config
             }, empty_usage(is_estimated=True)  # Add empty usage stats
+
+    def _format_relevant_papers(self, processed_papers, use_bibliometrics):
+        relevant_papers = []
+        for p in (processed_papers or []):
+            if not p.get('paper'):
+                continue
+            paper_info = {
+                "title": p['paper'].get('title', 'Unknown Title'),
+                "authors": [
+                    {"name": author.get('name', 'Unknown'), "hIndex": author.get('hIndex', 0)}
+                    for author in p['paper'].get('authors', [])
+                ],
+                "link": p['paper'].get('url'),
+                "relevance": p.get('relevance', 0),
+                "content_type": p.get('content_type', 'unknown'),
+                "excerpts": p.get('excerpts', []),
+                "explanations": p.get('explanations', []),
+                "citations": [
+                    {"text": excerpt, "page": page, "citation": self._format_citation(p['paper'], page)}
+                    for excerpt, page in zip(
+                        p.get('excerpts', []),
+                        p.get('excerpt_pages', []) or [None] * len(p.get('excerpts', []))
+                    )
+                ],
+            }
+            if use_bibliometrics:
+                paper_info["bibliometric_impact"] = p.get('score', 0)
+            relevant_papers.append(paper_info)
+        return relevant_papers
 
     async def _build_final_prompt_with_budget(
         self,

@@ -12,6 +12,7 @@ from app import create_app
 from app.api import routes as routes_module
 from app.config.settings import Config
 from app.services.claim_store import ClaimStore
+from app.services.processor_heartbeat import write_heartbeat
 
 
 class TestConfig(Config):
@@ -28,6 +29,8 @@ def write_claim(
     text: str,
     report_available: bool,
     review_type: str = "regular",
+    provider_snapshot: dict | None = None,
+    model_overrides: dict | None = None,
 ):
     batch_dir = root_dir / batch_id
     batch_dir.mkdir(parents=True, exist_ok=True)
@@ -52,6 +55,10 @@ def write_claim(
         },
         "usage_by_stage": {},
     }
+    if provider_snapshot is not None:
+        claim_data["provider_snapshot"] = provider_snapshot
+    if model_overrides is not None:
+        claim_data["model_overrides"] = model_overrides
     if report_available:
         claim_data["report"] = {
             "claimRating": 4,
@@ -126,6 +133,13 @@ def test_batch_routes_use_merged_saved_and_queued_claims(monkeypatch, tmp_path):
     assert progress_payload["total_claims"] == 2
     assert progress_payload["processed_claims"] == 1
     assert progress_payload["current_claim_id"] == "claim-queued"
+    # No heartbeat file has been written, so the processor reports as down.
+    assert progress_payload["processor"]["alive"] is False
+
+    write_heartbeat(tmp_path / "state")
+    progress_payload = client.get("/api/v1/batch/batch-mixed/progress").get_json()
+    assert progress_payload["processor"]["alive"] is True
+    assert progress_payload["processor"]["age_seconds"] is not None
 
     browse_response = client.get("/api/v1/browse")
     assert browse_response.status_code == 200
@@ -311,3 +325,82 @@ def test_delete_batch_removes_saved_and_queued_dirs(monkeypatch, tmp_path):
     assert response.status_code == 200
     assert not (saved_jobs_dir / "batch-delete").exists()
     assert not (queued_jobs_dir / "batch-delete").exists()
+
+
+def test_models_for_batch_resolves_from_both_state_shapes():
+    from app.api.routes import _models_for_batch
+
+    # File-derived shape: provider info nested under claim_data.
+    file_shape = {
+        "claims": [
+            {
+                "claim_data": {
+                    "provider_snapshot": {"label": "Ollama", "default_model": "llama3.1:8b"},
+                    "model_overrides": {},
+                }
+            }
+        ]
+    }
+    assert _models_for_batch(file_shape) == [
+        {"provider": "Ollama", "models": ["llama3.1:8b"], "display": "llama3.1:8b"}
+    ]
+
+    # Run-summary shape: provider info at the top level.
+    summary_shape = {
+        "claims": [
+            {
+                "provider_snapshot": {"label": "OpenAI", "default_model": "gpt-4o"},
+                "model_overrides": {},
+            }
+        ]
+    }
+    assert _models_for_batch(summary_shape) == [
+        {"provider": "OpenAI", "models": ["gpt-4o"], "display": "gpt-4o"}
+    ]
+
+    # Empty / missing state is safe.
+    assert _models_for_batch(None) == []
+    assert _models_for_batch({"claims": []}) == []
+
+
+def test_models_for_batch_dedupes_and_lists_per_stage_overrides():
+    from app.api.routes import _models_for_batch
+
+    state = {
+        "claims": [
+            # Two claims on the same model collapse to one entry.
+            {"provider_snapshot": {"label": "OpenAI", "default_model": "gpt-4o"}},
+            {"provider_snapshot": {"label": "OpenAI", "default_model": "gpt-4o"}},
+            # Per-stage overrides surface each distinct model.
+            {
+                "provider_snapshot": {"label": "OpenAI", "default_model": "gpt-4o"},
+                "model_overrides": {"final_report": "gpt-5"},
+            },
+        ]
+    }
+    result = _models_for_batch(state)
+    assert {"provider": "OpenAI", "models": ["gpt-4o"], "display": "gpt-4o"} in result
+    override_entry = next(e for e in result if "gpt-5" in e["models"])
+    assert override_entry["models"] == ["gpt-4o", "gpt-5"]
+    assert len(result) == 2  # the two identical gpt-4o claims deduped
+
+
+def test_batch_progress_endpoint_includes_models(monkeypatch, tmp_path):
+    saved_jobs_dir = tmp_path / "saved_jobs"
+    queued_jobs_dir = tmp_path / "queued_jobs"
+    write_claim(
+        queued_jobs_dir,
+        "batch-models",
+        "claim-1",
+        status="ready_for_search",
+        text="A claim being processed",
+        report_available=False,
+        provider_snapshot={"label": "Ollama", "default_model": "llama3.1:8b"},
+        model_overrides={},
+    )
+    client = create_test_client(monkeypatch, saved_jobs_dir, queued_jobs_dir)
+
+    payload = client.get("/api/v1/batch/batch-models/progress").get_json()
+    assert payload["models"] == [
+        {"provider": "Ollama", "models": ["llama3.1:8b"], "display": "llama3.1:8b"}
+    ]

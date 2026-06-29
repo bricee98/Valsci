@@ -14,7 +14,15 @@ from app.services.llm.model_registry import DEFAULT_MODEL_INFO, ModelInfo
 
 
 OPENAI_SEEDED_PROVIDER_TYPES = {"openai", "azure-openai"}
-LOCAL_PROVIDER_TYPES = {"local", "llamacpp", "ollama"}
+LOCAL_PROVIDER_TYPES = {"llamacpp", "ollama"}
+SUPPORTED_PROVIDER_TYPES = {
+    "openai",
+    "openrouter",
+    "ollama",
+    "llamacpp",
+    "azure-openai",
+    "azure-inference",
+}
 
 
 def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
@@ -55,7 +63,10 @@ class ProviderCatalog:
         with self.path.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
         payload.setdefault("providers", [])
+        changed = self._strip_removed_provider_fields(payload)
         if self._repair_seeded_default_provider(payload):
+            changed = True
+        if changed:
             self.save(payload)
         return payload
 
@@ -64,6 +75,7 @@ class ProviderCatalog:
         payload.setdefault("providers", [])
         for provider in payload["providers"]:
             provider.setdefault("provider_id", uuid.uuid4().hex[:10])
+            provider.pop("local_backend", None)
             provider["models"] = _dedupe_models(provider.get("models", []))
         _atomic_write_json(self.path, payload)
         return payload
@@ -108,6 +120,9 @@ class ProviderCatalog:
         provider.setdefault("provider_id", uuid.uuid4().hex[:10])
         provider.setdefault("enabled", True)
         provider.setdefault("task_defaults", {})
+        provider["provider_type"] = str(provider.get("provider_type") or "openai").strip().lower()
+        if provider["provider_type"] not in SUPPORTED_PROVIDER_TYPES:
+            raise ValueError(f"Unsupported provider_type: {provider['provider_type']}")
         provider["models"] = _dedupe_models(provider.get("models", []))
         replaced = False
         for index, existing in enumerate(providers):
@@ -141,7 +156,6 @@ class ProviderCatalog:
             "provider_type": provider.get("provider_type"),
             "api_key": provider.get("api_key", ""),
             "base_url": provider.get("base_url"),
-            "local_backend": provider.get("local_backend", ""),
             "default_model": provider.get("default_model"),
             "task_defaults": provider.get("task_defaults") or {},
             "http_referer": provider.get("http_referer"),
@@ -171,15 +185,14 @@ class ProviderCatalog:
         return overrides
 
     def _seed_catalog(self) -> Dict[str, Any]:
-        provider_type = str(Config.LLM_PROVIDER or "").strip().lower()
+        provider_type = str(Config.LLM_PROVIDER or "openai").strip().lower()
         provider = {
             "provider_id": "default",
             "label": "Default Config Provider",
-            "provider_type": Config.LLM_PROVIDER,
+            "provider_type": provider_type,
             "enabled": True,
             "api_key": Config.LLM_API_KEY,
             "base_url": Config.LLM_BASE_URL,
-            "local_backend": getattr(Config, "LOCAL_BACKEND", ""),
             "default_model": Config.LLM_EVALUATION_MODEL,
             "task_defaults": {},
             "http_referer": getattr(Config, "LLM_HTTP_REFERER", None),
@@ -190,6 +203,15 @@ class ProviderCatalog:
             "models": _dedupe_models(self._seed_model_entries(provider_type, Config.LLM_EVALUATION_MODEL)),
         }
         return {"providers": [provider]}
+
+    @staticmethod
+    def _strip_removed_provider_fields(payload: Dict[str, Any]) -> bool:
+        changed = False
+        for provider in payload.get("providers", []):
+            if "local_backend" in provider:
+                provider.pop("local_backend", None)
+                changed = True
+        return changed
 
     def _seed_model_entries(self, provider_type: str, default_model: Optional[str] = None) -> List[Dict[str, Any]]:
         model_entries: List[Dict[str, Any]] = []

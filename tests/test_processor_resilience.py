@@ -463,3 +463,138 @@ def test_recover_waiting_reuse_runs_materializes_orphans_from_saved_baseline(tmp
     assert queued_payload["processed_papers"] == []
     assert queued_payload["non_relevant_papers"] == []
     assert queued_payload["report"] is None
+
+
+def test_terminal_failure_report_is_marked_failed_not_no_evidence():
+    report = processor_module.terminal_failure_report(
+        "Search query generation failed after all retries: boom",
+        queries=["q1"],
+        claim_text="some claim",
+    )
+    # A processing failure must NOT look like a 0/"No Evidence" verdict.
+    assert report["evaluation_failed"] is True
+    assert report["claimRating"] is None
+    assert report["relevantPapers"] == []
+    assert report["searchQueries"] == ["q1"]
+    assert report["claim_text"] == "some claim"
+
+
+def test_stage_retry_issue_distinguishes_retry_from_giveup():
+    # A failure that will be retried is a transient WARN; an exhausted one is a
+    # terminal ERROR. The message must say which, with the attempt count, so a
+    # reader can tell recovered-and-retried apart from actually-failed.
+    processor, _, _ = build_processor(max_stage_retries=2)  # 3 attempts total
+
+    severity, message = processor._stage_retry_issue("Paper analysis", retries_used=1, retries_exhausted=False)
+    assert severity == "WARN"
+    assert "attempt 1 of 3" in message
+    assert "retrying" in message.lower()
+
+    severity, message = processor._stage_retry_issue("Paper analysis", retries_used=3, retries_exhausted=True)
+    assert severity == "ERROR"
+    assert "attempt 3 of 3" in message
+    assert "gave up" in message.lower() or "no retries left" in message.lower()
+
+
+def test_rating_label_distinguishes_failure_from_no_evidence():
+    # 0 is a real verdict; a failed run is labeled "Failed", not "No Evidence".
+    assert ClaimStore.rating_label(0) == "No Evidence"
+    assert ClaimStore.rating_label(0, evaluation_failed=True) == "Failed"
+    assert ClaimStore.rating_label(None, evaluation_failed=True) == "Failed"
+    assert ClaimStore.rating_label(None) == "Unrated"
+    assert ClaimStore.rating_label(4) == "Likely True"
+
+
+def test_build_run_summary_surfaces_failed_rating(tmp_path):
+    store = ClaimStore(
+        state_dir=str(tmp_path / "state"),
+        saved_jobs_dir=str(tmp_path / "saved"),
+        queued_jobs_dir=str(tmp_path / "queued"),
+        trace_dir=str(tmp_path / "saved"),
+    )
+    failed_run = {
+        "run_id": "r1",
+        "claim_key": "k1",
+        "report": processor_module.terminal_failure_report("query generation failed"),
+    }
+    summary = store.build_run_summary(failed_run)
+    assert summary["evaluation_failed"] is True
+    assert summary["rating_label"] == "Failed"
+    assert summary["claimRating"] is None
+
+    # A genuine no-evidence verdict still reads as "No Evidence".
+    no_evidence_run = {"run_id": "r2", "claim_key": "k1", "report": {"claimRating": 0}}
+    summary2 = store.build_run_summary(no_evidence_run)
+    assert summary2["evaluation_failed"] is False
+    assert summary2["rating_label"] == "No Evidence"
+
+
+def test_legacy_failure_reports_relabeled_without_flag(tmp_path):
+    # Older runs saved before the evaluation_failed flag are detected by their
+    # distinctive explanation text; the legitimate no-evidence verdict is not.
+    store = ClaimStore(
+        state_dir=str(tmp_path / "state"),
+        saved_jobs_dir=str(tmp_path / "saved"),
+        queued_jobs_dir=str(tmp_path / "queued"),
+        trace_dir=str(tmp_path / "saved"),
+    )
+    legacy_failed = {
+        "run_id": "r1", "claim_key": "k1",
+        "report": {"claimRating": 0, "explanation": "Search query generation failed after all retries: x"},
+    }
+    assert store.build_run_summary(legacy_failed)["rating_label"] == "Failed"
+
+    legacy_token_cap = {
+        "run_id": "r2", "claim_key": "k1",
+        "report": {"claimRating": 0, "explanation": "Stopped: token usage exceeded our cap."},
+    }
+    assert store.build_run_summary(legacy_token_cap)["rating_label"] == "Failed"
+
+    genuine_no_evidence = {
+        "run_id": "r3", "claim_key": "k1",
+        "report": {"claimRating": 0, "explanation": "No relevant papers were found for this claim."},
+    }
+    summary = store.build_run_summary(genuine_no_evidence)
+    assert summary["rating_label"] == "No Evidence"
+    assert summary["evaluation_failed"] is False
+
+
+def test_final_report_error_preserves_queries_and_marks_failed():
+    from app.services.claim_processor import ClaimProcessor
+
+    cp = ClaimProcessor.__new__(ClaimProcessor)
+
+    class FakeAI:
+        default_model = "m"
+
+        async def chat_json(self, **kwargs):
+            raise RuntimeError("final report LLM blew up")
+
+        async def add_issue(self, **kwargs):
+            pass
+
+    processed = [{
+        "paper": {"title": "P1", "authors": [], "url": "http://x"},
+        "relevance": 0.9,
+        "excerpts": ["evidence one"],
+        "score": 0.5,
+    }]
+
+    report, _usage = asyncio.run(cp.generate_final_report(
+        claim_text="some claim",
+        processed_papers=processed,
+        non_relevant_papers=[],
+        inaccessible_papers=[],
+        queries=["q1", "q2"],
+        ai_service=FakeAI(),
+        bibliometric_config={"use_bibliometrics": True},
+        batch_id="b",
+        claim_id="c",
+    ))
+    # The failure no longer blanks the report: queries and analyzed papers survive,
+    # and it is marked failed (so it reads "Failed", not "Unrated"/"No Evidence").
+    assert report["searchQueries"] == ["q1", "q2"]
+    assert report["evaluation_failed"] is True
+    assert report["claimRating"] is None
+    assert len(report["relevantPapers"]) == 1
+    assert report["relevantPapers"][0]["title"] == "P1"

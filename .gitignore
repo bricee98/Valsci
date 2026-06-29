@@ -183,3 +183,4 @@ dump_project.py
 ui_overhaul_plan.txt
 
 state/
+.smoke_state/

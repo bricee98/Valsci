@@ -7,6 +7,9 @@
     formatDurationMs,
     hideStatus,
     setStatus,
+    revealPanel,
+    flashButton,
+    buttonBusy,
     stageLabel,
     candidateStyle,
     renderTransposedTable,
@@ -195,6 +198,100 @@
     `;
   }
 
+  function severityBadgeTone(severity) {
+    const value = String(severity || "").toUpperCase();
+    if (value === "ERROR") {
+      return "error-badge";
+    }
+    if (value === "WARN" || value === "WARNING") {
+      return "warning-badge";
+    }
+    return "neutral-badge";
+  }
+
+  function renderIssueDetails(details) {
+    if (!details || typeof details !== "object") {
+      return "";
+    }
+    const entries = Object.entries(details).filter(([, value]) => value !== null && value !== undefined && value !== "");
+    if (!entries.length) {
+      return "";
+    }
+    return `
+      <dl class="issue-details">
+        ${entries.map(([key, value]) => {
+          const text = typeof value === "object" ? JSON.stringify(value) : String(value);
+          return `<div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(text)}</dd></div>`;
+        }).join("")}
+      </dl>`;
+  }
+
+  function issuesOutcomeBanner(run, errorCount, warnCount) {
+    // Interpret the logged records against the run's final state so a fresh
+    // reader knows whether the run actually succeeded. The records are logged
+    // mid-flight and can't themselves say "…and then it recovered"; only the run
+    // outcome can. Most stage errors are transient and were retried.
+    const status = String(run.status || "").toLowerCase();
+    const failed = run.evaluation_failed === true || ["error", "failed"].includes(status);
+    const terminal = failed || run.completed_stage === "final_report"
+      || ["processed", "completed", "done"].includes(status);
+    const verdict = run.rating_label ? ` Verdict: ${escapeHtml(run.rating_label)}.` : "";
+
+    if (failed) {
+      return `<div class="status-card error-card"><strong>This run did not complete.</strong><span>It could not produce a verdict — the error${errorCount === 1 ? "" : "s"} below explain why.</span></div>`;
+    }
+    if (!terminal) {
+      return `<div class="status-card info-card"><strong>This run is still processing.</strong><span>The items below were logged so far. Errors marked "retrying" are transient and are being retried automatically.</span></div>`;
+    }
+    if (errorCount) {
+      return `<div class="status-card success-card"><strong>This run completed despite the errors below.</strong><span>${verdict} They were logged while processing — typically transient failures that were automatically retried — and did not stop the run. Look for any "gave up" error if a stage was dropped.</span></div>`;
+    }
+    return `<div class="status-card success-card"><strong>This run completed.</strong><span>${verdict} The item${warnCount === 1 ? "" : "s"} below ${warnCount === 1 ? "is a warning" : "are warnings"}, not failures.</span></div>`;
+  }
+
+  function renderIssuesPanel(run) {
+    const issues = Array.isArray(run.issue_records) ? run.issue_records : [];
+    if (!issues.length) {
+      return "";
+    }
+    // Newest first so the most recent failure is at the top.
+    const ordered = [...issues].sort((a, b) => String(b.timestamp || "").localeCompare(String(a.timestamp || "")));
+    const errorCount = ordered.filter((issue) => String(issue.severity || "").toUpperCase() === "ERROR").length;
+    const warnCount = ordered.filter((issue) => ["WARN", "WARNING"].includes(String(issue.severity || "").toUpperCase())).length;
+    const summaryBits = [
+      errorCount ? `${errorCount} error${errorCount === 1 ? "" : "s"}` : "",
+      warnCount ? `${warnCount} warning${warnCount === 1 ? "" : "s"}` : "",
+    ].filter(Boolean).join(" · ") || `${ordered.length} record${ordered.length === 1 ? "" : "s"}`;
+    const downloadHref = (run.transport_batch_id && run.transport_claim_id)
+      ? `/api/v1/claims/${encodeURIComponent(run.transport_batch_id)}/${encodeURIComponent(run.transport_claim_id)}/issues`
+      : null;
+
+    return `
+      <article class="panel panel-muted" id="runIssues">
+        <div class="panel-header">
+          <div>
+            <h3 class="panel-title">Issues &amp; Warnings</h3>
+            <p class="panel-subtitle">What was logged during this run — ${escapeHtml(summaryBits)}.</p>
+          </div>
+          ${downloadHref ? `<a class="ghost-button small-button" href="${downloadHref}">Download (.jsonl)</a>` : ""}
+        </div>
+        ${issuesOutcomeBanner(run, errorCount, warnCount)}
+        <div class="issue-list">
+          ${ordered.map((issue) => `
+            <div class="issue-row">
+              <div class="issue-head">
+                <span class="badge ${severityBadgeTone(issue.severity)}">${escapeHtml(String(issue.severity || "info").toUpperCase())}</span>
+                <span class="issue-stage">${escapeHtml(stageLabel(issue.stage) || issue.stage || "—")}</span>
+                <span class="issue-time">${escapeHtml(issue.timestamp ? formatDateTime(issue.timestamp) : "")}</span>
+              </div>
+              <div class="issue-message">${escapeHtml(issue.message || "(no message)")}</div>
+              ${renderIssueDetails(issue.details)}
+            </div>
+          `).join("")}
+        </div>
+      </article>`;
+  }
+
   function renderFocusedRunHero() {
     const run = claimDetail?.focused_run;
     if (!run) {
@@ -248,7 +345,7 @@
           </div>
           <div class="summary-cell">
             <span class="label">Rating</span>
-            <span class="value">${escapeHtml(run.rating_label)}${run.claimRating !== null && run.claimRating !== undefined ? ` (${run.claimRating})` : ""}</span>
+            <span class="value${run.evaluation_failed ? " error-text" : ""}">${escapeHtml(run.rating_label)}${!run.evaluation_failed && run.claimRating !== null && run.claimRating !== undefined ? ` (${run.claimRating})` : ""}</span>
           </div>
           <div class="summary-cell">
             <span class="label">Actual Cost</span>
@@ -269,7 +366,9 @@
               <span>Last activity: ${escapeHtml(formatDateTime(run.last_activity_at || run.updated_at))}</span>
             </div>
             <div class="pill-row">
-              <span class="pill">Issues ${run.quality_health?.issues_count || 0}</span>
+              ${(run.quality_health?.issues_count || 0) > 0
+                ? `<a class="pill pill-link" href="#runIssues" title="See what was logged">Issues ${run.quality_health.issues_count} ↓</a>`
+                : `<span class="pill">Issues 0</span>`}
               <span class="pill">Retries ${run.quality_health?.retry_count || 0}</span>
               <span class="pill">Truncation ${run.quality_health?.truncation_count || 0}</span>
               <span class="pill">Context warnings ${run.quality_health?.context_overflow_count || 0}</span>
@@ -295,6 +394,7 @@
             </div>
           </article>
         </div>
+        ${renderIssuesPanel(run)}
         ${renderPromptProvenance(run)}
       </div>
     `;
@@ -589,7 +689,6 @@
 
   function invalidatePreflight() {
     preflightPayload = null;
-    byId("queueRunBtn").disabled = true;
     byId("preflightPanel").classList.add("hidden");
   }
 
@@ -619,7 +718,6 @@
         </div>
       `);
     }
-    byId("preflightPanel").classList.remove("hidden");
     byId("preflightPanel").innerHTML = `
       <div class="panel-header">
         <div>
@@ -635,7 +733,7 @@
         <div class="summary-cell"><span class="label">Upper Bound</span><span class="value">${escapeHtml(formatCurrency(data.totals.upper_bound_cost_usd))}</span></div>
       </div>
     `;
-    byId("queueRunBtn").disabled = !data.totals.pricing_complete;
+    revealPanel(byId("preflightPanel"));
   }
 
   async function estimateRerun() {
@@ -695,6 +793,10 @@
 
     if (data.created_runs?.length) {
       const run = data.created_runs[0];
+      if (run.transport_claim_id) {
+        window.location.href = `/progress?batch_id=${encodeURIComponent(data.batch_id)}&claim_id=${encodeURIComponent(run.transport_claim_id)}`;
+        return;
+      }
       window.location.href = `/claims/${encodeURIComponent(run.claim_key)}?run_id=${encodeURIComponent(run.run_id)}`;
       return;
     }
@@ -775,18 +877,35 @@
     invalidatePreflight();
   });
 
-  byId("estimateBtn").addEventListener("click", () => {
-    estimateRerun().catch((error) => {
+  byId("queueRunBtn").addEventListener("click", () => {
+    const button = byId("queueRunBtn");
+    // Step 1: estimate (skipped when a fresh estimate already exists),
+    // Step 2: review and approve the cost in the confirmation modal.
+    const openWhenPriced = () => {
+      if (!preflightPayload.totals.pricing_complete) {
+        setStatus(byId("rerunStatus"), {
+          title: "Pricing metadata is incomplete",
+          message: `Missing pricing for ${preflightPayload.totals.missing_pricing_models.join(", ")}. Add it on the Providers page, then try again.`,
+          tone: "error",
+        });
+        return;
+      }
+      hideStatus(byId("rerunStatus"));
+      openCostModal();
+    };
+    if (preflightPayload) {
+      openWhenPriced();
+      return;
+    }
+    const restore = buttonBusy(button, "Estimating…");
+    estimateRerun().then(() => {
+      restore();
+      openWhenPriced();
+    }).catch((error) => {
+      restore();
+      flashButton(button, { label: "Estimate failed ✗", tone: "error" });
       setStatus(byId("rerunStatus"), { title: "Estimate failed", message: error.message, tone: "error" });
     });
-  });
-
-  byId("queueRunBtn").addEventListener("click", () => {
-    try {
-      openCostModal();
-    } catch (error) {
-      setStatus(byId("rerunStatus"), { title: "Queue blocked", message: error.message, tone: "error" });
-    }
   });
 
   byId("cancelCostBtn").addEventListener("click", () => {
@@ -798,7 +917,10 @@
   });
 
   byId("confirmCostBtn").addEventListener("click", () => {
+    const restore = buttonBusy(byId("confirmCostBtn"), "Queueing…");
     queueRerun().catch((error) => {
+      restore();
+      byId("costModal").classList.add("hidden");
       setStatus(byId("rerunStatus"), { title: "Queue failed", message: error.message, tone: "error" });
     });
   });

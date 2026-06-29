@@ -44,7 +44,7 @@
 
 {% block scripts %}
     <script>
-        const { escapeHtml, fetchJson } = window.ValsciUI;
+        const { escapeHtml, fetchJson, showToast, flashButton, buttonBusy } = window.ValsciUI;
         const batchId = window.batchResultsConfig?.batchId;
         let table;
         let refreshTimer = null;
@@ -193,12 +193,17 @@
 
         document.getElementById('deleteBatchButton').addEventListener('click', async () => {
             if (!window.confirm('Delete this batch? This removes its queued/saved claim files.')) return;
+            const button = document.getElementById('deleteBatchButton');
+            const restore = buttonBusy(button, 'Deleting…');
             try {
                 const data = await fetchJson(`/api/v1/delete/batch/${encodeURIComponent(batchId)}`, { method: 'DELETE' });
                 batchStatusBanner.innerHTML = `<div class="status-card warning-card"><strong>Batch deleted</strong><span>${escapeHtml(data.message || batchId)}</span></div>`;
                 window.location.href = '/browser';
             } catch (error) {
+                restore();
+                flashButton(button, { label: 'Delete failed ✗', tone: 'error' });
                 batchStatusBanner.innerHTML = `<div class="status-card error-card"><strong>Delete failed</strong><span>${escapeHtml(error.message)}</span></div>`;
+                showToast({ title: 'Delete failed', message: error.message, tone: 'error' });
             }
         });
 
@@ -207,6 +212,8 @@
         });
 
         document.getElementById('downloadMarkdown').addEventListener('click', async () => {
+            const button = document.getElementById('downloadMarkdown');
+            const restore = buttonBusy(button, 'Preparing…');
             try {
                 const response = await fetch(`/api/v1/batch/${encodeURIComponent(batchId)}/download_markdown`);
                 if (!response.ok) {
@@ -222,8 +229,13 @@
                 link.click();
                 link.remove();
                 URL.revokeObjectURL(url);
+                restore();
+                flashButton(button, { label: 'Downloaded ✓' });
             } catch (error) {
+                restore();
+                flashButton(button, { label: 'Download failed ✗', tone: 'error' });
                 batchStatusBanner.innerHTML = `<div class="status-card error-card"><strong>Download failed</strong><span>${escapeHtml(error.message)}</span></div>`;
+                showToast({ title: 'Download failed', message: error.message, tone: 'error' });
             }
         });
 

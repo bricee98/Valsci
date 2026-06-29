@@ -88,6 +88,18 @@ class SubmissionService:
                 raise ValueError("Each candidate must include provider_id.")
             provider_snapshot = self.provider_catalog.build_snapshot(provider_id)
             model_overrides = clean_model_overrides(candidate.get("model_overrides") if isinstance(candidate, dict) else {})
+            # Keep the candidate's stored config self-consistent: a candidate's
+            # "model" is the one it runs, not the provider's global default. Set the
+            # snapshot default_model to the candidate's primary model (sent
+            # explicitly, or inferred when every stage uses the same model) so the
+            # recorded default_model never contradicts the per-stage models.
+            primary_model = candidate.get("default_model") if isinstance(candidate, dict) else None
+            if not primary_model:
+                override_values = [value for value in model_overrides.values() if value]
+                if override_values and len(set(override_values)) == 1:
+                    primary_model = override_values[0]
+            if primary_model:
+                provider_snapshot = {**provider_snapshot, "default_model": primary_model}
             label = candidate.get("label") if isinstance(candidate, dict) else None
             candidate_index = candidate.get("candidate_index", index) if isinstance(candidate, dict) else index
             try:

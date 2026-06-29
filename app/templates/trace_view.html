@@ -249,6 +249,10 @@
 
         function renderStatus(message, cls) {
             statusMessage.innerHTML = `<div class="status-message ${cls}">${escapeHtml(message)}</div>`;
+            const ui = window.ValsciUI;
+            if (ui?.isInViewport && !ui.isInViewport(statusMessage)) {
+                ui.showToast({ message, tone: cls === 'error' ? 'error' : 'info' });
+            }
         }
 
         function buildQuery(params) {
@@ -548,6 +552,7 @@
                 const payload = await response.json();
                 if (!response.ok) {
                     renderStatus(payload.error || 'Failed to resume claim.', 'error');
+                    window.ValsciUI?.flashButton?.(resumeButton, { label: 'Resume failed ✗', tone: 'error' });
                     resumeButton.disabled = false;
                     return;
                 }
@@ -555,10 +560,12 @@
                     `Claim resumed to ${payload.resume_to_status}. The processor can pick it up on the next scan.`,
                     'info'
                 );
+                window.ValsciUI?.flashButton?.(resumeButton, { label: 'Resumed ✓' });
                 await loadTrace();
             } catch (error) {
                 console.error('Error resuming claim:', error);
                 renderStatus('Error resuming claim.', 'error');
+                window.ValsciUI?.flashButton?.(resumeButton, { label: 'Resume failed ✗', tone: 'error' });
                 resumeButton.disabled = false;
             }
         });

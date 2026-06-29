@@ -12,7 +12,11 @@ import mmap
 import logging
 from app.services.llm.gateway import LLMTask
 from app.services.prompt_store import load_prompt, render_prompt
-from app.services.llm.validators import OutputValidationError, validate_query_generation_payload
+from app.services.llm.validators import (
+    OutputValidationError,
+    validate_query_generation_payload,
+    QUERY_GENERATION_RESPONSE_SCHEMA,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,6 +33,11 @@ from semantic_scholar.utils.binary_indexer import BinaryIndexer
 console = Console()
 
 class S2Searcher:
+    # Class-level defaults so the on-miss remote-fetch throttle is always present,
+    # even for instances built via __new__ (tests) that skip __init__.
+    _last_remote_fetch = 0.0
+    _remote_min_interval = 1.0
+
     def __init__(self):
         logger.info(f"Initializing S2Searcher with project root: {project_root}")
         self.api_key = Config.SEMANTIC_SCHOLAR_API_KEY
@@ -40,7 +49,11 @@ class S2Searcher:
         logger.info(f"Base directory set to: {self.base_dir}")
         
         self.rate_limiter = RateLimiter(requests_per_second=1.0)
-        
+        # Simple synchronous throttle for on-miss remote content fetches (the
+        # content lookup path is sync, so it cannot use the async rate_limiter).
+        self._last_remote_fetch = 0.0
+        self._remote_min_interval = 1.0
+
         # Find latest release
         self.current_release = self._get_latest_local_release()
         logger.info(f"Found latest release: {self.current_release}")
@@ -122,19 +135,47 @@ class S2Searcher:
                 batch_id=batch_id,
                 claim_id=claim_id,
                 model_override=model_override,
+                response_schema=QUERY_GENERATION_RESPONSE_SCHEMA,
+                schema_name="query_generation",
             )
-            response = validate_query_generation_payload(
-                result['content'],
-                expected_query_count=num_queries,
-            )
-            usage = result['usage']
+            try:
+                response = validate_query_generation_payload(
+                    result['content'],
+                    expected_query_count=num_queries,
+                )
+                usage = result['usage']
+            except OutputValidationError as validation_error:
+                # Valid JSON but wrong shape. With the opt-in repair pass enabled,
+                # ask the model to reshape its output into the required schema and
+                # re-validate before failing.
+                if not getattr(ai_service, "json_repair_enabled", False):
+                    raise
+                logger.warning(
+                    "Query generation failed schema validation (%s); attempting JSON repair pass.",
+                    validation_error,
+                )
+                repair_result = await ai_service.repair_json_to_schema(
+                    bad_content=result['content'],
+                    response_schema=QUERY_GENERATION_RESPONSE_SCHEMA,
+                    schema_name="query_generation",
+                    task=LLMTask.QUERY_GENERATION,
+                    batch_id=batch_id,
+                    claim_id=claim_id,
+                    stage=LLMTask.QUERY_GENERATION,
+                    model_override=model_override,
+                )
+                response = validate_query_generation_payload(
+                    repair_result['content'],
+                    expected_query_count=num_queries,
+                )
+                usage = repair_result['usage']
             queries = response.get('queries', [])
-            
+
             # Log generated queries for debugging
             console.print("\n[cyan]Generated queries:[/cyan]")
             for query in queries:
                 console.print(f"[green]- {query}[/green]")
-                
+
             return queries, usage
 
         except OutputValidationError as e:
@@ -253,7 +294,9 @@ class S2Searcher:
         if len(authors) >= 2 and authors[-1] != authors[0]:  # Add last author if different from first
             key_authors.append(authors[-1])
         
+        remote_enabled = getattr(Config, "FETCH_REMOTE_CONTENT_ON_MISS", False)
         enriched_authors = []
+        missed_locally = []  # authors absent from the local corpus, for remote fallback
         for author in key_authors:
             author_id = author.get('authorId')
             if author_id:
@@ -272,7 +315,28 @@ class S2Searcher:
                     logger.info(f"Enriched author {author_id} with h-index: {author['hIndex']}")
                 else:
                     logger.warning(f"No local data found for author: {author_id}")
+                    if remote_enabled:
+                        missed_locally.append(author)
             enriched_authors.append(author)
+
+        # Optional fallback: live-search papers return authors that aren't in the
+        # local corpus (their bibliometrics would otherwise default to 0). When the
+        # "fetch missing content" toggle is on, fill h-index/counts from the live
+        # S2 API. Best-effort — any failure leaves the default 0.
+        if remote_enabled and missed_locally:
+            ids = [str(a.get('authorId')) for a in missed_locally if a.get('authorId')]
+            try:
+                remote_meta = self._fetch_remote_author_metadata(ids)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"Remote author metadata fetch errored: {exc}")
+                remote_meta = {}
+            for author in missed_locally:
+                meta = remote_meta.get(str(author.get('authorId')))
+                if meta:
+                    author['hIndex'] = meta.get('hIndex') or 0
+                    author['paperCount'] = meta.get('paperCount') or 0
+                    author['citationCount'] = meta.get('citationCount') or 0
+                    logger.info(f"Enriched author {author.get('authorId')} from remote API with h-index: {author['hIndex']}")
         return enriched_authors
 
     def _build_inaccessible_result(
@@ -435,6 +499,32 @@ class S2Searcher:
                 attempts.append(self._attempt_result('tldrs', 'missing_record'))
 
 
+            # Optional fallback: fetch content from the live Semantic Scholar API
+            # when it is not in the local corpus and the toggle is enabled. This is
+            # best-effort — any failure here must degrade to a clean "no accessible
+            # content" miss, never turn the whole lookup into an exception.
+            if getattr(Config, "FETCH_REMOTE_CONTENT_ON_MISS", False):
+                logger.info(f"Local miss for {corpus_id}; trying remote fetch (toggle enabled)")
+                try:
+                    remote = self._fetch_remote_content(str(corpus_id))
+                except Exception as remote_exc:  # noqa: BLE001
+                    logger.warning(f"Remote content fetch errored for {corpus_id}: {remote_exc}")
+                    remote = {'status': 'remote_error'}
+                if remote and remote.get('text'):
+                    return {
+                        'text': remote['text'],
+                        'source': remote['source'],
+                        'pdf_hash': None,
+                        'status': 'ok',
+                        'lookup_details': {
+                            'corpus_id': str(corpus_id),
+                            'release_id': self.current_release,
+                            'has_local_data': bool(self.has_local_data),
+                            'attempts': attempts + [self._attempt_result(remote['source'], 'found_text')],
+                        },
+                    }
+                attempts.append(self._attempt_result('semantic_scholar_api', remote.get('status', 'no_remote_content') if isinstance(remote, dict) else 'no_remote_content'))
+
             # If no content found in any dataset
             logger.warning(f"No content found for corpus ID: {corpus_id}")
             return self._build_inaccessible_result(
@@ -454,6 +544,94 @@ class S2Searcher:
                 attempts=attempts,
                 error=str(e),
             )
+
+    def _fetch_remote_content(self, corpus_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch a paper's abstract/TLDR from the live Semantic Scholar graph API.
+
+        Used only when the paper is absent from the local corpus and the
+        "fetch missing content" toggle is enabled. Respects a simple request
+        throttle and the configured API key, and backs off on HTTP 429.
+        Returns {'text', 'source'} on success, or {'status': ...} on a clean miss.
+        """
+        url = f"https://api.semanticscholar.org/graph/v1/paper/CorpusId:{corpus_id}"
+        for attempt in range(4):
+            wait = self._remote_min_interval - (time.time() - self._last_remote_fetch)
+            if wait > 0:
+                time.sleep(wait)
+            self._last_remote_fetch = time.time()
+            try:
+                resp = self.session.get(url, params={"fields": "abstract,tldr,title"}, timeout=30)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"Remote content fetch failed for {corpus_id}: {exc}")
+                return {"status": "remote_error"}
+            if resp.status_code == 429:
+                time.sleep(min(30, 2 ** attempt + 1))
+                continue
+            if resp.status_code == 404:
+                return {"status": "remote_not_found"}
+            if not resp.ok:
+                return {"status": "remote_error"}
+            data = resp.json() if resp.content else {}
+            text = data.get("abstract")
+            source = "semantic_scholar_api_abstract"
+            if not text:
+                text = (data.get("tldr") or {}).get("text")
+                source = "semantic_scholar_api_tldr"
+            if text:
+                return {"text": text, "source": source}
+            return {"status": "remote_no_text"}
+        return {"status": "remote_rate_limited"}
+
+    def _fetch_remote_author_metadata(self, author_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Fetch h-index / paper / citation counts for authors from the live S2 API.
+
+        Used when authors are absent from the local corpus and the "fetch missing
+        content" toggle is enabled (live-search papers often have authors outside a
+        mini corpus). Uses the author batch endpoint so a paper's key authors
+        resolve in one call. Shares the remote-fetch throttle and backs off on 429.
+        Returns {authorId: {hIndex, paperCount, citationCount}} (only for authors
+        the API knew about); an empty dict on any failure.
+        """
+        ids = [str(a) for a in (author_ids or []) if a]
+        if not ids:
+            return {}
+        url = "https://api.semanticscholar.org/graph/v1/author/batch"
+        for attempt in range(4):
+            wait = self._remote_min_interval - (time.time() - self._last_remote_fetch)
+            if wait > 0:
+                time.sleep(wait)
+            self._last_remote_fetch = time.time()
+            try:
+                resp = self.session.post(
+                    url,
+                    params={"fields": "hIndex,paperCount,citationCount"},
+                    json={"ids": ids},
+                    timeout=30,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"Remote author metadata fetch failed: {exc}")
+                return {}
+            if resp.status_code == 429:
+                time.sleep(min(30, 2 ** attempt + 1))
+                continue
+            if not resp.ok:
+                logger.warning(f"Remote author metadata fetch HTTP {resp.status_code}")
+                return {}
+            try:
+                data = resp.json() if resp.content else []
+            except Exception:  # noqa: BLE001
+                return {}
+            result: Dict[str, Dict[str, Any]] = {}
+            for entry in data or []:
+                if entry and entry.get("authorId"):
+                    result[str(entry["authorId"])] = {
+                        "hIndex": entry.get("hIndex"),
+                        "paperCount": entry.get("paperCount"),
+                        "citationCount": entry.get("citationCount"),
+                    }
+            return result
+        return {}
+
 
 class RateLimiter:
     def __init__(self, requests_per_second: float = 1.0):

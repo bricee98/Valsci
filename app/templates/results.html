@@ -41,7 +41,7 @@
 
 {% block scripts %}
     <script>
-        const { escapeHtml, fetchJson, setStatus } = window.ValsciUI;
+        const { escapeHtml, fetchJson, setStatus, flashButton, buttonBusy } = window.ValsciUI;
         const urlParams = new URLSearchParams(window.location.search);
         const claimId = urlParams.get('claim_id') || window.resultsPageConfig?.claimId;
         const batchId = urlParams.get('batch_id') || window.resultsPageConfig?.batchId;
@@ -475,11 +475,15 @@
                 return;
             }
             if (!window.confirm('Delete this claim run?')) return;
+            const button = document.getElementById('deleteClaimButton');
+            const restore = buttonBusy(button, 'Deleting…');
             try {
                 const data = await fetchJson(`/api/v1/delete/claim/${encodeURIComponent(batchId)}/${encodeURIComponent(claimId)}`, { method: 'DELETE' });
                 setStatus(reportStatus, { title: 'Claim deleted', message: data.message || 'The claim was deleted.', tone: 'warning' });
                 window.location.href = '/browser';
             } catch (error) {
+                restore();
+                flashButton(button, { label: 'Delete failed ✗', tone: 'error' });
                 setStatus(reportStatus, { title: 'Delete failed', message: error.message, tone: 'error' });
             }
         });

@@ -18,6 +18,7 @@ sys.modules.setdefault(
 from app import create_app
 from app.api import routes as routes_module
 from app.config.settings import Config
+from app.services import ollama_discovery
 from app.services.ollama_discovery import (
     DEFAULT_OLLAMA_BASE_URL,
     discover_ollama_models,
@@ -120,6 +121,58 @@ def test_discover_ollama_models_raises_when_host_is_unreachable(monkeypatch):
         discover_ollama_models(base_url="http://localhost:11434")
 
 
+def test_unreachable_localhost_inside_docker_suggests_host_docker_internal(monkeypatch):
+    monkeypatch.setenv("VALSCI_IN_DOCKER", "1")
+
+    def fake_request(*args, **kwargs):
+        raise requests.ConnectionError("connection refused")
+
+    monkeypatch.setattr(requests, "request", fake_request)
+
+    with pytest.raises(RuntimeError, match="host.docker.internal"):
+        discover_ollama_models(base_url="http://localhost:11434")
+    with pytest.raises(RuntimeError, match="host.docker.internal"):
+        discover_ollama_models(base_url="http://127.0.0.1:11434")
+
+
+def test_unreachable_host_docker_internal_outside_docker_suggests_localhost(monkeypatch):
+    monkeypatch.delenv("VALSCI_IN_DOCKER", raising=False)
+    monkeypatch.setattr(ollama_discovery, "running_in_docker", lambda: False)
+
+    def fake_request(*args, **kwargs):
+        raise requests.ConnectionError("connection refused")
+
+    monkeypatch.setattr(requests, "request", fake_request)
+
+    with pytest.raises(RuntimeError, match="use\\s+http://localhost:11434 instead"):
+        discover_ollama_models(base_url="http://host.docker.internal:11434")
+
+
+def test_unreachable_remote_host_gets_no_docker_hint(monkeypatch):
+    monkeypatch.setenv("VALSCI_IN_DOCKER", "1")
+
+    def fake_request(*args, **kwargs):
+        raise requests.ConnectionError("connection refused")
+
+    monkeypatch.setattr(requests, "request", fake_request)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        discover_ollama_models(base_url="http://192.168.1.50:11434")
+    assert "host.docker.internal" not in str(excinfo.value)
+
+
+def test_discovery_timeout_includes_docker_hint(monkeypatch):
+    monkeypatch.setenv("VALSCI_IN_DOCKER", "1")
+
+    def fake_request(*args, **kwargs):
+        raise requests.Timeout("timed out")
+
+    monkeypatch.setattr(requests, "request", fake_request)
+
+    with pytest.raises(RuntimeError, match="timed out.*host.docker.internal"):
+        discover_ollama_models(base_url="http://localhost:11434")
+
+
 def test_merge_models_preserves_existing_manual_metadata():
     existing = [
         {
@@ -195,7 +248,6 @@ def test_providers_page_renders_http_discovery_editor(monkeypatch, tmp_path):
 
     assert response.status_code == 200
     page = response.get_data(as_text=True)
-    assert "Find provider" in page
     assert "Connection" in page
-    assert "Discover Ollama Models" in page
-    assert "Probe URL" in page
+    assert "Discover Models" in page
+    assert "Probe Alternate URL" in page

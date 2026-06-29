@@ -13,6 +13,15 @@
             </div>
             <div id="dataStatusCard" class="status-card info-card hidden"></div>
             <div id="dataSummary" class="summary-strip"></div>
+            <div class="panel-divider"></div>
+            <label class="checkbox-row" id="remoteFetchRow">
+                <input type="checkbox" id="remoteFetchToggle">
+                <span>
+                    <strong>Fetch missing papers &amp; author data from the web</strong>
+                    <small class="form-hint">When a paper or author a claim needs isn't in your local corpus, pull it from the Semantic Scholar API (uses your API key, rate-limited): paper abstract/TLDR, plus author h-index/citation counts for bibliometrics. Useful when live search returns papers outside a mini corpus. Applies to processing within a few seconds of toggling.</small>
+                </span>
+            </label>
+            <div id="remoteFetchStatus" class="helper-text"></div>
         </article>
 
         <article class="panel">

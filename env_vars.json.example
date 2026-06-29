@@ -8,7 +8,6 @@
     "LLM_API_KEY": "your_api_key",
     "LLM_EVALUATION_MODEL": "gpt-4o",
     "LLM_BASE_URL": "https://api.openai.com/v1",
-    "LOCAL_BACKEND": "",
     "LOCAL_MODEL_CONTEXT_OVERRIDE": 0,
     
     "REQUIRE_PASSWORD": "true",

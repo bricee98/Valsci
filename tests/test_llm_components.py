@@ -135,8 +135,11 @@ def test_searcher_latest_release_keeps_full_mini_release_id(tmp_path):
     assert searcher._get_latest_local_release() == "2026-05-26-mini-mendelian-v1"
 
 
-def test_get_paper_content_reports_dataset_attempts_when_no_text():
+def test_get_paper_content_reports_dataset_attempts_when_no_text(monkeypatch):
     S2Searcher = _load_searcher_class()
+    # This test covers local dataset attempt reporting; pin the optional remote
+    # fallback off so it's deterministic regardless of the ambient toggle.
+    monkeypatch.setattr(Config, "FETCH_REMOTE_CONTENT_ON_MISS", False, raising=False)
 
     class FakeIndexer:
         def lookup(self, release_id, dataset, id_type, search_id):

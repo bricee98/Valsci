@@ -57,3 +57,39 @@ def test_validate_final_report_payload_normalizes_rating_case():
     }
     validated = validate_final_report_payload(payload)
     assert validated["claimRating"] == "Likely True"
+
+
+def test_validate_final_report_coerces_nonstring_reasoning():
+    # Reasoning models sometimes return finalReasoning as a list of points or an
+    # object; coerce to text rather than failing the whole report.
+    list_payload = {
+        "explanationEssay": "Detailed explanation.",
+        "finalReasoning": ["Point one.", "Point two."],
+        "claimRating": "Likely True",
+    }
+    validated = validate_final_report_payload(list_payload)
+    assert "Point one." in validated["finalReasoning"]
+    assert "Point two." in validated["finalReasoning"]
+
+    dict_payload = {
+        "explanationEssay": {"summary": "essay as object"},
+        "finalReasoning": "ok",
+        "claimRating": "Mixed Evidence",
+    }
+    validated = validate_final_report_payload(dict_payload)
+    assert "essay as object" in validated["explanationEssay"]
+    assert validated["claimRating"] == "Mixed Evidence"
+
+
+def test_validate_final_report_still_rejects_nonstring_rating():
+    # claimRating must stay a recognizable verdict — coercion does not apply.
+    import pytest
+    from app.services.llm.validators import OutputValidationError
+
+    payload = {
+        "explanationEssay": "x",
+        "finalReasoning": "y",
+        "claimRating": {"verdict": "Likely True"},
+    }
+    with pytest.raises(OutputValidationError):
+        validate_final_report_payload(payload)

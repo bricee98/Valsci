@@ -1,9 +1,9 @@
 (() => {
-  const { escapeHtml, fetchJson, formatDateTime, hideStatus, setStatus } = window.ValsciUI;
+  const { escapeHtml, fetchJson, formatDateTime, hideStatus, setStatus, flashButton, buttonBusy } = window.ValsciUI;
   const byId = (id) => document.getElementById(id);
 
   const PROVIDER_TYPES = [
-    "openai", "openrouter", "ollama", "llamacpp", "local", "azure-openai", "azure-inference",
+    "openai", "openrouter", "ollama", "llamacpp", "azure-openai", "azure-inference",
   ];
 
   const providerTypeMeta = {
@@ -13,7 +13,6 @@
       connectionHint: "API key and optional base URL for OpenAI-compatible endpoints.",
       showApiKey: true,
       showBaseUrl: true,
-      showLocalBackend: false,
       showOpenRouter: false,
       showAzureOpenAi: false,
       showAzureInference: false,
@@ -25,31 +24,17 @@
       connectionHint: "API key, base URL, and optional referer headers.",
       showApiKey: true,
       showBaseUrl: true,
-      showLocalBackend: false,
       showOpenRouter: true,
       showAzureOpenAi: false,
       showAzureInference: false,
       defaultBaseUrl: "https://openrouter.ai/api/v1",
     },
-    local: {
-      title: "Local Router",
-      hint: "Local compatibility layer.",
-      connectionHint: "Base URL and optional backend type.",
-      showApiKey: false,
-      showBaseUrl: true,
-      showLocalBackend: true,
-      showOpenRouter: false,
-      showAzureOpenAi: false,
-      showAzureInference: false,
-      defaultBaseUrl: "http://localhost:11434/v1",
-    },
     ollama: {
       title: "Ollama",
       hint: "Direct Ollama instance.",
-      connectionHint: "Base URL for the Ollama host (e.g. http://localhost:11434).",
+      connectionHint: "Base URL for the Ollama host (e.g. http://localhost:11434; when Valsci runs in Docker and Ollama runs on the host, use http://host.docker.internal:11434).",
       showApiKey: false,
       showBaseUrl: true,
-      showLocalBackend: false,
       showOpenRouter: false,
       showAzureOpenAi: false,
       showAzureInference: false,
@@ -61,7 +46,6 @@
       connectionHint: "Base URL for the llama.cpp server.",
       showApiKey: false,
       showBaseUrl: true,
-      showLocalBackend: false,
       showOpenRouter: false,
       showAzureOpenAi: false,
       showAzureInference: false,
@@ -73,7 +57,6 @@
       connectionHint: "API key, resource endpoint, and API version.",
       showApiKey: true,
       showBaseUrl: false,
-      showLocalBackend: false,
       showOpenRouter: false,
       showAzureOpenAi: true,
       showAzureInference: false,
@@ -85,7 +68,6 @@
       connectionHint: "API key and inference endpoint.",
       showApiKey: true,
       showBaseUrl: false,
-      showLocalBackend: false,
       showOpenRouter: false,
       showAzureOpenAi: false,
       showAzureInference: true,
@@ -114,7 +96,6 @@
       api_key: "",
       base_url: meta.defaultBaseUrl || "",
       default_model: "",
-      local_backend: "",
       http_referer: "",
       site_name: "",
       azure_openai_endpoint: "",
@@ -221,7 +202,6 @@
 
     byId("providerApiKeyGroup").classList.toggle("hidden", !meta.showApiKey);
     byId("providerBaseUrlGroup").classList.toggle("hidden", !meta.showBaseUrl);
-    byId("providerLocalBackendGroup").classList.toggle("hidden", !meta.showLocalBackend);
     byId("openrouterSection").classList.toggle("hidden", !meta.showOpenRouter);
     byId("azureOpenAiSection").classList.toggle("hidden", !meta.showAzureOpenAi);
     byId("azureInferenceSection").classList.toggle("hidden", !meta.showAzureInference);
@@ -265,7 +245,6 @@
       : "Paste API key";
     byId("providerBaseUrl").value = provider.base_url || "";
     byId("providerDefaultModel").value = provider.default_model || "";
-    byId("providerLocalBackend").value = provider.local_backend || "";
     byId("providerHttpReferer").value = provider.http_referer || "";
     byId("providerSiteName").value = provider.site_name || "";
     byId("providerAzureOpenAiEndpoint").value = provider.azure_openai_endpoint || "";
@@ -377,7 +356,6 @@
       ...(byId("providerApiKey").value.trim() ? { api_key: byId("providerApiKey").value.trim() } : {}),
       base_url: byId("providerBaseUrl").value.trim() || undefined,
       default_model: byId("providerDefaultModel").value.trim() || undefined,
-      local_backend: byId("providerLocalBackend").value.trim() || undefined,
       http_referer: byId("providerHttpReferer").value.trim() || undefined,
       site_name: byId("providerSiteName").value.trim() || undefined,
       azure_openai_endpoint: byId("providerAzureOpenAiEndpoint").value.trim() || undefined,
@@ -712,19 +690,27 @@
 
   // Save / Reset / Delete
   byId("saveProviderBtn").addEventListener("click", () => {
-    saveProvider().catch((error) => {
+    const button = byId("saveProviderBtn");
+    const restore = buttonBusy(button, "Saving…");
+    saveProvider().then(() => {
+      restore();
+      flashButton(button, { label: "Saved ✓" });
+    }).catch((error) => {
+      restore();
+      flashButton(button, { label: "Save failed ✗", tone: "error" });
       setStatus(byId("pageFeedback"), { title: "Save failed", message: error.message, tone: "error" });
-      byId("pageFeedback").scrollIntoView({ behavior: "smooth", block: "start" });
     });
   });
 
   byId("resetProviderBtn").addEventListener("click", () => {
     if (selectedType) selectType(selectedType);
+    flashButton(byId("resetProviderBtn"), { label: "Reset ✓", duration: 1200 });
   });
 
   byId("deleteProviderBtn").addEventListener("click", () => {
     if (selectedProviderId) {
       deleteProvider(selectedProviderId).catch((error) => {
+        flashButton(byId("deleteProviderBtn"), { label: "Delete failed ✗", tone: "error" });
         setStatus(byId("pageFeedback"), { title: "Delete failed", message: error.message, tone: "error" });
       });
     }

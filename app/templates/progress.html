@@ -15,14 +15,41 @@
     <section class="panel">
         <div class="panel-header">
             <div>
-                <h2 class="panel-title">Progress</h2>
-                <p class="panel-subtitle">This view updates every five seconds while the batch is active.</p>
+                <h2 class="panel-title"><span id="liveDot" class="pulse-dot"></span> Progress</h2>
+                <p class="panel-subtitle">Live view of this batch as the processor works through it.</p>
+            </div>
+            <div class="refresh-meta">
+                <span id="refreshLabel">Refreshing…</span>
+                <span class="countdown-track"><span id="refreshCountdown" class="countdown-fill"></span></span>
             </div>
         </div>
+        <div id="processorAlert" class="status-card error-card hidden"></div>
         <div id="progressStatus" class="status-card info-card hidden"></div>
-        <div id="overallProgress" class="stack"></div>
-        <div id="statusBreakdown" class="stack"></div>
-        <div id="currentClaim" class="stack"></div>
+        <div class="stack">
+            <div class="summary-strip">
+                <div class="summary-cell">
+                    <span class="label">Completed</span>
+                    <span class="value" id="completedValue">–</span>
+                </div>
+                <div class="summary-cell">
+                    <span class="label">Progress</span>
+                    <span class="value" id="percentValue">–</span>
+                </div>
+                <div class="summary-cell">
+                    <span class="label">Status</span>
+                    <span class="value" id="statusValue">connecting…</span>
+                </div>
+                <div class="summary-cell">
+                    <span class="label">Elapsed</span>
+                    <span class="value" id="elapsedValue">0:00</span>
+                </div>
+            </div>
+            <div class="live-progress-track" id="progressTrack" role="progressbar" aria-label="Batch progress" aria-valuemin="0" aria-valuemax="100">
+                <div class="live-progress-fill" id="progressFill"></div>
+            </div>
+            <div class="stage-flow" id="stageFlow"></div>
+            <div id="currentClaim"></div>
+        </div>
     </section>
 
     <script>
@@ -35,112 +62,236 @@
 
 {% block scripts %}
     <script>
-        const { escapeHtml, fetchJson, setStatus } = window.ValsciUI;
+        const { escapeHtml, fetchJson, setStatus, hideStatus } = window.ValsciUI;
         const config = window.progressPageConfig || {};
         const batchId = config.batchId;
         const claimId = config.claimId;
-        const referenceList = document.getElementById('referenceList');
-        const overallProgress = document.getElementById('overallProgress');
-        const statusBreakdown = document.getElementById('statusBreakdown');
-        const currentClaim = document.getElementById('currentClaim');
-        const progressStatus = document.getElementById('progressStatus');
+
+        const POLL_MS = 5000;
+        const byId = (id) => document.getElementById(id);
+        const pageOpenedAt = Date.now();
+        let nextRefreshAt = null;
+        let refreshing = false;
+        let redirecting = false;
+
+        const STAGES = [
+            { key: "queued", label: "Queued" },
+            { key: "ready_for_search", label: "Searching literature" },
+            { key: "ready_for_analysis", label: "Analyzing evidence" },
+            { key: "processed", label: "Done" },
+        ];
+        const STAGE_KEYS = new Set([...STAGES.map(s => s.key), "error", "unknown"]);
+
+        let currentModelsText = '';
+        function modelsToText(models) {
+            if (!Array.isArray(models) || !models.length) return '';
+            // One entry per distinct provider/model combination; usually just one.
+            return models.map(entry => entry.display || (entry.models || []).join(', ')).filter(Boolean).join(' · ');
+        }
 
         function renderReferences() {
             const references = [];
             if (batchId) references.push({ label: 'Batch ID', value: batchId });
             if (claimId) references.push({ label: 'Claim ID', value: claimId });
-            referenceList.innerHTML = references.length
+            references.push({ label: 'Model', value: currentModelsText || '…', id: 'modelValue' });
+            byId('referenceList').innerHTML = references.length
                 ? references.map(item => `
                     <div class="summary-cell">
                         <span class="label">${escapeHtml(item.label)}</span>
-                        <span class="value">${escapeHtml(item.value)}</span>
+                        <span class="value"${item.id ? ` id="${item.id}"` : ''}>${escapeHtml(item.value)}</span>
                     </div>
                 `).join('')
                 : `<div class="empty-state"><strong>No reference IDs were provided.</strong><span>Open this page from a batch or claim run.</span></div>`;
         }
 
+        function renderModels(models) {
+            const text = modelsToText(models);
+            if (text === currentModelsText) return;
+            currentModelsText = text;
+            const cell = byId('modelValue');
+            if (cell) cell.textContent = text || '…';
+        }
+
+        function formatElapsed(ms) {
+            const totalSeconds = Math.floor(ms / 1000);
+            const minutes = Math.floor(totalSeconds / 60);
+            const seconds = totalSeconds % 60;
+            return `${minutes}:${String(seconds).padStart(2, "0")}`;
+        }
+
+        let processorDownShown = false;
+        function renderProcessorAlert(processor) {
+            const alert = byId('processorAlert');
+            if (!processor || processor.alive) {
+                processorDownShown = false;
+                alert.classList.add('hidden');
+                return;
+            }
+            const lastSeen = processor.age_seconds != null
+                ? `It was last seen ${Math.round(processor.age_seconds)}s ago.`
+                : 'It has not reported in since this server started.';
+            const message = `${lastSeen} Claims will stay queued until it starts — run "python processor.py", or check "docker compose logs processor" if you deployed with Docker.`;
+            if (processorDownShown) {
+                // Refresh the "last seen" text without restarting the pulse animation.
+                const span = alert.querySelector('span');
+                if (span) span.textContent = message;
+                return;
+            }
+            processorDownShown = true;
+            setStatus(alert, {
+                title: 'The claim processor is not running',
+                message,
+                tone: 'error',
+            });
+        }
+
+        function renderStages(counts, total) {
+            const known = STAGES.map((stage, index) => {
+                const count = Number(counts[stage.key] || 0);
+                let cls = '';
+                if (stage.key === 'processed' && count > 0) cls = 'done';
+                else if (stage.key !== 'processed' && count > 0) cls = 'active';
+                return `
+                    <span class="stage-chip ${cls}">
+                        ${stage.key !== 'processed' && count > 0 ? '<span class="pulse-dot"></span>' : ''}
+                        ${escapeHtml(stage.label)} <span class="stage-count">${count}</span>
+                    </span>
+                    ${index < STAGES.length - 1 ? '<span class="stage-arrow">→</span>' : ''}
+                `;
+            }).join('');
+
+            const errorCount = Number(counts.error || 0) + Number(counts.unknown || 0);
+            const errors = errorCount > 0
+                ? `<span class="stage-chip error">✕ Errors <span class="stage-count">${errorCount}</span></span>`
+                : '';
+            const extras = Object.entries(counts)
+                .filter(([key, count]) => !STAGE_KEYS.has(key) && Number(count) > 0)
+                .map(([key, count]) => `
+                    <span class="stage-chip active">
+                        <span class="pulse-dot"></span>
+                        ${escapeHtml(key.replace(/_/g, ' '))} <span class="stage-count">${Number(count)}</span>
+                    </span>
+                `).join('');
+            byId('stageFlow').innerHTML = known + extras + errors;
+        }
+
         function renderProgress(data) {
             const total = Number(data.total_claims || 0);
             const processed = Number(data.processed_claims || 0);
+            const counts = data.detailed_counts || {};
+            const errorCount = Number(counts.error || 0);
+            const settled = total > 0 && processed + errorCount >= total;
             const percent = total > 0 ? (processed / total) * 100 : 0;
-            overallProgress.innerHTML = `
-                <div class="summary-strip">
-                    <div class="summary-cell">
-                        <span class="label">Completed</span>
-                        <span class="value">${processed} / ${total}</span>
-                    </div>
-                    <div class="summary-cell">
-                        <span class="label">Progress</span>
-                        <span class="value">${percent.toFixed(1)}%</span>
-                    </div>
-                    <div class="summary-cell">
-                        <span class="label">Status</span>
-                        <span class="value">${escapeHtml(data.status || 'initializing')}</span>
-                    </div>
-                </div>
-                <progress value="${processed}" max="${Math.max(total, 1)}" aria-label="Batch progress"></progress>
-            `;
+            const working = total > 0 && !settled;
 
-            const rows = Object.entries(data.detailed_counts || {}).filter(([, count]) => Number(count) > 0);
-            statusBreakdown.innerHTML = rows.length ? `
-                <div class="panel-divider"></div>
-                <h3 class="panel-title">Status Breakdown</h3>
-                <div class="record-list">
-                    ${rows.map(([status, count]) => `
-                        <article class="record-card">
-                            <div class="panel-header">
-                                <strong>${escapeHtml(status.replace(/_/g, ' '))}</strong>
-                                <span class="badge neutral-badge">${Number(count)}</span>
-                            </div>
-                        </article>
-                    `).join('')}
-                </div>
-            ` : '';
+            byId('completedValue').textContent = total > 0 ? `${processed} / ${total}` : '–';
+            byId('percentValue').textContent = total > 0 ? `${percent.toFixed(0)}%` : '–';
+            byId('statusValue').textContent = (data.status || 'initializing').replace(/_/g, ' ');
+            byId('liveDot').classList.toggle('idle', !working);
 
-            currentClaim.innerHTML = data.current_claim_id ? `
+            const track = byId('progressTrack');
+            const fill = byId('progressFill');
+            track.classList.toggle('indeterminate', total === 0);
+            track.setAttribute('aria-valuenow', String(Math.round(percent)));
+            fill.style.width = `${total > 0 ? Math.max(percent, 2) : 0}%`;
+            fill.classList.toggle('working', working);
+
+            renderStages(counts, total);
+            renderProcessorAlert(data.processor);
+            renderModels(data.models);
+
+            byId('currentClaim').innerHTML = data.current_claim_id ? `
                 <div class="status-card info-card">
                     <strong>Currently processing</strong>
                     <span>Claim ID ${escapeHtml(data.current_claim_id)}</span>
                 </div>
             ` : '';
-        }
 
-        async function updateProgress() {
-            if (!batchId) {
-                setStatus(progressStatus, {
-                    title: 'Missing batch ID',
-                    message: 'Open progress from a batch or claim run so this page can poll the right status.',
+            if (settled && errorCount > 0 && data.status !== 'completed') {
+                setStatusOnce(`settled-${errorCount}`, {
+                    title: `Batch finished with ${errorCount} failed claim${errorCount === 1 ? '' : 's'}`,
+                    message: 'Open the batch results to inspect the failures or retry them from the claim pages.',
                     tone: 'warning',
                 });
-                return;
+            } else if (data.status === 'error') {
+                setStatusOnce('batch-error', {
+                    title: 'Batch error',
+                    message: 'The batch reported an error. Open the batch results or trace details for diagnostics.',
+                    tone: 'error',
+                });
+            } else {
+                statusCardKey = '';
+                hideStatus(byId('progressStatus'));
             }
+        }
 
+        let statusCardKey = '';
+        function setStatusOnce(key, payload) {
+            if (statusCardKey === key) return;
+            statusCardKey = key;
+            setStatus(byId('progressStatus'), payload);
+        }
+
+        function completedDestination() {
+            if (claimId) {
+                return `/progress?batch_id=${encodeURIComponent(batchId)}&claim_id=${encodeURIComponent(claimId)}`;
+            }
+            return `/batch_results?batch_id=${encodeURIComponent(batchId)}`;
+        }
+
+        async function refresh() {
+            if (redirecting) return;
+            refreshing = true;
             try {
                 const data = await fetchJson(`/api/v1/batch/${encodeURIComponent(batchId)}/progress`);
                 renderProgress(data);
                 if (data.status === 'completed') {
-                    window.location.href = `/batch_results?batch_id=${encodeURIComponent(batchId)}`;
-                    return;
-                }
-                if (data.status === 'error') {
-                    setStatus(progressStatus, {
-                        title: 'Batch error',
-                        message: 'The batch reported an error. Open the batch results or trace details for diagnostics.',
-                        tone: 'error',
-                    });
+                    redirecting = true;
+                    byId('refreshLabel').textContent = 'Done — opening results…';
+                    byId('progressFill').style.width = '100%';
+                    window.setTimeout(() => { window.location.href = completedDestination(); }, 700);
                     return;
                 }
             } catch (error) {
-                setStatus(progressStatus, {
+                setStatusOnce('fetch-error', {
                     title: 'Progress refresh failed',
                     message: error.message || 'Unable to refresh progress.',
                     tone: 'warning',
                 });
+            } finally {
+                refreshing = false;
             }
-            window.setTimeout(updateProgress, 5000);
+            nextRefreshAt = Date.now() + POLL_MS;
+            window.setTimeout(refresh, POLL_MS);
+        }
+
+        function tick() {
+            byId('elapsedValue').textContent = formatElapsed(Date.now() - pageOpenedAt);
+            if (redirecting) return;
+            const label = byId('refreshLabel');
+            const countdown = byId('refreshCountdown');
+            if (refreshing || nextRefreshAt === null) {
+                label.textContent = 'Refreshing…';
+                countdown.style.width = '100%';
+                return;
+            }
+            const remaining = Math.max(0, nextRefreshAt - Date.now());
+            label.textContent = `Next refresh in ${Math.ceil(remaining / 1000)}s`;
+            countdown.style.width = `${(remaining / POLL_MS) * 100}%`;
         }
 
         renderReferences();
-        updateProgress();
+        if (!batchId) {
+            setStatus(byId('progressStatus'), {
+                title: 'Missing batch ID',
+                message: 'Open progress from a batch or claim run so this page can poll the right status.',
+                tone: 'warning',
+            });
+            byId('refreshLabel').textContent = 'Not polling';
+            byId('liveDot').classList.add('idle');
+        } else {
+            refresh();
+            window.setInterval(tick, 200);
+        }
     </script>
 {% endblock %}

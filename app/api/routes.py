@@ -24,10 +24,11 @@ from app.services.batch_state import build_batch_state, list_batch_ids
 from app.config.settings import Config
 from app.services.claim_store import ClaimStore
 from app.services.ollama_discovery import discover_ollama_models
+from app.services.processor_heartbeat import read_heartbeat
 from app.services.provider_catalog import ProviderCatalog
 from app.services.submission_service import SubmissionService
 from app.services.data_manager import build_data_state, data_job_manager
-from app.services.env_config import apply_env_vars_to_runtime, build_env_config_state, update_env_vars
+from app.services.env_config import apply_env_vars_to_runtime, build_env_config_state, env_file_mtime, update_env_vars
 
 api = Blueprint('api', __name__)
 
@@ -101,7 +102,6 @@ def _public_providers(include_disabled: bool = False) -> List[Dict[str, Any]]:
         "enabled",
         "base_url",
         "default_model",
-        "local_backend",
         "task_defaults",
         "http_referer",
         "site_name",
@@ -266,6 +266,50 @@ def _build_batch_state_view(batch_id: str) -> Optional[Dict[str, Any]]:
         saved_jobs_root=_saved_jobs_dir(),
         queued_jobs_root=_queued_jobs_dir(),
     )
+
+
+_MODEL_STAGE_TASKS = ("query_generation", "paper_analysis", "venue_scoring", "final_report")
+
+
+def _models_for_batch(batch_state: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Distinct provider/model combinations used by a batch's claims.
+
+    Works for both batch-state shapes: ClaimStore run summaries (provider_snapshot
+    + model_overrides at top level) and file-derived entries (the same keys nested
+    under claim_data). Returns one entry per distinct (provider, models) pair so a
+    single-model batch shows one entry and a mixed/arena batch shows each."""
+    if not batch_state:
+        return []
+    seen: Dict[Any, Dict[str, Any]] = {}
+    for claim in batch_state.get("claims", []):
+        source = claim.get("claim_data") if isinstance(claim.get("claim_data"), dict) else claim
+        snapshot = source.get("provider_snapshot") or {}
+        overrides = source.get("model_overrides") or {}
+        task_defaults = snapshot.get("task_defaults") or {}
+        default_model = snapshot.get("default_model")
+        models: List[str] = []
+        for task in _MODEL_STAGE_TASKS:
+            model = (
+                overrides.get(task)
+                or task_defaults.get(task)
+                or task_defaults.get("default")
+                or default_model
+            )
+            if model and model not in models:
+                models.append(model)
+        if not models and default_model:
+            models = [default_model]
+        if not models:
+            continue
+        provider = snapshot.get("label") or snapshot.get("provider_type") or snapshot.get("provider_id")
+        key = (provider, tuple(models))
+        if key not in seen:
+            seen[key] = {
+                "provider": provider,
+                "models": models,
+                "display": ", ".join(models),
+            }
+    return list(seen.values())
 
 
 def _claim_results_template(claim_data: Dict[str, Any]) -> str:
@@ -656,7 +700,10 @@ def list_providers():
 def create_provider():
     payload = request.get_json(silent=True) or {}
     payload.pop("api_key_present", None)
-    provider = _provider_catalog().upsert_provider(payload)
+    try:
+        provider = _provider_catalog().upsert_provider(payload)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     return jsonify(_provider_for_settings_ui(provider)), 201
 
 
@@ -669,7 +716,10 @@ def update_provider(provider_id):
     existing_provider = _provider_catalog().get_provider(provider_id)
     if existing_provider and "api_key" not in payload:
         payload["api_key"] = existing_provider.get("api_key", "")
-    provider = _provider_catalog().upsert_provider(payload)
+    try:
+        provider = _provider_catalog().upsert_provider(payload)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     return jsonify(_provider_for_settings_ui(provider)), 200
 
 
@@ -904,6 +954,32 @@ def get_arena_api(arena_id):
     return jsonify(arena), 200
 
 
+@api.route('/api/v1/arenas/<arena_id>/preferences', methods=['POST'])
+@auth_required
+def set_arena_preference_api(arena_id):
+    payload = request.get_json(silent=True) or {}
+    claim_key = str(payload.get("claim_key") or "").strip()
+    if not claim_key:
+        return jsonify({"error": "claim_key is required"}), 400
+    run_id = payload.get("run_id")
+    if run_id is not None:
+        run_id = str(run_id).strip() or None
+    try:
+        arena_record = _claim_store().set_arena_preference(
+            arena_id,
+            claim_key=claim_key,
+            run_id=run_id,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if arena_record is None:
+        return jsonify({"error": "Arena not found"}), 404
+    return jsonify({
+        "arena_id": arena_id,
+        "preferences": arena_record.get("preferences", {}),
+    }), 200
+
+
 @api.route('/api/v1/arenas/<arena_id>/progress', methods=['GET'])
 @auth_required
 def get_arena_progress_api(arena_id):
@@ -1066,11 +1142,41 @@ def settings_page():
     )
 
 
+def _processor_config_status() -> Dict[str, Any]:
+    """Whether the running processor reflects the latest saved env_vars.json.
+
+    The processor stamps each heartbeat with the mtime of the env file it has
+    loaded; comparing that to the current file mtime tells the UI whether a saved
+    change has been picked up yet (it hot-reloads within a few seconds)."""
+    heartbeat = read_heartbeat(_state_dir())
+    current_mtime = env_file_mtime()
+    applied_mtime = heartbeat.get("config_mtime")
+    synced = bool(
+        heartbeat.get("alive")
+        and current_mtime is not None
+        and isinstance(applied_mtime, (int, float))
+        and applied_mtime >= current_mtime - 0.5
+    )
+    return {
+        "alive": bool(heartbeat.get("alive")),
+        "config_synced": synced,
+        "env_file_mtime": current_mtime,
+        "applied_config_mtime": applied_mtime,
+        "age_seconds": heartbeat.get("age_seconds"),
+    }
+
+
+@api.route('/api/v1/settings/processor-status', methods=['GET'])
+@auth_required
+def processor_config_status_api():
+    return jsonify(_processor_config_status()), 200
+
+
 @api.route('/api/v1/settings/env', methods=['GET'])
 @auth_required
 def env_settings_api():
     try:
-        return jsonify(build_env_config_state()), 200
+        return jsonify({**build_env_config_state(), "processor": _processor_config_status()}), 200
     except Exception as exc:
         logger.exception("Failed to load env_vars.json state")
         return jsonify({"error": str(exc)}), 500
@@ -1086,7 +1192,7 @@ def update_env_settings_api():
     try:
         raw = update_env_vars(updates)
         apply_env_vars_to_runtime(raw, current_app.config)
-        return jsonify({"message": "env_vars.json saved", **build_env_config_state()}), 200
+        return jsonify({"message": "env_vars.json saved", **build_env_config_state(), "processor": _processor_config_status()}), 200
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:
@@ -1386,7 +1492,9 @@ def get_batch_progress(batch_id):
         "total_claims": batch_state["total_claims"] if batch_state is not None else 0,
         "processed_claims": batch_state["processed_claims"] if batch_state is not None else 0,
         "current_claim_id": batch_state["current_claim_id"] if batch_state is not None else None,
-        "detailed_counts": detailed_counts
+        "detailed_counts": detailed_counts,
+        "processor": read_heartbeat(_state_dir()),
+        "models": _models_for_batch(batch_state),
     })
 
 @api.route('/batch_results', methods=['GET'])

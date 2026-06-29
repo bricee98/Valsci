@@ -13,6 +13,8 @@
                 <span class="helper-text" id="workspaceLastUpdated">Syncing workspace...</span>
             </div>
             <div class="inline-actions">
+                <button type="button" class="secondary-button small-button" id="exportCsvBtn" title="Download the full model comparison as CSV">Export CSV</button>
+                <button type="button" class="secondary-button small-button" id="exportJsonBtn" title="Download the full model comparison as JSON">Export JSON</button>
                 <button type="button" class="secondary-button small-button" id="refreshWorkspaceBtn">Refresh Now</button>
             </div>
         </div>
@@ -36,7 +38,22 @@
         </div>
 
         <div id="claimsPane" class="workspace-pane hidden" role="tabpanel" aria-labelledby="claimsTab" hidden>
-            <div id="claimGroups" class="section-stack"></div>
+            <div class="claims-toolbar">
+                <label class="field-label" for="matrixSortSelect">
+                    Sort claims
+                    <select id="matrixSortSelect">
+                        <option value="default">Original order</option>
+                        <option value="disagreement">Most disagreement</option>
+                        <option value="rating">Lowest average verdict</option>
+                    </select>
+                </label>
+                <div class="inline-actions">
+                    <button type="button" class="secondary-button small-button" id="expandAllCompareBtn">Expand All Outputs</button>
+                    <button type="button" class="secondary-button small-button" id="collapseAllCompareBtn">Collapse All</button>
+                </div>
+            </div>
+            <div id="verdictMatrix"></div>
+            <div id="claimGroups" class="section-stack" style="margin-top:18px"></div>
         </div>
 
         <div id="historyPane" class="workspace-pane hidden" role="tabpanel" aria-labelledby="historyTab" hidden>
@@ -67,6 +84,7 @@
                 </div>
             </div>
             <div id="continueModalBody" class="stack"></div>
+            <div id="continueModalStatus" class="status-card error-card hidden"></div>
             <label class="checkbox-row">
                 <input type="checkbox" id="confirmContinueCheckbox">
                 <span>I approve this continuation cost and want to advance the selected claims.</span>

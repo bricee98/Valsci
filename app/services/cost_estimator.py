@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional, Set
 
-from app.services.llm.gateway import DEFAULT_TASK_CONFIG, LLMTask
+from app.services.llm.gateway import LLMTask, OUTPUT_TOKENS_FLOOR
 from app.services.llm.model_registry import DEFAULT_MODEL_INFO, ModelRegistry
 
 
-LOCAL_PROVIDER_NAMES = {"local", "ollama", "llamacpp"}
+LOCAL_PROVIDER_NAMES = {"ollama", "llamacpp"}
 RUN_STAGES = [
     LLMTask.QUERY_GENERATION,
     LLMTask.PAPER_ANALYSIS,
@@ -170,10 +170,11 @@ class CostEstimator:
             or "unknown-model"
         )
 
-    @staticmethod
-    def _max_output_tokens(stage: str) -> int:
-        task_config = DEFAULT_TASK_CONFIG.get(stage, DEFAULT_TASK_CONFIG[LLMTask.GENERIC])
-        return int(task_config.get("max_output_tokens", 1024))
+    def _max_output_tokens(self, stage: str) -> int:
+        # Upper-bound output for cost estimation = the model's "Max Output Tokens"
+        # (Providers page), matching the budget the gateway actually reserves.
+        model = self._model_for_stage(stage)
+        return int(self.model_registry.default_max_output_tokens(model) or OUTPUT_TOKENS_FLOOR)
 
 
 def estimate_submission_costs(

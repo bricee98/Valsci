@@ -47,43 +47,49 @@ class LLMTask:
     GENERIC = "generic"
 
 
+# Per-task config. Note: max_output_tokens is intentionally NOT set here — the
+# output budget for every task defaults to the model's "Max Output Tokens"
+# (set per model on the Providers page). A task only carries max_output_tokens
+# when a user adds one under LLM_ROUTING.tasks.<task> as an explicit override.
+# This keeps the output budget in one obvious place instead of being silently
+# capped by a hidden per-task constant.
 DEFAULT_TASK_CONFIG = {
     LLMTask.QUERY_GENERATION: {
         "output_type": "json",
-        "max_output_tokens": 800,
         "preferred_models": [],
         "fallback_models": [],
         "min_context_tokens": 4000,
     },
     LLMTask.PAPER_ANALYSIS: {
         "output_type": "json",
-        "max_output_tokens": 1200,
         "preferred_models": [],
         "fallback_models": [],
         "min_context_tokens": 16000,
     },
     LLMTask.VENUE_SCORING: {
         "output_type": "json",
-        "max_output_tokens": 120,
         "preferred_models": [],
         "fallback_models": [],
         "min_context_tokens": 4000,
     },
     LLMTask.FINAL_REPORT: {
         "output_type": "json",
-        "max_output_tokens": 1800,
         "preferred_models": [],
         "fallback_models": [],
         "min_context_tokens": 16000,
     },
     LLMTask.GENERIC: {
         "output_type": "json",
-        "max_output_tokens": 1024,
         "preferred_models": [],
         "fallback_models": [],
         "min_context_tokens": 4096,
     },
 }
+
+# Final safety floor for the output budget when a model has no configured
+# "Max Output Tokens" at all. Real models always have one (the Providers page
+# defaults it), so this only guards pathological configs.
+OUTPUT_TOKENS_FLOOR = 2048
 
 
 class ContextOverflowError(RuntimeError):
@@ -109,7 +115,6 @@ class LLMGateway:
         cfg = runtime_config or {}
         self.runtime_config = cfg
         self.provider_name = str(cfg.get("provider_name", Config.LLM_PROVIDER or "openai")).lower()
-        self.local_backend = str(cfg.get("local_backend", getattr(Config, "LOCAL_BACKEND", "") or "")).lower()
         self.default_model = cfg.get("default_model", Config.LLM_EVALUATION_MODEL)
         self.base_url = cfg.get("base_url", getattr(Config, "LLM_BASE_URL", None))
         self.api_key = cfg.get("api_key", Config.LLM_API_KEY)
@@ -197,6 +202,8 @@ class LLMGateway:
         max_output_tokens: Optional[int] = None,
         locked_models: Optional[bool] = None,
         temperature: Optional[float] = 0.0,
+        response_schema: Optional[Dict[str, Any]] = None,
+        schema_name: str = "response",
     ) -> Dict[str, Any]:
         return await self._chat(
             expects_json=True,
@@ -211,6 +218,48 @@ class LLMGateway:
             max_output_tokens=max_output_tokens,
             locked_models=locked_models,
             temperature=temperature,
+            response_schema=response_schema,
+            schema_name=schema_name,
+        )
+
+    @property
+    def json_repair_enabled(self) -> bool:
+        return bool(getattr(Config, "LLM_JSON_REPAIR_PASS", False))
+
+    async def repair_json_to_schema(
+        self,
+        *,
+        bad_content: Any,
+        response_schema: Dict[str, Any],
+        schema_name: str,
+        task: str = LLMTask.GENERIC,
+        batch_id: Optional[str] = None,
+        claim_id: Optional[str] = None,
+        stage: Optional[str] = None,
+        model_override: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Second pass: ask the model to reshape already-generated content into the
+        required schema, preserving meaning. Used when the first output failed
+        validation and the (opt-in) repair pass is enabled."""
+        import json as _json
+        user_prompt = (
+            "Reformat the DATA below so it matches the required JSON schema EXACTLY. "
+            "Preserve all information faithfully — do not add, drop, or change any facts, "
+            "and map the existing content into the correct fields.\n\n"
+            f"REQUIRED JSON SCHEMA:\n{_json.dumps(response_schema)}\n\n"
+            f"DATA TO REFORMAT:\n{_json.dumps(bad_content, ensure_ascii=False)}\n\n"
+            "Output ONLY the corrected JSON object."
+        )
+        return await self.chat_json(
+            user_prompt=user_prompt,
+            system_prompt="You reformat data into a strict JSON schema without changing its meaning.",
+            task=task,
+            batch_id=batch_id,
+            claim_id=claim_id,
+            stage=f"{stage or task}_repair",
+            model_override=model_override,
+            response_schema=response_schema,
+            schema_name=schema_name,
         )
 
     async def chat_text(
@@ -356,6 +405,8 @@ class LLMGateway:
         max_output_tokens: Optional[int],
         locked_models: Optional[bool],
         temperature: Optional[float],
+        response_schema: Optional[Dict[str, Any]] = None,
+        schema_name: str = "response",
     ) -> Dict[str, Any]:
         await self.initialize()
         await self._emit_pending_ollama_issue(batch_id, claim_id, stage)
@@ -386,7 +437,23 @@ class LLMGateway:
         )
 
         model_info = self.model_registry.get_model_info(preflight.model)
-        response_format = {"type": "json_object"} if expects_json and model_info.supports_json_mode else None
+        response_format = None
+        if expects_json and model_info.supports_json_mode:
+            strict_schema = bool(getattr(Config, "LLM_STRICT_JSON_SCHEMA", True))
+            if strict_schema and response_schema:
+                # Constrain the model to the exact required fields. Falls back to
+                # plain json_object mode (just "valid JSON") when disabled or no
+                # schema is supplied.
+                response_format = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": schema_name,
+                        "schema": response_schema,
+                        "strict": True,
+                    },
+                }
+            else:
+                response_format = {"type": "json_object"}
         effective_temperature = temperature if model_info.supports_temperature else None
         request_template = {
             "model": preflight.model,
@@ -447,17 +514,31 @@ class LLMGateway:
                 if expects_json:
                     parsed_json, parse_error, recovered_json = self._parse_json_object_response(raw_output)
                     if parsed_json is None:
+                        # Distinguish "the response was cut off" (output budget too
+                        # small) from genuinely malformed JSON, so the issues panel
+                        # tells the user which knob to adjust.
+                        truncated_empty = not raw_output.strip() and str(finish_reason) == "length"
+                        if truncated_empty:
+                            issue_message = (
+                                f"Model returned no content for '{task}': output-token limit "
+                                f"reached (max_output_tokens={preflight.reserved_output_tokens}, "
+                                f"finish_reason=length). Raise this model's Max Output Tokens on the Providers page."
+                            )
+                        else:
+                            issue_message = "Invalid JSON returned by model."
                         await self.add_issue(
                             batch_id=batch_id,
                             claim_id=claim_id,
                             severity="WARN",
                             stage=stage,
-                            message="Invalid JSON returned by model.",
+                            message=issue_message,
                             details={
                                 "trace_id": trace_id,
                                 "provider": self.provider_name,
                                 "model": preflight.model,
                                 "error": parse_error,
+                                "finish_reason": finish_reason,
+                                "max_output_tokens": preflight.reserved_output_tokens,
                             },
                         )
                         if not json_recovery_used:
@@ -500,6 +581,27 @@ class LLMGateway:
                                 }
                             ]
                             continue
+                        if not raw_output.strip() and str(finish_reason) == "length":
+                            # Empty content + truncation: the model used its entire
+                            # output-token budget without emitting an answer. This is
+                            # NOT malformed JSON — the response was cut off. It is the
+                            # output budget (max_output_tokens), NOT the context window,
+                            # that is too small here; a reasoning model commonly spends
+                            # the whole budget on hidden chain-of-thought.
+                            reasoning_note = ""
+                            reasoning_text = getattr(response, "reasoning", None)
+                            if reasoning_text:
+                                reasoning_note = (
+                                    f" The model produced {len(reasoning_text)} characters of "
+                                    f"reasoning but no answer."
+                                )
+                            raise InvalidJSONResponseError(
+                                f"Model returned no content: it reached the output-token limit "
+                                f"(max_output_tokens={preflight.reserved_output_tokens}, finish_reason=length) "
+                                f"before emitting an answer.{reasoning_note} "
+                                f"Raise this model's Max Output Tokens on the Providers page "
+                                f"(it's the output budget, separate from the context window)."
+                            )
                         raise InvalidJSONResponseError("Model returned invalid JSON after recovery attempt.")
                     if recovered_json:
                         await self.add_issue(
@@ -578,6 +680,21 @@ class LLMGateway:
                 should_retry = decision.should_retry and attempt <= self.retry_policy.max_retries
                 timed_out = self._is_timeout_exception(exc)
 
+                # Graceful degrade: a provider that doesn't support json_schema
+                # response_format rejects the request (typically 4xx mentioning
+                # response_format/json_schema). Retry once with plain json_object
+                # so strict-schema mode never hard-breaks such providers.
+                if (
+                    isinstance(response_format, dict)
+                    and response_format.get("type") == "json_schema"
+                    and ("response_format" in error_message or "json_schema" in error_message
+                         or "schema" in error_message.lower())
+                ):
+                    logger.warning("Provider rejected json_schema response_format; downgrading to json_object.")
+                    response_format = {"type": "json_object"}
+                    request_template["response_format"] = response_format
+                    continue
+
                 # Pre-compute backoff so it can be recorded in trace
                 backoff_s = (
                     self.retry_policy.compute_backoff_seconds(attempt)
@@ -591,9 +708,10 @@ class LLMGateway:
                     severity="WARN" if should_retry else "ERROR",
                     stage=stage,
                     message=(
-                        f"LLM call failed; retrying (attempt {attempt})."
+                        f"LLM call failed on attempt {attempt} of {self.retry_policy.max_retries + 1} "
+                        f"({error_type}) — automatically retrying."
                         if should_retry
-                        else "LLM call failed after retries."
+                        else f"LLM call failed after {attempt} attempt(s) ({error_type}); no retries left."
                     ),
                     details={
                         "trace_id": trace_id,
@@ -736,17 +854,24 @@ class LLMGateway:
         stage: str,
     ) -> PreflightResult:
         task_cfg = self._task_config(task)
-        reserved_output_tokens = int(
-            max_output_tokens
-            or task_cfg.get("max_output_tokens")
-            or self.model_registry.default_max_output_tokens(self.default_model)
-        )
+        # Output budget precedence (highest first):
+        #   1. an explicit per-call max_output_tokens (rare, internal)
+        #   2. an explicit LLM_ROUTING.tasks.<task>.max_output_tokens override
+        #   3. the model's "Max Output Tokens" from the Providers page  <- the default
+        #   4. OUTPUT_TOKENS_FLOOR (only if a model has none configured)
+        task_output_override = task_cfg.get("max_output_tokens")
         candidates, base_reason = self._candidate_models(task_cfg, model_override)
         preferred_models = list(task_cfg.get("preferred_models", []))
         fallback_models = list(task_cfg.get("fallback_models", []))
 
         failures = []
         for model in candidates:
+            reserved_output_tokens = int(
+                max_output_tokens
+                or task_output_override
+                or self.model_registry.default_max_output_tokens(model)
+                or OUTPUT_TOKENS_FLOOR
+            )
             est_input = self.token_estimator.estimate_chat_tokens(messages, model)
             context_window = self.model_registry.context_window(model)
             est_total = est_input + reserved_output_tokens + self.context_safety_margin_tokens
@@ -769,11 +894,24 @@ class LLMGateway:
                 {
                     "model": model,
                     "estimated_total_tokens": est_total,
+                    "estimated_input_tokens": est_input,
+                    "reserved_output_tokens": reserved_output_tokens,
                     "context_window_tokens": context_window,
                 }
             )
 
-        if locked_models and model_override:
+        # Distinguish "output budget set too high" from "prompt too big", since the
+        # fix differs (lower Max Output Tokens vs trim input / use bigger model).
+        worst = failures[0] if failures else {}
+        if worst.get("reserved_output_tokens", 0) >= worst.get("context_window_tokens", 1):
+            message = (
+                f"Output budget too large: this model's Max Output Tokens "
+                f"({worst.get('reserved_output_tokens')}) does not leave room for the prompt "
+                f"in its {worst.get('context_window_tokens')}-token context window. Lower the "
+                f"model's Max Output Tokens on the Providers page (it is the per-response output "
+                f"budget, not the context window)."
+            )
+        elif locked_models and model_override:
             message = "Context overflow prevented: locked model does not fit prompt."
         else:
             message = "Context overflow prevented: no candidate model can fit prompt."
@@ -806,7 +944,7 @@ class LLMGateway:
         return merged
 
     def _is_local_provider(self) -> bool:
-        return self.provider_name in {"local", "llamacpp", "ollama"}
+        return self.provider_name in {"llamacpp", "ollama"}
 
     def _resolve_timeout(self, task: str) -> int:
         return self._resolve_timeout_details(task)[0]
@@ -823,8 +961,6 @@ class LLMGateway:
 
     def _uses_local_timeout_default(self) -> bool:
         if self._is_local_provider():
-            return True
-        if self.local_backend:
             return True
         host = self._base_url_hostname()
         if not host:
@@ -876,9 +1012,9 @@ class LLMGateway:
         output_tokens = normalized["output_tokens"] or self.token_estimator.estimate_text_tokens(raw_output, model)
         total_tokens = normalized["total_tokens"] or (input_tokens + output_tokens)
         cost_usd = normalized["cost_usd"]
-        if cost_usd == 0 and self.provider_name not in {"local", "llamacpp", "ollama"}:
+        if cost_usd == 0 and self.provider_name not in {"llamacpp", "ollama"}:
             cost_usd = self.model_registry.calculate_cost(model, input_tokens, output_tokens)
-        if self.provider_name in {"local", "llamacpp", "ollama"}:
+        if self.provider_name in {"llamacpp", "ollama"}:
             cost_usd = 0.0
         return {
             "input_tokens": int(input_tokens),
@@ -914,12 +1050,6 @@ class LLMGateway:
             )
         if self.provider_name == "llamacpp":
             return LlamaCppProvider(base_url=self.base_url)
-        if self.provider_name == "local":
-            if self.local_backend == "ollama":
-                return OllamaProvider(base_url=self.base_url)
-            if self.local_backend == "llamacpp":
-                return LlamaCppProvider(base_url=self.base_url)
-            return OpenAICompatibleProvider(api_key="sk-no-key-required", base_url=self.base_url)
         if self.provider_name == "ollama":
             return OllamaProvider(base_url=self.base_url)
         if self.base_url and self.base_url != "http://localhost:8000":
@@ -929,9 +1059,7 @@ class LLMGateway:
     def _is_ollama_backend(self) -> bool:
         if self.provider_name == "ollama":
             return True
-        if self.provider_name == "local" and self.local_backend == "ollama":
-            return True
-        return bool(self.base_url and "11434" in self.base_url and self.provider_name in {"local", "openai"})
+        return False
 
     async def _initialize_ollama_context(self) -> None:
         show_url = self.ollama_show_url or self._derive_ollama_show_url(self.base_url)

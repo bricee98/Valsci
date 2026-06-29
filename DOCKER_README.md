@@ -43,6 +43,11 @@ This guide explains how to run Valsci using Docker containers.
   - `queued_jobs`: Stores claims waiting to be processed
   - `saved_jobs`: Stores processed claim results, plus per-claim `traces/*.jsonl` and `issues/*.jsonl`
   - `./semantic_scholar/manifests` (read-only): Curated corpus manifests, mounted read-only into both services. The manifest used is selected by the `SEMANTIC_SCHOLAR_MANIFEST` filename setting (default `mendelian_v1.json`).
+  - `./app/config` → `/valsci/runtime_config`: Your `env_vars.json` lives here. The compose file mounts the config **directory** (not the single file) and sets `VALSCI_ENV_FILE=/valsci/runtime_config/env_vars.json` so the in-app **Settings** page can rewrite it. A single-file bind mount cannot be rewritten in place (atomic rename fails with "Device or resource busy"), so the directory mount is required for in-app config editing.
+
+### Editing settings in the app
+
+Open **Settings** in the web UI to edit configuration without touching files by hand. Saved changes to most LLM settings (provider, routing, token budgets, timeouts) are picked up by the background processor **automatically within a few seconds** — the Settings page shows a live "Processor is up to date / Applying…" indicator. A few settings (rate limits, email, storage paths) are read once at startup and are marked **Restart**; they only apply after `docker compose restart processor`.
 
 ## Directory Structure in the Container
 
@@ -104,7 +109,7 @@ The application is configured through `app/config/env_vars.json`. See the commen
 - `FLASK_SECRET_KEY`: Secret key for Flask session security
 - `USER_EMAIL`: Your email address
 - `SEMANTIC_SCHOLAR_API_KEY`: Your Semantic Scholar API key
-- `LLM_PROVIDER`: AI provider to use ("openai", "azure-openai", "azure-inference", or "local")
+- `LLM_PROVIDER`: AI provider to use ("openai", "azure-openai", "azure-inference", "openrouter", "ollama", or "llamacpp")
 - `LLM_API_KEY`: API key for the AI provider
 - `LLM_EVALUATION_MODEL`: Model to use for evaluation
 
@@ -113,8 +118,7 @@ The application is configured through `app/config/env_vars.json`. See the commen
 - `REQUIRE_PASSWORD`: Enable password protection
 - `ACCESS_PASSWORD`: Password for accessing the application
 - `ENABLE_EMAIL_NOTIFICATIONS`: Enable email notifications
-- `LOCAL_BACKEND`: `ollama`, `llamacpp`, `vllm`, or `generic_openai_compat` when `LLM_PROVIDER` is `local`
-- `LLM_ROUTING`: Task-to-model routing and fallback configuration
+- `LLM_ROUTING`: Task-to-model routing, fallback, and **per-task output-token budgets**. Each task accepts `max_output_tokens` (e.g. `LLM_ROUTING.tasks.query_generation.max_output_tokens`). This is the output budget — separate from a model's context window. Reasoning ("thinking") models need a high value (e.g. several thousand) or they spend the whole budget on hidden chain-of-thought and return empty content. Applied even when `LLM_ROUTING.enabled` is `false`.
 - `TRACE_ENABLED` / `TRACE_EMBED_MODE`: Control trace persistence and report embedding behavior
 - And more...
 
@@ -129,12 +133,14 @@ resolves on macOS, Windows, **and** Linux.
 For a host-run Ollama, set in `app/config/env_vars.json`:
 
 ```json
-"LLM_PROVIDER": "local",
-"LOCAL_BACKEND": "ollama",
+"LLM_PROVIDER": "ollama",
 "LLM_BASE_URL": "http://host.docker.internal:11434/v1",
 "OLLAMA_SHOW_URL": "http://host.docker.internal:11434/api/show",
 "LLM_EVALUATION_MODEL": "llama3.1:8b"
 ```
+
+If discovery fails with "Could not reach an Ollama host", Valsci now appends a
+hint when the failure looks like this localhost/`host.docker.internal` mixup.
 
 Heads-up: the same `env_vars.json` is shared between bare-metal and Docker runs,
 so these two URLs must use `localhost` when running directly on the host and

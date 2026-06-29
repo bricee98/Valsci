@@ -3,6 +3,11 @@
 {% block content %}
     <div id="pageFeedback" class="status-card info-card hidden"></div>
 
+    <div class="status-card info-card">
+        <strong>How this relates to Settings.</strong>
+        <span>This page is the source of truth for which providers and models runs actually use. The <code>LLM_PROVIDER</code>/<code>LLM_BASE_URL</code>/<code>LLM_API_KEY</code>/<code>LLM_EVALUATION_MODEL</code> values on the <a href="{{ url_for('api.settings_page') }}">Settings</a> page only <em>seed</em> the "Default Config Provider" below. A model's context window and max output tokens set here take precedence over the <code>LOCAL_MODEL_CONTEXT_OVERRIDE</code> and <code>MODEL_REGISTRY_OVERRIDES</code> fallbacks in Settings. Per-task output budgets live in Settings → Model Routing &amp; Token Budgets.</span>
+    </div>
+
     <section class="dashboard-grid provider-shell">
         <article class="panel provider-sidebar">
             <div class="panel-header">
@@ -52,16 +57,6 @@
                         <div class="form-row" id="providerBaseUrlGroup">
                             <label for="providerBaseUrl">Base URL (optional)</label>
                             <input type="text" id="providerBaseUrl" placeholder="Only needed for non-default endpoints">
-                        </div>
-                    </div>
-                    <div class="grid-two">
-                        <div class="form-row hidden" id="providerLocalBackendGroup">
-                            <label for="providerLocalBackend">Local Backend</label>
-                            <select id="providerLocalBackend">
-                                <option value="">None</option>
-                                <option value="ollama">ollama</option>
-                                <option value="llamacpp">llamacpp</option>
-                            </select>
                         </div>
                     </div>
                     <div class="grid-two hidden" id="openrouterSection">
@@ -164,10 +159,12 @@
                 <div class="form-row">
                     <label>Context Window</label>
                     <input type="number" data-model-field="context_window_tokens" min="1" value="8192" aria-label="Context window tokens">
+                    <small class="helper-text">Total prompt + output capacity (tokens).</small>
                 </div>
                 <div class="form-row">
-                    <label>Default Max Output</label>
-                    <input type="number" data-model-field="max_output_tokens_default" min="1" value="1024" aria-label="Default max output tokens">
+                    <label>Max Output Tokens</label>
+                    <input type="number" data-model-field="max_output_tokens_default" min="1" value="1024" aria-label="Max output tokens per response">
+                    <small class="helper-text">Output budget per LLM call — the single place this is set. Reasoning ("thinking") models need a high value (e.g. 16000) or they run out mid-thought. Set per-stage overrides only under Settings → Model Routing if needed.</small>
                 </div>
                 <div class="form-row">
                     <label>Input Cost ($ / 1M tokens)</label>

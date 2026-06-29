@@ -4,6 +4,8 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+
 
 sys.modules.setdefault("ijson", types.SimpleNamespace())
 sys.modules.setdefault("openai", types.SimpleNamespace(OpenAI=object))
@@ -152,6 +154,22 @@ def test_cli_index_only_missing_release_exits_nonzero():
     assert proc.returncode != 0
 
 
+def _has_local_mini_release() -> bool:
+    # The CLI verifies against datasets under <project>/semantic_scholar/datasets,
+    # which is gitignored. On a machine where a mini corpus has been built, that
+    # release exists and `--mini --verify` legitimately succeeds — so this test
+    # (which covers the no-local-release case) only applies on a fresh checkout/CI.
+    datasets = ROOT / "semantic_scholar" / "datasets"
+    if not datasets.is_dir():
+        return False
+    return any(child.is_dir() and "mini" in child.name for child in datasets.iterdir())
+
+
+@pytest.mark.skipif(
+    _has_local_mini_release(),
+    reason="A local mini corpus is present, so '--mini --verify' correctly succeeds; "
+    "this test covers the no-local-release case (fresh checkout / CI).",
+)
 def test_cli_verify_mini_without_local_release_exits_nonzero():
     proc = _run_cli("--mini", "--verify")
     assert proc.returncode != 0

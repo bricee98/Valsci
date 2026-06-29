@@ -5,6 +5,9 @@
     formatDateTime,
     hideStatus,
     setStatus,
+    revealPanel,
+    flashButton,
+    buttonBusy,
   } = window.ValsciUI;
 
   const byId = (id) => document.getElementById(id);
@@ -105,6 +108,8 @@
           ? "Create a curated mini release or download a full release to prepare local evidence lookup."
           : "Create a release from the Mendelian mini manifest or download selected full datasets.",
         tone: "info",
+        // Persistent inline card re-rendered on the 3s poll loop — never toast.
+        toast: false,
       });
     } else {
       hideStatus(byId("dataStatusCard"));
@@ -334,6 +339,9 @@
       title: "Curated Mendelian mini",
       message,
       tone,
+      // Persistent inline summary re-rendered on the 3s poll loop — never toast,
+      // or an off-screen card spawns a new toast on every refresh.
+      toast: false,
     });
   }
 
@@ -502,6 +510,9 @@
         title: "Could not refresh data state",
         message: error.message,
         tone: "error",
+        // Re-rendered on the 3s poll loop — a persistent fetch failure must not
+        // spawn a toast on every retry.
+        toast: false,
       });
     }
   }
@@ -567,6 +578,9 @@
     selectedJobId = null; // follow the new active job in the Current Job panel
     renderJob(data.job);
     hideStatus(statusTarget);
+    // The Current Job panel can sit below the fold (single-column layouts), so
+    // bring it into view whenever a job starts streaming output.
+    revealPanel(byId("jobLog").closest(".panel"));
     poll();
     return data.job;
   }
@@ -653,7 +667,17 @@
   }
 
   function bindEvents() {
-    byId("refreshDataBtn").addEventListener("click", refreshData);
+    byId("refreshDataBtn").addEventListener("click", () => {
+      const button = byId("refreshDataBtn");
+      const restore = buttonBusy(button, "Refreshing…");
+      Promise.resolve(refreshData()).then(() => {
+        restore();
+        flashButton(button, { label: "Refreshed ✓", duration: 1200 });
+      }).catch(() => {
+        restore();
+        flashButton(button, { label: "Failed ✗", tone: "error" });
+      });
+    });
     byId("releaseSelect").addEventListener("change", (event) => {
       selectedReleaseId = event.target.value;
       // Switching releases resets dataset checkbox selections to defaults.
@@ -669,38 +693,45 @@
       input.addEventListener("change", syncWizardUi);
     });
     byId("startNewReleaseBtn").addEventListener("click", () => {
-      startNewReleaseJob().catch((error) => setStatus(byId("newReleaseStatus"), {
-        title: "Could not start release job",
-        message: error.message,
-        tone: "error",
-      }));
+      const restore = buttonBusy(byId("startNewReleaseBtn"), "Starting…");
+      startNewReleaseJob().then(restore).catch((error) => {
+        restore();
+        setStatus(byId("newReleaseStatus"), {
+          title: "Could not start release job",
+          message: error.message,
+          tone: "error",
+        });
+      });
     });
     byId("releaseDetails").addEventListener("click", (event) => {
-      if (event.target.closest("#rebuildMiniReleaseBtn")) {
-        rebuildMiniRelease().catch((error) => setStatus(byId("releaseActionStatus"), {
-          title: "Could not rebuild mini release",
-          message: error.message,
-          tone: "error",
-        }));
+      const runReleaseAction = (button, busyLabel, action, errorTitle) => {
+        const restore = buttonBusy(button, busyLabel);
+        action().then(restore).catch((error) => {
+          restore();
+          flashButton(button, { label: "Failed ✗", tone: "error" });
+          setStatus(byId("releaseActionStatus"), {
+            title: errorTitle,
+            message: error.message,
+            tone: "error",
+          });
+        });
+      };
+      const rebuildBtn = event.target.closest("#rebuildMiniReleaseBtn");
+      if (rebuildBtn) {
+        runReleaseAction(rebuildBtn, "Starting…", rebuildMiniRelease, "Could not rebuild mini release");
       }
-      if (event.target.closest("#verifyReleaseBtn")) {
-        startSelectedReleaseJob("verify").catch((error) => setStatus(byId("releaseActionStatus"), {
-          title: "Verify failed",
-          message: error.message,
-          tone: "error",
-        }));
+      const verifyBtn = event.target.closest("#verifyReleaseBtn");
+      if (verifyBtn) {
+        runReleaseAction(verifyBtn, "Starting…", () => startSelectedReleaseJob("verify"), "Verify failed");
       }
-      if (event.target.closest("#indexReleaseBtn")) {
+      const indexBtn = event.target.closest("#indexReleaseBtn");
+      if (indexBtn) {
         const confirmed = window.confirm(
           "Re-index rebuilds only the lookup indices for this release. " +
           "Dataset files are not changed, re-downloaded, or deleted — only the binary indices are rebuilt. Continue?"
         );
         if (!confirmed) return;
-        startSelectedReleaseJob("index").catch((error) => setStatus(byId("releaseActionStatus"), {
-          title: "Re-index failed",
-          message: error.message,
-          tone: "error",
-        }));
+        runReleaseAction(indexBtn, "Starting…", () => startSelectedReleaseJob("index"), "Re-index failed");
       }
     });
     byId("releaseDetails").addEventListener("change", (event) => {
@@ -733,8 +764,56 @@
     });
   }
 
+  // ---- Remote content-fetch toggle (FETCH_REMOTE_CONTENT_ON_MISS) ----------
+
+  function setRemoteFetchStatus(message, tone) {
+    const el = byId("remoteFetchStatus");
+    if (!el) return;
+    el.textContent = message || "";
+    el.style.color = tone === "error" ? "var(--accent)" : "var(--ink-muted)";
+  }
+
+  async function loadRemoteFetchToggle() {
+    const toggle = byId("remoteFetchToggle");
+    if (!toggle) return;
+    try {
+      const state = await fetchJson("/api/v1/settings/env");
+      const entry = (state.entries || []).find((e) => e.env_key === "FETCH_REMOTE_CONTENT_ON_MISS");
+      toggle.checked = Boolean(entry && entry.value === true);
+      setRemoteFetchStatus(toggle.checked ? "On — missing papers are fetched from the web." : "Off — only local corpus content is used.");
+    } catch (error) {
+      setRemoteFetchStatus("Could not load the setting.", "error");
+    }
+  }
+
+  function bindRemoteFetchToggle() {
+    const toggle = byId("remoteFetchToggle");
+    if (!toggle) return;
+    toggle.addEventListener("change", async () => {
+      const desired = toggle.checked;
+      toggle.disabled = true;
+      setRemoteFetchStatus("Saving…");
+      try {
+        await fetchJson("/api/v1/settings/env", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ updates: { FETCH_REMOTE_CONTENT_ON_MISS: desired } }),
+        });
+        setRemoteFetchStatus(desired
+          ? "On — saved. The processor applies this within a few seconds."
+          : "Off — saved. Only local corpus content is used.");
+      } catch (error) {
+        toggle.checked = !desired;
+        setRemoteFetchStatus(`Save failed: ${error.message}`, "error");
+      } finally {
+        toggle.disabled = false;
+      }
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
     bindEvents();
+    bindRemoteFetchToggle();
     syncWizardUi();
     refreshData().catch((error) => {
       setStatus(byId("dataStatusCard"), {
@@ -743,6 +822,7 @@
         tone: "error",
       });
     });
+    loadRemoteFetchToggle();
     pollTimer = window.setInterval(poll, 3000);
     window.addEventListener("beforeunload", () => window.clearInterval(pollTimer));
   });

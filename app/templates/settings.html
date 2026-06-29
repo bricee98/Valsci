@@ -5,37 +5,41 @@
     <article class="panel">
         <div class="panel-header">
             <div>
-                <h2 class="panel-title">Configuration File</h2>
-                <p class="panel-subtitle">Values are saved to the local env_vars.json file and applied to this web process where possible.</p>
+                <h2 class="panel-title">Settings</h2>
+                <p class="panel-subtitle">Configuration is saved to <span class="data-path" id="envVarsPath">env_vars.json</span> and grouped by area below.</p>
             </div>
             <div class="inline-actions">
+                <span id="envVarsDirtyBadge" class="badge warning-badge hidden">Unsaved changes</span>
                 <button type="button" class="secondary-button small-button" id="reloadEnvVarsBtn">Reload</button>
-                <button type="button" class="primary-button small-button" id="saveEnvVarsBtn">Save Changes</button>
+                <button type="button" class="primary-button small-button" id="saveEnvVarsBtn" disabled>Save Changes</button>
             </div>
         </div>
 
         <div id="envVarsStatus" class="status-card info-card hidden"></div>
-        <div class="summary-strip">
-            <div class="summary-cell">
-                <span class="label">Config File</span>
-                <span class="value data-path" id="envVarsPath">Loading...</span>
-            </div>
-            <div class="summary-cell">
-                <span class="label">Template</span>
-                <span class="value data-path" id="envVarsExamplePath">Loading...</span>
-            </div>
+
+        <div class="settings-toolbar">
+            <input type="search" id="settingsSearch" class="settings-search" placeholder="Search settings by name or description…" autocomplete="off">
+            <label class="checkbox-row settings-changed-toggle">
+                <input type="checkbox" id="settingsChangedOnly">
+                <span>Only configured</span>
+            </label>
+        </div>
+
+        <div id="processorConfigStatus" class="status-card settings-processor-status"></div>
+
+        <div class="status-card info-card settings-restart-note">
+            <strong>How saved settings take effect.</strong>
+            <span>Most LLM settings (provider, routing, token budgets, timeouts) are picked up by the background processor automatically within a few seconds — the status above shows when it has caught up. A few settings marked <span class="badge warning-badge restart-badge-inline">Restart</span> are read once at startup (rate limits, email, storage paths) and only apply after you restart the processor, e.g. <code>docker compose restart processor</code>.</span>
         </div>
     </article>
 
-    <article class="panel">
-        <div class="panel-header">
-            <div>
-                <h2 class="panel-title">Environment Values</h2>
-                <p class="panel-subtitle">Sensitive values are masked in the editor until revealed.</p>
-            </div>
-            <span id="envVarsDirtyBadge" class="badge warning-badge hidden">Unsaved changes</span>
+    <div id="settingsGroups" class="settings-groups"></div>
+
+    <article class="panel" id="settingsEmptyState" style="display:none">
+        <div class="empty-state">
+            <strong>No settings match your search.</strong>
+            <span>Clear the search box or the "Only configured" filter.</span>
         </div>
-        <div id="envVarsList" class="env-var-list"></div>
     </article>
 </section>
 {% endblock %}

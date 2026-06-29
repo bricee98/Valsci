@@ -110,6 +110,21 @@ class RateLimiter:
             time.sleep(sleep_time)
         self.last_request = time.time()
 
+# (connect timeout, read timeout) applied to every HTTP request. The read
+# timeout is the cap on how long a streamed response may go silent between
+# bytes; without it a stalled-but-open connection blocks read() forever. With
+# it, a stall surfaces as urllib3 ReadTimeoutError, which the resume logic below
+# recovers from via an HTTP Range request rather than hanging indefinitely.
+DEFAULT_REQUEST_TIMEOUT = (30, 60)
+
+# Presigned dataset shard URLs are signed with short-lived STS credentials
+# (the ``ASIA...`` key + ``x-amz-security-token``), which expire ~1h after they
+# are issued regardless of the much-later ``Expires`` query value. A full mini
+# scan streams tens of millions of rows per shard and can run for hours, so the
+# signed URLs are refreshed once they approach this age, and re-fetched on
+# demand if a shard is nonetheless rejected for an expired signature.
+SIGNED_URL_REFRESH_SECONDS = 40 * 60
+
 # Transient errors that indicate a dropped/interrupted byte stream (as opposed
 # to a clean EOF). These are recoverable by resuming or re-requesting.
 TRANSIENT_STREAM_ERRORS = (
@@ -281,19 +296,28 @@ class S2DatasetDownloader:
         root.mkdir(parents=True, exist_ok=True)
         return root
 
-    def make_request(self, url: str, method: str = 'get', max_retries: int = 5, **kwargs) -> requests.Response:
-        """Make a request with retry logic for rate limits and expired credentials."""
+    def make_request(self, url: str, method: str = 'get', max_retries: int = 8, **kwargs) -> requests.Response:
+        """Make a request with retry logic for rate limits and transient errors.
+
+        A multi-hour mini build depends on these calls, so transient
+        connection/TLS/5xx failures (e.g. a load-balanced API node briefly
+        serving a bad cert) are retried over a ~2 minute window rather than
+        aborting the whole job. Deterministic 4xx client errors are not retried.
+        """
         for attempt in range(max_retries):
             try:
                 # Wait for rate limit before making request
                 self.rate_limiter.wait()
-                
+
                 # Handle headers properly - don't merge if pre-signed URL
                 if 'AWSAccessKeyId' in url or 'x-amz-security-token' in url:
                     headers = kwargs.get('headers', {})
                 else:
                     headers = {**self.session.headers, **(kwargs.get('headers', {}))}
                 kwargs['headers'] = headers
+                # Never issue a request without a timeout: a silently stalled
+                # stream must raise (and become resumable) rather than hang.
+                kwargs.setdefault('timeout', DEFAULT_REQUEST_TIMEOUT)
                 
                 if method.lower() == 'get':
                     response = requests.get(url, **kwargs)
@@ -308,14 +332,32 @@ class S2DatasetDownloader:
                     console.print(f"[yellow]Rate limited. Waiting {wait_time} seconds...[/yellow]")
                     time.sleep(wait_time)
                     continue
-                elif response.status_code == 403:
-                    console.print(f"[yellow]Access denied. URL: {url}[/yellow]")
-                    console.print(f"[yellow]Response: {response.text}[/yellow]")
-                    raise requests.exceptions.HTTPError(f"403 Forbidden: {response.text}")
-                
+
                 response.raise_for_status()
                 return response
 
+            except requests.exceptions.HTTPError as e:
+                resp = getattr(e, "response", None)
+                status = getattr(resp, "status_code", None)
+                body = ""
+                if resp is not None:
+                    try:
+                        body = (resp.text or "").strip()[:500]
+                    except Exception:
+                        body = ""
+                # 4xx client errors (other than the rate-limit 429 handled above)
+                # are deterministic: retrying the same request just wastes time.
+                # Surface the server's explanation — for S3 this is the XML body
+                # that names the real cause (e.g. ExpiredToken) — and raise now so
+                # the caller can re-sign the URL rather than hammer a dead one.
+                if status is not None and 400 <= status < 500:
+                    detail = f" | response: {body}" if body else ""
+                    raise requests.exceptions.HTTPError(f"{e}{detail}", response=resp) from None
+                if attempt == max_retries - 1:
+                    raise
+                wait_time = min(30, (2 ** attempt) + 1)
+                console.print(f"[yellow]Request failed ({str(e)}). Retrying in {wait_time} seconds...[/yellow]")
+                time.sleep(wait_time)
             except requests.exceptions.RequestException as e:
                 if attempt == max_retries - 1:
                     raise
@@ -728,6 +770,112 @@ class S2DatasetDownloader:
                 break
         return matched_ids
 
+    def _shard_progress_logger(
+        self,
+        prefix: str,
+        status_fn=None,
+        *,
+        every_lines: int = 100_000,
+        every_seconds: float = 15.0,
+    ):
+        """Return a ``tick()`` to call once per streamed line.
+
+        It prints a throttled progress line (at most once per ``every_seconds``,
+        checked every ``every_lines`` rows) so that a shard which is slow but
+        alive is visibly distinct from one that has stalled. A genuine hang stops
+        producing lines, so ``tick`` goes quiet too — but the request read
+        timeout now turns that stall into a logged resume rather than silence.
+        """
+        state = {"lines": 0, "last": time.time()}
+
+        def tick():
+            state["lines"] += 1
+            if state["lines"] % every_lines:
+                return
+            now = time.time()
+            if now - state["last"] < every_seconds:
+                return
+            state["last"] = now
+            extra = f" — {status_fn()}" if status_fn else ""
+            console.print(
+                f"[cyan]  …{prefix}: {state['lines']:,} rows scanned{extra}[/cyan]"
+            )
+
+        return tick
+
+    def _shard_descriptor(self, dataset: str, entry: Any) -> Tuple[str, str, str]:
+        """Return (source_url, display_label, stable_shard_key) for a dataset
+        file entry. The shard key is the filename (query string stripped), which
+        is stable across re-signings, so a refreshed URL list can be matched back
+        to the same shard."""
+        if dataset in S2ORC_DATASETS:
+            if isinstance(entry, dict):
+                source = entry.get("url") or ""
+                label = entry.get("shard") or self.get_filename_from_url(source)
+            else:
+                source = str(entry or "")
+                label = source
+        else:
+            source = str(entry or "")
+            label = self.get_filename_from_url(source)
+        key = self.get_filename_from_url(source) if source else str(label or "")
+        return source, label, key
+
+    @staticmethod
+    def _is_signed_url_rejection(exc: Exception) -> bool:
+        """True for the 4xx S3 returns when a presigned URL's STS credentials
+        have expired or are otherwise rejected — recoverable by re-signing."""
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None)
+        if status in (400, 403):
+            return True
+        text = str(exc)
+        return "400 " in text or "403 " in text or "Forbidden" in text
+
+    def _scan_shard_for_ids(
+        self,
+        *,
+        dataset: str,
+        source: str,
+        index: int,
+        total: int,
+        remaining: Set[str],
+        matched_ids: Set[str],
+        output,
+    ) -> None:
+        """Stream one shard, writing matches and removing them from ``remaining``.
+
+        Safe to call again on the same shard after a failure: already-matched
+        records are no longer in ``remaining`` and are skipped on the re-scan."""
+        tick = self._shard_progress_logger(
+            f"{dataset} {index}/{total}",
+            lambda: f"{len(matched_ids):,} matched, {len(remaining):,} still missing",
+        )
+        for line in self._iter_source_lines(source):
+            tick()
+            data = self._parse_json_line(line)
+            if not data:
+                continue
+            record_id = self._record_author_id(data) if dataset == "authors" else self._record_corpus_id(data)
+            if not record_id or record_id not in remaining:
+                continue
+            output.write(json.dumps(data, ensure_ascii=True) + "\n")
+            output.flush()
+            matched_ids.add(record_id)
+            remaining.discard(record_id)
+            if not remaining:
+                break
+
+    @staticmethod
+    def _scan_fingerprint(target_ids: Set[str]) -> str:
+        """Stable digest of the full target-id set a scan is run against.
+
+        Used to invalidate shard checkpoints if the manifest's requested IDs
+        change: skipping a previously-scanned shard is only safe when it was
+        scanned for (a superset of) the IDs we are now looking for."""
+        digest = hashlib.sha256("\n".join(sorted(target_ids)).encode("utf-8"))
+        return digest.hexdigest()[:16]
+
     def _scan_remote_sources_for_ids(
         self,
         *,
@@ -735,39 +883,105 @@ class S2DatasetDownloader:
         release_id: str,
         target_ids: Set[str],
         output_path: Path,
+        scan_fingerprint: Optional[str] = None,
     ) -> Tuple[str, Set[str]]:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         info = self.get_dataset_info(dataset, release_id)
-        files = info.get("files") or []
+        descriptors = [self._shard_descriptor(dataset, entry) for entry in (info.get("files") or [])]
+        shards = [(label, key) for (source, label, key) in descriptors if source]
+        shard_sources: Dict[str, str] = {key: source for (source, label, key) in descriptors if source}
+        signed_at = time.monotonic()
+
+        # Shard-level resume: a checkpoint next to the cache records which shards
+        # have been fully scanned, so an interrupted multi-hour scan resumes at
+        # the next unscanned shard instead of re-streaming completed ones. It is
+        # only honored when the cache it describes still exists and was built for
+        # the same release and target set.
+        progress_path = Path(str(output_path) + ".progress.json")
+        completed: Set[str] = set()
+        if output_path.exists() and progress_path.exists():
+            try:
+                checkpoint = json.loads(progress_path.read_text(encoding="utf-8"))
+                if (
+                    checkpoint.get("release_id") == release_id
+                    and checkpoint.get("fingerprint") == scan_fingerprint
+                ):
+                    completed = set(checkpoint.get("completed_shards") or [])
+            except Exception:
+                completed = set()
+
+        def save_progress() -> None:
+            tmp = Path(str(progress_path) + ".tmp")
+            tmp.write_text(
+                json.dumps(
+                    {
+                        "release_id": release_id,
+                        "fingerprint": scan_fingerprint,
+                        "completed_shards": sorted(completed),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            os.replace(tmp, progress_path)
+
+        def refresh_signed_urls(reason: str) -> None:
+            nonlocal signed_at
+            console.print(f"[yellow]Refreshing Semantic Scholar signed URLs ({reason}).[/yellow]")
+            fresh = self.get_dataset_info(dataset, release_id)
+            for fresh_entry in fresh.get("files") or []:
+                fresh_source, _label, fresh_key = self._shard_descriptor(dataset, fresh_entry)
+                if fresh_source:
+                    shard_sources[fresh_key] = fresh_source
+            signed_at = time.monotonic()
+
         remaining = set(target_ids)
         matched_ids: Set[str] = set()
+        total = len(shards)
+        if completed:
+            console.print(
+                f"[cyan]Resuming {dataset} scan: {len(completed)}/{total} shards already done.[/cyan]"
+            )
         mode = "a" if output_path.exists() else "w"
         with open(output_path, mode, encoding="utf-8") as output:
-            for index, entry in enumerate(files, start=1):
-                if dataset in S2ORC_DATASETS:
-                    source = entry.get("url") if isinstance(entry, dict) else ""
-                    label = entry.get("shard") if isinstance(entry, dict) else source
-                else:
-                    source = str(entry or "")
-                    label = self.get_filename_from_url(source)
-                if not source:
+            for index, (label, shard_key) in enumerate(shards, start=1):
+                if shard_key in completed:
                     continue
-                console.print(f"[cyan]Fetching mini {dataset} source {index}/{len(files)}: {label}[/cyan]")
-                for line in self._iter_source_lines(source):
-                    data = self._parse_json_line(line)
-                    if not data:
-                        continue
-                    record_id = self._record_author_id(data) if dataset == "authors" else self._record_corpus_id(data)
-                    if not record_id or record_id not in remaining:
-                        continue
-                    output.write(json.dumps(data, ensure_ascii=True) + "\n")
-                    output.flush()
-                    matched_ids.add(record_id)
-                    remaining.discard(record_id)
-                    if not remaining:
+                # Proactively re-sign before the ~1h STS token behind these URLs
+                # expires; a full scan routinely runs longer than that.
+                if time.monotonic() - signed_at > SIGNED_URL_REFRESH_SECONDS:
+                    refresh_signed_urls("approaching token expiry")
+                console.print(f"[cyan]Fetching mini {dataset} source {index}/{total}: {label}[/cyan]")
+                for attempt in range(2):
+                    source = shard_sources.get(shard_key)
+                    if not source:
                         break
+                    try:
+                        self._scan_shard_for_ids(
+                            dataset=dataset,
+                            source=source,
+                            index=index,
+                            total=total,
+                            remaining=remaining,
+                            matched_ids=matched_ids,
+                            output=output,
+                        )
+                        completed.add(shard_key)
+                        save_progress()
+                        break
+                    except requests.exceptions.HTTPError as exc:
+                        # An expired/rejected signature is recoverable: re-sign the
+                        # URLs once and retry this shard from the start.
+                        if attempt == 0 and self._is_signed_url_rejection(exc):
+                            refresh_signed_urls(f"shard {index}/{total} rejected: {exc}")
+                            continue
+                        raise
                 if not remaining:
                     break
+        # The scan finished without error; the checkpoint has served its purpose.
+        try:
+            progress_path.unlink()
+        except OSError:
+            pass
         return str(output_path.resolve()), matched_ids
 
     def _mini_sources_for_dataset(
@@ -798,6 +1012,10 @@ class S2DatasetDownloader:
                 release_id=release_id,
                 target_ids=missing_ids,
                 output_path=cache_path,
+                # Fingerprint the full requested set (not just the currently
+                # missing subset) so the shard checkpoint stays valid across
+                # resumes and is invalidated only when the manifest changes.
+                scan_fingerprint=self._scan_fingerprint(target_ids),
             )
             if matched_ids and source not in sources:
                 sources.append(source)
@@ -821,6 +1039,13 @@ class S2DatasetDownloader:
         written = 0
         with open(output_path, "w", encoding="utf-8") as output:
             for source in sources:
+                # A configured source that isn't present here (e.g. a manifest
+                # source_files path that is absolute to another machine) is
+                # skipped, matching _matched_ids_in_sources — the data is taken
+                # from whichever sources do exist (such as the streamed cache).
+                if not self._is_remote_source(source) and not Path(source).exists():
+                    console.print(f"[yellow]Skipping missing {dataset} source: {source}[/yellow]")
+                    continue
                 console.print(f"[cyan]Filtering {dataset} source: {source}[/cyan]")
                 for line in self._iter_source_lines(source):
                     data = self._parse_json_line(line)
@@ -1065,53 +1290,59 @@ class S2DatasetDownloader:
         
         return True
 
-    def download_file(self, url: str, output_dir: Path, desc: str = None) -> Tuple[bool, Optional[Path]]:
-        """Download a file using wget with progress bar."""
-        try:
-            filename = self.get_filename_from_url(url)
-            output_path = output_dir / filename
-            desc = desc or f"Downloading {filename}"
-            
-            # If it's a gzipped file, we'll need both paths
-            is_gzipped = filename.endswith('.gz')
-            if is_gzipped:
-                final_path = output_dir / filename.replace('.gz', '.json')
-                if final_path.exists():
-                    console.print(f"[green]File {final_path.name} already exists[/green]")
-                    return True, final_path
-            else:
-                final_path = output_path
-                if final_path.exists():
-                    console.print(f"[green]File {final_path.name} already exists[/green]")
-                    return True, final_path
+    def download_file(self, url: str, output_dir: Path, desc: str = None, resign=None) -> Tuple[bool, Optional[Path]]:
+        """Stream a dataset shard to disk via the shared resumable HTTP reader.
 
-            # Download using wget
-            import subprocess
+        Uses the same transfer path as the mini-corpus build — make_request +
+        _ResumableHTTPReader, reached through _iter_source_lines — so it resumes
+        byte-level on dropped connections, honors request timeouts, and needs no
+        external tools (no wget). Gzipped shards are decompressed on the fly and
+        written to a ``.partial`` file that is atomically renamed on success, so
+        an interrupted download never leaves a truncated shard behind.
+
+        ``resign`` is an optional zero-arg callable that returns a freshly signed
+        URL for this shard. If the download is rejected for an expired/invalid
+        signature (the STS token behind the presigned URL), it is called once and
+        the download retried — the same recovery the mini build uses.
+        """
+        filename = self.get_filename_from_url(url)
+        is_gzipped = filename.endswith('.gz')
+        final_path = output_dir / (filename.replace('.gz', '.json') if is_gzipped else filename)
+        if final_path.exists():
+            console.print(f"[green]File {final_path.name} already exists[/green]")
+            return True, final_path
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        partial_path = final_path.with_name(final_path.name + ".partial")
+        console.print(f"[cyan]{desc or f'Downloading {filename}'}[/cyan]")
+        for attempt in range(2):
             try:
-                console.print(f"[cyan]{desc}[/cyan]")
-                subprocess.run(['wget', '-q', '--show-progress', url, '-O', str(output_path)], check=True)
-                
-                # Handle gzip extraction if needed
-                if is_gzipped:
-                    console.print(f"[cyan]Extracting {output_path.name}...[/cyan]")
-                    with gzip.open(output_path, 'rb') as gz_in, open(final_path, 'wb') as out:
-                        shutil.copyfileobj(gz_in, out)
-                    # Remove the gzip file
-                    output_path.unlink()
-                    output_path = final_path
-                
-                console.print(f"[green]Successfully downloaded: {output_path}[/green]")
-                return True, output_path
-                
-            except subprocess.CalledProcessError as e:
-                console.print(f"[red]Failed to download file: {e}[/red]")
-                if output_path.exists():
-                    output_path.unlink()
+                with open(partial_path, 'wb') as out:
+                    for line in self._iter_source_lines(url):
+                        out.write(line)
+                os.replace(partial_path, final_path)
+                console.print(f"[green]Successfully downloaded: {final_path.name}[/green]")
+                return True, final_path
+            except Exception as exc:
+                if partial_path.exists():
+                    try:
+                        partial_path.unlink()
+                    except OSError:
+                        pass
+                if (
+                    attempt == 0
+                    and resign is not None
+                    and isinstance(exc, requests.exceptions.HTTPError)
+                    and self._is_signed_url_rejection(exc)
+                ):
+                    fresh = resign()
+                    if fresh:
+                        console.print(f"[yellow]Re-signing rejected URL for {filename} and retrying.[/yellow]")
+                        url = fresh
+                        continue
+                console.print(f"[red]Failed to download {filename}: {exc}[/red]")
                 return False, None
-                
-        except Exception as e:
-            console.print(f"[red]Error downloading file: {str(e)}[/red]")
-            return False, None
+        return False, None
 
     def download_dataset(self, dataset_name: str, release_id: str = 'latest', index: bool = True) -> bool:
         """Download a specific dataset and optionally build index."""
@@ -1166,21 +1397,32 @@ class S2DatasetDownloader:
                         console.print(f"[yellow]→ Needs download: {output_path.name}[/yellow]")
                         missing_files.append(file_url)
 
-            # If we have missing files, get fresh dataset info and download them
+            # If we have missing files, stream them — re-signing on demand if a
+            # shard's presigned URL expires mid-download (a full corpus can take
+            # longer than the ~1h STS token lifetime).
             if missing_files:
-                console.print(f"\n[cyan]Getting fresh download URLs for {len(missing_files)} missing files...[/cyan]")
-                dataset_info = self.get_dataset_info(dataset_name, release_id)
+                console.print(f"\n[cyan]Downloading {len(missing_files)} missing {dataset_name} files...[/cyan]")
 
-                # Download missing files
+                def resign_for(shard_key):
+                    def _resign():
+                        fresh = self.get_dataset_info(dataset_name, release_id)
+                        for fresh_entry in fresh.get('files') or []:
+                            fresh_src, _label, fresh_key = self._shard_descriptor(dataset_name, fresh_entry)
+                            if fresh_src and fresh_key == shard_key:
+                                return fresh_src
+                        return None
+                    return _resign
+
                 downloaded_files = []
                 download_failures = 0
                 for file_info in missing_files:
-                    if dataset_name in S2ORC_DATASETS:
-                        url = file_info['url']
-                        shard = file_info['shard']
-                        success, path = self.download_file(url, dataset_dir, f"Downloading {dataset_name} shard {shard}")
-                    else:
-                        success, path = self.download_file(file_info, dataset_dir)
+                    src, label, shard_key = self._shard_descriptor(dataset_name, file_info)
+                    success, path = self.download_file(
+                        src,
+                        dataset_dir,
+                        desc=f"Downloading {dataset_name} shard {label}",
+                        resign=resign_for(shard_key),
+                    )
                     if success and path:
                         downloaded_files.append(path)
                     else:

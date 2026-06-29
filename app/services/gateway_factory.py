@@ -30,7 +30,6 @@ class GatewayFactory:
             "api_key": provider_snapshot.get("api_key", Config.LLM_API_KEY),
             "base_url": provider_snapshot.get("base_url", Config.LLM_BASE_URL),
             "default_model": default_model,
-            "local_backend": provider_snapshot.get("local_backend", getattr(Config, "LOCAL_BACKEND", "")),
             "routing_config": getattr(Config, "LLM_ROUTING", {}) or {},
             "model_registry_overrides": provider_snapshot.get(
                 "model_registry_overrides",

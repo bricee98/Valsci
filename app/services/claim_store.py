@@ -422,11 +422,43 @@ class ClaimStore:
         arena_record["run_ids"] = _dedupe_str_list([*(arena_record.get("run_ids", [])), *normalized_run_ids])
         return self.save_arena(arena_record)
 
+    def set_arena_preference(
+        self,
+        arena_id: str,
+        *,
+        claim_key: str,
+        run_id: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Record (or clear, when run_id is None) the user's preferred run for a claim."""
+        path = self._arena_path(arena_id)
+        if not path.exists():
+            return None
+        arena_record = _read_json(path)
+        if claim_key not in (arena_record.get("claim_keys") or []):
+            raise ValueError(f"Claim {claim_key} is not part of arena {arena_id}")
+        preferences = dict(arena_record.get("preferences") or {})
+        if run_id is None:
+            preferences.pop(claim_key, None)
+        else:
+            if run_id not in (arena_record.get("run_ids") or []):
+                raise ValueError(f"Run {run_id} is not part of arena {arena_id}")
+            run_record = self.get_run(run_id)
+            if not run_record or run_record.get("claim_key") != claim_key:
+                raise ValueError(f"Run {run_id} does not belong to claim {claim_key}")
+            preferences[claim_key] = {
+                "run_id": run_id,
+                "candidate_id": run_record.get("candidate_id"),
+                "noted_at": utc_now_iso(),
+            }
+        arena_record["preferences"] = preferences
+        return self.save_arena(arena_record)
+
     def get_arena(self, arena_id: str) -> Optional[Dict[str, Any]]:
         path = self._arena_path(arena_id)
         if not path.exists():
             return None
         arena = _read_json(path)
+        arena["preferences"] = dict(arena.get("preferences") or {})
         run_map = {run["run_id"]: run for run in self.list_runs() if run.get("arena_id") == arena_id}
         stage_history = list(arena.get("stage_history") or [])
         current_run_ids = list(arena.get("run_ids", []))
@@ -482,9 +514,17 @@ class ClaimStore:
         current_runs = [self.get_run(run_id) for run_id in current_run_ids]
         current_runs = [run for run in current_runs if run]
 
-        status_counts = Counter(str(run.get("status", "unknown")) for run in current_runs)
-        if current_runs and all(str(run.get("status")) == "processed" for run in current_runs):
-            status = "completed" if arena_record.get("current_stage") == "final_report" else "ready_for_review"
+        failed_statuses = {"error", "failed"}
+        run_statuses = [str(run.get("status", "unknown")) for run in current_runs]
+        status_counts = Counter(run_statuses)
+        settled = current_runs and all(
+            value == "processed" or value in failed_statuses for value in run_statuses
+        )
+        if settled:
+            if any(value in failed_statuses for value in run_statuses):
+                status = "needs_attention"
+            else:
+                status = "completed" if arena_record.get("current_stage") == "final_report" else "ready_for_review"
         elif current_runs:
             status = "in_progress"
         else:
@@ -991,7 +1031,10 @@ class ClaimStore:
             "cost_confirmation": run_record.get("cost_confirmation") or {},
             "prompt_provenance": run_record.get("prompt_provenance") or default_prompt_provenance(),
             "claimRating": report.get("claimRating"),
-            "rating_label": self.rating_label(report.get("claimRating")),
+            "rating_label": self.rating_label(
+                report.get("claimRating"), evaluation_failed=self._report_indicates_failure(report)
+            ),
+            "evaluation_failed": self._report_indicates_failure(report),
             "report_available": bool(run_record.get("report_available")),
             "checkpoint_complete": checkpoint_complete(run_record),
             "usage": usage,
@@ -1032,7 +1075,32 @@ class ClaimStore:
         return summary
 
     @staticmethod
-    def rating_label(rating: Optional[int]) -> str:
+    def _report_indicates_failure(report: Dict[str, Any]) -> bool:
+        """True when a report represents a processing failure rather than a verdict.
+
+        Honors the explicit evaluation_failed flag (set by new runs) and also
+        recognizes the distinctive explanations older failed runs were saved with,
+        so they are relabeled "Failed" retroactively. The legitimate "No relevant
+        papers were found" no-evidence verdict is intentionally not matched.
+        """
+        if not isinstance(report, dict):
+            return False
+        if report.get("evaluation_failed"):
+            return True
+        explanation = str(report.get("explanation") or "").lower()
+        failure_markers = (
+            "could not be evaluated",
+            "failed after all retries",
+            "token usage exceeded",
+        )
+        return any(marker in explanation for marker in failure_markers)
+
+    @staticmethod
+    def rating_label(rating: Optional[int], *, evaluation_failed: bool = False) -> str:
+        # A run that could not be evaluated is "Failed", not the 0/"No Evidence"
+        # verdict (which means the search completed and found no relevant evidence).
+        if evaluation_failed:
+            return "Failed"
         labels = {
             0: "No Evidence",
             1: "Contradicted",

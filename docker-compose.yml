@@ -6,13 +6,19 @@ services:
       - "3000:3000"
     environment:
       - FLASK_APP=run.py
+      # Edit the config file inside a bind-mounted directory (not a single-file
+      # bind mount) so the Settings page can rewrite it via atomic rename.
+      - VALSCI_ENV_FILE=/valsci/runtime_config/env_vars.json
     # Lets the container reach host services (e.g. a host-run Ollama) at
     # http://host.docker.internal:<port>. Auto-provided on Docker Desktop;
     # this mapping makes it work on Linux hosts too.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./app/config/env_vars.json:/valsci/app/config/env_vars.json
+      # Mount the host config directory (which holds env_vars.json) to a path that
+      # does not shadow the image's baked code. Directory mounts allow the atomic
+      # rewrite the Settings page needs; a single-file bind mount does not.
+      - ./app/config:/valsci/runtime_config
       - ./semantic_scholar/manifests:/valsci/semantic_scholar/manifests:ro
       - semantic_scholar_data:/valsci/semantic_scholar/datasets
       - valsci_state:/valsci/state
@@ -24,10 +30,14 @@ services:
     image: valsci:latest
     container_name: valsci-processor
     command: python processor.py
+    environment:
+      # Same config file as the web service so live edits (and the processor's
+      # auto-reload of them) share one source of truth.
+      - VALSCI_ENV_FILE=/valsci/runtime_config/env_vars.json
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./app/config/env_vars.json:/valsci/app/config/env_vars.json
+      - ./app/config:/valsci/runtime_config
       - ./semantic_scholar/manifests:/valsci/semantic_scholar/manifests:ro
       - semantic_scholar_data:/valsci/semantic_scholar/datasets
       - valsci_state:/valsci/state

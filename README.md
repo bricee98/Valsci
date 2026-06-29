@@ -210,6 +210,8 @@ The Data page can run the same manifest-backed downloader from the browser; its 
 
 **Note:** S2ORC v2 access may require Semantic Scholar dataset API permissions. Check the Semantic Scholar Datasets API release metadata for the `s2orc_v2` dataset.
 
+**Test claims:** See [`TEST_CLAIMS.md`](TEST_CLAIMS.md) for 12 ready-to-paste claims that are covered by this mini corpus, plus the `scripts/` helpers for probing coverage and re-expanding the corpus.
+
 ### Running the Application
 
 Valsci consists of two main services:

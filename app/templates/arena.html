@@ -27,7 +27,7 @@
             <div class="panel-header">
                 <div>
                     <h2 class="panel-title">Default Arena Flow</h2>
-                    <p class="panel-subtitle">Each selected model becomes a candidate. Use Advanced Arena Settings below for stage overrides or retrieval reuse.</p>
+                    <p class="panel-subtitle">Each model you check becomes a candidate that runs on every claim. By default a candidate uses one model for all four pipeline stages; you can override individual stages from its card.</p>
                 </div>
                 <a href="{{ url_for('api.guidebook_page') }}#arena-builder" class="help-link" title="Guidebook: Arena Builder">?</a>
             </div>
@@ -40,7 +40,7 @@
                     <input type="text" id="arenaTitle" placeholder="Optional arena title">
                 </div>
                 <div id="providerBlocks" class="section-stack"></div>
-                <p class="helper-text">Open Advanced Arena Settings for multi-provider comparisons and stage overrides.</p>
+                <p class="helper-text">Each checked model becomes a candidate on the right. Open Advanced Arena Settings for multi-provider comparisons and retrieval reuse.</p>
             </div>
 
             <div class="panel-divider"></div>
@@ -73,7 +73,7 @@
                 <div class="panel-header">
                     <div>
                         <h2 class="panel-title">Candidates</h2>
-                        <p class="panel-subtitle">Models become named candidates with consistent identity.</p>
+                        <p class="panel-subtitle">Each card shows exactly what will run. "One model" runs the same model for all four stages; expand a card to give a stage its own model.</p>
                     </div>
                 </div>
                 <div id="candidatePreview" class="record-list"></div>
@@ -94,8 +94,7 @@
                 </div>
                 <div class="panel-divider"></div>
                 <div class="inline-actions">
-                    <button type="button" class="secondary-button" id="estimateArenaBtn">Estimate Arena</button>
-                    <button type="button" class="primary-button" id="launchArenaBtn" disabled>Launch Arena</button>
+                    <button type="button" class="primary-button" id="launchArenaBtn">Review &amp; Launch Arena</button>
                 </div>
             </article>
         </div>
@@ -151,14 +150,7 @@
             </div>
             <button type="button" class="ghost-button small-button" id="addProviderBlockBtn">Add Provider Block</button>
         </div>
-        <div class="panel-divider"></div>
-        <div class="panel-header">
-            <div>
-                <h3 class="panel-title">Advanced Candidate Editor</h3>
-                <p class="panel-subtitle">Edit labels or override specific stages.</p>
-            </div>
-        </div>
-        <div id="advancedCandidateEditor" class="record-list"></div>
+        <p class="helper-text">Candidate labels and per-stage model overrides are edited directly on each candidate card under "Candidates".</p>
     </details>
 
     <div id="costModal" class="modal hidden">

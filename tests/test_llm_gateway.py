@@ -4,7 +4,7 @@ import pytest
 
 from app.config.settings import Config
 from app.services.gateway_factory import GatewayFactory
-from app.services.llm.gateway import ContextOverflowError, LLMGateway, LLMTask
+from app.services.llm.gateway import ContextOverflowError, InvalidJSONResponseError, LLMGateway, LLMTask
 from app.services.llm.types import ProviderResponse
 
 
@@ -18,11 +18,23 @@ class FakeProvider:
     def __init__(self, mode: str):
         self.mode = mode
         self.calls = 0
+        self.last_request = None
 
     async def chat(self, request):
         self.calls += 1
+        self.last_request = request
         if self.mode == "async_timeout":
             raise asyncio.TimeoutError("gateway timeout")
+        if self.mode == "empty_length":
+            # Reasoning model that burned its whole output budget on hidden
+            # chain-of-thought: no content, finish_reason=length.
+            return ProviderResponse(
+                raw_text="",
+                model_used=request.model,
+                finish_reason="length",
+                usage={"input_tokens": 700, "output_tokens": 800, "total_tokens": 1500, "is_estimated": False},
+                reasoning="lots of thinking that never produced an answer",
+            )
         if self.mode == "retry_then_success":
             if self.calls <= 2:
                 raise FakeStatusError(429, "rate limited")
@@ -48,6 +60,16 @@ class FakeProvider:
             )
         if self.mode == "bad_request":
             raise FakeStatusError(400, "bad request")
+        if self.mode == "reject_json_schema":
+            rf = request.response_format
+            if isinstance(rf, dict) and rf.get("type") == "json_schema":
+                raise FakeStatusError(400, "response_format.json_schema is not supported by this provider")
+            return ProviderResponse(
+                raw_text='{"ok": true}',
+                model_used=request.model,
+                finish_reason="stop",
+                usage={"input_tokens": 20, "output_tokens": 5, "total_tokens": 25, "is_estimated": False},
+            )
         if self.mode == "fenced_json":
             return ProviderResponse(
                 raw_text='```json\n{"ok": true}\n```',
@@ -72,7 +94,6 @@ def build_gateway(
     *,
     provider_name="openai",
     base_url="https://api.openai.com/v1",
-    local_backend="",
     timeout_seconds=5,
     timeout_seconds_local=None,
 ):
@@ -84,7 +105,6 @@ def build_gateway(
     monkeypatch.setattr(Config, "LLM_API_KEY", "test-key", raising=False)
     monkeypatch.setattr(Config, "LLM_EVALUATION_MODEL", "test-model", raising=False)
     monkeypatch.setattr(Config, "LLM_BASE_URL", base_url, raising=False)
-    monkeypatch.setattr(Config, "LOCAL_BACKEND", local_backend, raising=False)
     monkeypatch.setattr(Config, "LLM_ROUTING", routing or {"enabled": False}, raising=False)
     monkeypatch.setattr(
         Config,
@@ -284,6 +304,89 @@ def test_fenced_json_is_recovered_without_retry(monkeypatch, tmp_path):
     asyncio.run(run())
 
 
+def test_empty_content_with_length_finish_raises_actionable_error(monkeypatch, tmp_path):
+    # A model that returns no content because it hit the output-token limit must
+    # surface the real cause and name the exact config knob to raise — not a
+    # misleading "invalid JSON" message.
+    gateway = build_gateway(monkeypatch, tmp_path, provider=FakeProvider("empty_length"))
+
+    async def run():
+        with pytest.raises(InvalidJSONResponseError) as excinfo:
+            await gateway.chat_json(
+                user_prompt="Return json",
+                system_prompt="Return valid JSON only",
+                task=LLMTask.GENERIC,
+                batch_id="b7",
+                claim_id="c7",
+            )
+        message = str(excinfo.value)
+        assert "no content" in message
+        assert "finish_reason=length" in message
+        # Points at the model-level knob (Providers page Max Output Tokens),
+        # distinguishes it from the context window, and reports the reasoning.
+        assert "max_output_tokens" in message
+        assert "Max Output Tokens" in message
+        assert "Providers page" in message
+        assert "context window" in message
+        assert "characters of reasoning" in message
+
+    asyncio.run(run())
+
+
+def test_output_budget_defaults_to_model_max_output(monkeypatch, tmp_path):
+    # With no per-task override, the budget is the model's Max Output Tokens
+    # (Providers page) — not a hidden per-task constant.
+    provider = FakeProvider("ok")
+    gateway = build_gateway(
+        monkeypatch, tmp_path, provider=provider,
+        model_registry_overrides={
+            "test-model": {
+                "context_window_tokens": 256000,
+                "max_output_tokens_default": 16000,
+                "supports_temperature": True,
+                "supports_json_schema_or_json_mode": True,
+            }
+        },
+    )
+
+    async def run():
+        await gateway.chat_json(
+            user_prompt="Return json", system_prompt="Return valid JSON only",
+            task=LLMTask.QUERY_GENERATION, batch_id="b8a", claim_id="c8a",
+        )
+        # Previously this would have been a hardcoded 800 for query generation.
+        assert provider.last_request.max_output_tokens == 16000
+
+    asyncio.run(run())
+
+
+def test_routing_task_override_still_wins_over_model_default(monkeypatch, tmp_path):
+    # An explicit per-task override (advanced) still takes precedence, even with
+    # routing disabled for model selection.
+    provider = FakeProvider("ok")
+    gateway = build_gateway(
+        monkeypatch, tmp_path, provider=provider,
+        routing={"enabled": False, "tasks": {LLMTask.GENERIC: {"max_output_tokens": 9000}}},
+        model_registry_overrides={
+            "test-model": {
+                "context_window_tokens": 256000,
+                "max_output_tokens_default": 512,
+                "supports_temperature": True,
+                "supports_json_schema_or_json_mode": True,
+            }
+        },
+    )
+
+    async def run():
+        await gateway.chat_json(
+            user_prompt="Return json", system_prompt="Return valid JSON only",
+            task=LLMTask.GENERIC, batch_id="b8", claim_id="c8",
+        )
+        assert provider.last_request.max_output_tokens == 9000
+
+    asyncio.run(run())
+
+
 def test_timeout_override_is_ignored_when_routing_disabled(monkeypatch, tmp_path):
     routing = {
         "enabled": False,
@@ -382,6 +485,124 @@ def test_gateway_factory_can_use_first_enabled_provider_model(monkeypatch):
     runtime_config = GatewayFactory()._build_runtime_config(provider_snapshot)
 
     assert runtime_config["default_model"] == "gemma4:31b"
+
+
+SIMPLE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {"ok": {"type": "boolean"}},
+    "required": ["ok"],
+}
+
+
+def test_strict_schema_sends_json_schema_response_format(monkeypatch, tmp_path):
+    # Strict mode ON + a schema supplied -> provider receives a json_schema
+    # response_format that pins the exact field names.
+    provider = FakeProvider("success")
+    gateway = build_gateway(monkeypatch, tmp_path, provider=provider)
+    monkeypatch.setattr(Config, "LLM_STRICT_JSON_SCHEMA", True, raising=False)
+
+    async def run():
+        await gateway.chat_json(
+            user_prompt="Return json", system_prompt="Return valid JSON only",
+            task=LLMTask.FINAL_REPORT, batch_id="bs1", claim_id="cs1",
+            response_schema=SIMPLE_SCHEMA, schema_name="simple",
+        )
+        rf = provider.last_request.response_format
+        assert rf["type"] == "json_schema"
+        assert rf["json_schema"]["name"] == "simple"
+        assert rf["json_schema"]["strict"] is True
+        assert rf["json_schema"]["schema"] == SIMPLE_SCHEMA
+
+    asyncio.run(run())
+
+
+def test_strict_schema_without_schema_uses_json_object(monkeypatch, tmp_path):
+    # Strict mode ON but no schema passed (e.g. a stage we didn't wire) -> plain
+    # json_object, so "valid JSON" enforcement still applies.
+    provider = FakeProvider("success")
+    gateway = build_gateway(monkeypatch, tmp_path, provider=provider)
+    monkeypatch.setattr(Config, "LLM_STRICT_JSON_SCHEMA", True, raising=False)
+
+    async def run():
+        await gateway.chat_json(
+            user_prompt="Return json", system_prompt="Return valid JSON only",
+            task=LLMTask.GENERIC, batch_id="bs2", claim_id="cs2",
+        )
+        assert provider.last_request.response_format == {"type": "json_object"}
+
+    asyncio.run(run())
+
+
+def test_strict_schema_disabled_uses_json_object_even_with_schema(monkeypatch, tmp_path):
+    provider = FakeProvider("success")
+    gateway = build_gateway(monkeypatch, tmp_path, provider=provider)
+    monkeypatch.setattr(Config, "LLM_STRICT_JSON_SCHEMA", False, raising=False)
+
+    async def run():
+        await gateway.chat_json(
+            user_prompt="Return json", system_prompt="Return valid JSON only",
+            task=LLMTask.FINAL_REPORT, batch_id="bs3", claim_id="cs3",
+            response_schema=SIMPLE_SCHEMA, schema_name="simple",
+        )
+        assert provider.last_request.response_format == {"type": "json_object"}
+
+    asyncio.run(run())
+
+
+def test_json_schema_rejection_downgrades_to_json_object(monkeypatch, tmp_path):
+    # A provider that doesn't support json_schema must not hard-fail strict mode:
+    # the gateway retries the same call with plain json_object.
+    provider = FakeProvider("reject_json_schema")
+    gateway = build_gateway(monkeypatch, tmp_path, provider=provider)
+    monkeypatch.setattr(Config, "LLM_STRICT_JSON_SCHEMA", True, raising=False)
+
+    async def run():
+        result = await gateway.chat_json(
+            user_prompt="Return json", system_prompt="Return valid JSON only",
+            task=LLMTask.FINAL_REPORT, batch_id="bs4", claim_id="cs4",
+            response_schema=SIMPLE_SCHEMA, schema_name="simple",
+        )
+        assert result["content"]["ok"] is True
+        # Two provider calls: rejected json_schema, then accepted json_object.
+        assert provider.calls == 2
+        assert provider.last_request.response_format == {"type": "json_object"}
+
+    asyncio.run(run())
+
+
+def test_json_repair_enabled_property_reflects_config(monkeypatch, tmp_path):
+    gateway = build_gateway(monkeypatch, tmp_path, provider=FakeProvider("success"))
+    monkeypatch.setattr(Config, "LLM_JSON_REPAIR_PASS", False, raising=False)
+    assert gateway.json_repair_enabled is False
+    monkeypatch.setattr(Config, "LLM_JSON_REPAIR_PASS", True, raising=False)
+    assert gateway.json_repair_enabled is True
+
+
+def test_repair_pass_reformats_content_against_schema(monkeypatch, tmp_path):
+    # repair_json_to_schema asks the model to reshape bad content and returns the
+    # reformatted JSON, sending the schema as a json_schema response_format.
+    provider = FakeProvider("success")
+    gateway = build_gateway(monkeypatch, tmp_path, provider=provider)
+    monkeypatch.setattr(Config, "LLM_STRICT_JSON_SCHEMA", True, raising=False)
+
+    async def run():
+        result = await gateway.repair_json_to_schema(
+            bad_content={"wrong_field": "value"},
+            response_schema=SIMPLE_SCHEMA,
+            schema_name="simple",
+            task=LLMTask.FINAL_REPORT,
+            batch_id="bs5", claim_id="cs5",
+            stage=LLMTask.FINAL_REPORT,
+        )
+        assert result["content"]["ok"] is True
+        # The repair prompt carries the schema and the original data.
+        sent = provider.last_request.messages[-1]["content"]
+        assert "wrong_field" in sent
+        assert "REQUIRED JSON SCHEMA" in sent
+        assert provider.last_request.response_format["type"] == "json_schema"
+
+    asyncio.run(run())
 
 
 def test_timeout_failure_records_timeout_diagnostics(monkeypatch, tmp_path):

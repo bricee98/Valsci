@@ -19,6 +19,34 @@ _CLAIM_RATING_CANONICAL = {
     "no evidence": "No Evidence",
 }
 
+RATING_ENUM = [
+    "Contradicted", "Likely False", "Mixed Evidence",
+    "Likely True", "Highly Supported", "No Evidence",
+]
+
+# JSON Schemas used to constrain model output when strict schema mode is on, so
+# the model is forced to emit exactly these fields instead of inventing its own.
+FINAL_REPORT_RESPONSE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "explanationEssay": {"type": "string"},
+        "finalReasoning": {"type": "string"},
+        "claimRating": {"type": "string", "enum": RATING_ENUM},
+    },
+    "required": ["explanationEssay", "finalReasoning", "claimRating"],
+}
+
+QUERY_GENERATION_RESPONSE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "queries": {"type": "array", "items": {"type": "string"}},
+        "explanations": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["queries", "explanations"],
+}
+
 
 def _normalize_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
@@ -36,9 +64,29 @@ def _strip_list_prefix(text: str) -> str:
     return re.sub(r"^(?:[-*]\s+|\d+[.)]\s+)", "", text).strip()
 
 
-def _require_string(value: Any, field_name: str, *, max_len: int, allow_empty: bool = False) -> str:
+def _coerce_to_string(value: Any) -> str:
+    """Best-effort flatten of a non-string value into readable text. Reasoning
+    models sometimes return a free-text field as a list of points or a small
+    object; rather than failing the whole report, stringify it."""
+    if isinstance(value, (list, tuple)):
+        parts = [_coerce_to_string(item) for item in value]
+        return "\n".join(part for part in parts if part)
+    if isinstance(value, dict):
+        import json as _json
+        return _json.dumps(value, ensure_ascii=False)
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _require_string(
+    value: Any, field_name: str, *, max_len: int, allow_empty: bool = False, coerce: bool = False
+) -> str:
     if not isinstance(value, str):
-        raise OutputValidationError(f"Field '{field_name}' must be a string.")
+        if coerce:
+            value = _coerce_to_string(value)
+        else:
+            raise OutputValidationError(f"Field '{field_name}' must be a string.")
     cleaned = _strip_code_fence(value).strip().strip("`")
     cleaned = cleaned.replace("\r", "\n").replace("\n", " ")
     cleaned = _normalize_whitespace(cleaned)
@@ -215,8 +263,11 @@ def validate_final_report_payload(payload: Any) -> Dict[str, str]:
     if not isinstance(payload, dict):
         raise OutputValidationError("Final report output must be a JSON object.")
 
-    explanation = _require_string(payload.get("explanationEssay"), "explanationEssay", max_len=20_000)
-    reasoning = _require_string(payload.get("finalReasoning"), "finalReasoning", max_len=20_000)
+    # Free-text fields: coerce a non-string (e.g. a reasoning model returning a
+    # list of points or an object) into text rather than failing the whole report.
+    explanation = _require_string(payload.get("explanationEssay"), "explanationEssay", max_len=20_000, coerce=True)
+    reasoning = _require_string(payload.get("finalReasoning"), "finalReasoning", max_len=20_000, coerce=True)
+    # claimRating must remain a recognizable verdict string — do not coerce.
     raw_rating = _require_string(payload.get("claimRating"), "claimRating", max_len=128)
     canonical = _CLAIM_RATING_CANONICAL.get(raw_rating.lower())
     if not canonical:

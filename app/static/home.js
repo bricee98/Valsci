@@ -6,6 +6,9 @@
     formatDateTime,
     hideStatus,
     setStatus,
+    revealPanel,
+    flashButton,
+    buttonBusy,
   } = window.ValsciUI;
 
   const config = window.homePageConfig || { providers: [] };
@@ -32,7 +35,7 @@
       select.disabled = true;
       byId("modelDefault").disabled = true;
       byId("stageClaimsBtn").disabled = true;
-      byId("estimateBtn").disabled = true;
+      byId("queueRunBtn").disabled = true;
       setStatus(byId("homeRunStatus"), {
         title: "No providers configured",
         message: "Open Providers from the top navigation, enable a provider, and add at least one model before running claims.",
@@ -44,7 +47,7 @@
     select.disabled = false;
     byId("modelDefault").disabled = false;
     byId("stageClaimsBtn").disabled = false;
-    byId("estimateBtn").disabled = false;
+    byId("queueRunBtn").disabled = false;
     select.innerHTML = providerCatalog.map(provider => `
       <option value="${escapeHtml(provider.provider_id)}">${escapeHtml(provider.label || provider.provider_id)}</option>
     `).join("");
@@ -107,7 +110,6 @@
 
   function invalidatePreflight() {
     preflightPayload = null;
-    byId("queueRunBtn").disabled = true;
     byId("preflightPanel").classList.add("hidden");
   }
 
@@ -122,7 +124,7 @@
         message: "Paste one claim per line or upload a text file before staging.",
         tone: "warning",
       });
-      return;
+      return 0;
     }
     let addedCount = 0;
     let duplicateCount = 0;
@@ -144,6 +146,7 @@
       message: `${addedCount} added${duplicateCount ? `, ${duplicateCount} duplicate${duplicateCount === 1 ? "" : "s"} skipped` : ""}.`,
       tone: addedCount ? "success" : "warning",
     });
+    return addedCount;
   }
 
   function renderStagedClaims() {
@@ -174,7 +177,6 @@
     if (!data.totals.pricing_complete) {
       warnings.push(`<div class="status-card error-card"><strong>Pricing metadata is incomplete.</strong><span>Missing pricing for ${escapeHtml(data.totals.missing_pricing_models.join(", "))}.</span></div>`);
     }
-    byId("preflightPanel").classList.remove("hidden");
     byId("preflightPanel").innerHTML = `
       <div class="panel-header">
         <div>
@@ -190,7 +192,7 @@
         <div class="summary-cell"><span class="label">Upper Bound</span><span class="value">${formatCurrency(data.totals.upper_bound_cost_usd)}</span></div>
       </div>
     `;
-    byId("queueRunBtn").disabled = !data.totals.pricing_complete;
+    revealPanel(byId("preflightPanel"));
   }
 
   async function runPreflight() {
@@ -250,11 +252,10 @@
 
     if (data.created_runs?.length) {
       const firstRun = data.created_runs[0];
-      if (data.created_runs.length === 1 && firstRun.claim_key) {
-        window.location.href = `/claims/${encodeURIComponent(firstRun.claim_key)}?run_id=${encodeURIComponent(firstRun.run_id)}`;
-        return;
-      }
-      window.location.href = `/batch_results?batch_id=${encodeURIComponent(data.batch_id)}`;
+      const claimParam = data.created_runs.length === 1 && firstRun.transport_claim_id
+        ? `&claim_id=${encodeURIComponent(firstRun.transport_claim_id)}`
+        : "";
+      window.location.href = `/progress?batch_id=${encodeURIComponent(data.batch_id)}${claimParam}`;
       return;
     }
 
@@ -440,7 +441,12 @@
   byId("resultsPerQuery")?.addEventListener("input", invalidatePreflight);
   byId("useBibliometrics")?.addEventListener("change", invalidatePreflight);
 
-  byId("stageClaimsBtn")?.addEventListener("click", () => loadClaimsIntoStage(byId("claimText").value));
+  byId("stageClaimsBtn")?.addEventListener("click", () => {
+    const added = loadClaimsIntoStage(byId("claimText").value);
+    flashButton(byId("stageClaimsBtn"), added
+      ? { label: `Staged ${added} ✓` }
+      : { label: "Nothing staged", tone: "error", duration: 1400 });
+  });
   byId("clearClaimsBtn")?.addEventListener("click", () => {
     stagedClaims.splice(0, stagedClaims.length);
     renderStagedClaims();
@@ -462,25 +468,55 @@
     renderStagedClaims();
     invalidatePreflight();
   });
-  byId("estimateBtn")?.addEventListener("click", () => {
-    runPreflight().catch(error => setStatus(byId("homeRunStatus"), { title: "Estimate failed", message: error.message, tone: "error" }));
-  });
   byId("queueRunBtn")?.addEventListener("click", () => {
-    try {
+    const button = byId("queueRunBtn");
+    // Step 1: estimate (skipped when a fresh estimate already exists),
+    // Step 2: review and approve the cost in the confirmation modal.
+    const openWhenPriced = () => {
+      if (!preflightPayload.totals.pricing_complete) {
+        setStatus(byId("homeRunStatus"), {
+          title: "Pricing metadata is incomplete",
+          message: `Missing pricing for ${preflightPayload.totals.missing_pricing_models.join(", ")}. Add it on the Providers page, then try again.`,
+          tone: "error",
+        });
+        return;
+      }
+      hideStatus(byId("homeRunStatus"));
       openCostModal();
-    } catch (error) {
-      setStatus(byId("homeRunStatus"), { title: "Queue blocked", message: error.message, tone: "error" });
+    };
+    if (preflightPayload) {
+      openWhenPriced();
+      return;
     }
+    const restore = buttonBusy(button, "Estimating…");
+    runPreflight().then(() => {
+      restore();
+      openWhenPriced();
+    }).catch(error => {
+      restore();
+      flashButton(button, { label: "Estimate failed ✗", tone: "error" });
+      setStatus(byId("homeRunStatus"), { title: "Estimate failed", message: error.message, tone: "error" });
+    });
   });
   byId("cancelCostBtn")?.addEventListener("click", () => byId("costModal").classList.add("hidden"));
   byId("confirmCostCheckbox")?.addEventListener("change", event => {
     byId("confirmCostBtn").disabled = !event.target.checked;
   });
   byId("confirmCostBtn")?.addEventListener("click", () => {
-    queueRun().catch(error => setStatus(byId("homeRunStatus"), { title: "Queue failed", message: error.message, tone: "error" }));
+    const restore = buttonBusy(byId("confirmCostBtn"), "Queueing…");
+    queueRun().catch(error => {
+      restore();
+      byId("costModal").classList.add("hidden");
+      setStatus(byId("homeRunStatus"), { title: "Queue failed", message: error.message, tone: "error" });
+    });
   });
   byId("migrateAllBtn")?.addEventListener("click", () => {
-    migrateAll().catch(error => setStatus(byId("homeRunStatus"), { title: "Migration failed", message: error.message, tone: "error" }));
+    const restore = buttonBusy(byId("migrateAllBtn"), "Migrating…");
+    migrateAll().catch(error => {
+      restore();
+      flashButton(byId("migrateAllBtn"), { label: "Migration failed ✗", tone: "error" });
+      setStatus(byId("homeRunStatus"), { title: "Migration failed", message: error.message, tone: "error" });
+    });
   });
 
   syncProviderOptions();

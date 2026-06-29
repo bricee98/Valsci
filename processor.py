@@ -14,6 +14,8 @@ from app.services.llm.types import empty_usage, merge_usage, normalize_usage
 from app.services.llm.validators import OutputValidationError, validate_query_list
 from app.services.paper_analyzer import PaperAnalyzer
 from app.services.evidence_scorer import EvidenceScorer
+from app.services import processor_heartbeat
+from app.services.env_config import apply_env_vars_to_runtime, env_file_mtime
 from app.services.stage_execution import normalize_stop_after
 import time
 from app.config import settings
@@ -31,6 +33,25 @@ logger = logging.getLogger(__name__)
 
 QUEUED_JOBS_DIR = settings.Config.QUEUED_JOBS_DIR
 SAVED_JOBS_DIR = settings.Config.SAVED_JOBS_DIR
+
+
+def terminal_failure_report(explanation, *, queries=None, claim_text=""):
+    """Build a report for a claim that could NOT be evaluated — a processing
+    failure (query generation crashed, token cap hit, etc.), not a verdict.
+
+    Marked with evaluation_failed=True and an unset rating so the UI shows it as
+    "Failed" rather than "No Evidence (0)", which is a legitimate verdict reserved
+    for runs that completed the search and genuinely found no relevant evidence.
+    """
+    return {
+        "relevantPapers": [],
+        "explanation": explanation,
+        "claimRating": None,
+        "evaluation_failed": True,
+        "timing_stats": {},
+        "searchQueries": queries or [],
+        "claim_text": claim_text or "",
+    }
 
 class ValsciProcessor:
     def __init__(self):
@@ -120,6 +141,25 @@ class ValsciProcessor:
         if paper_id is None:
             return
         self._paper_stage_retries.pop((batch_id, claim_id, paper_id, stage), None)
+
+    def _stage_retry_issue(self, human_stage: str, retries_used: int, retries_exhausted: bool) -> Tuple[str, str]:
+        """Build a (severity, message) for a stage failure that tells the reader
+        what happens next. A failure with retries left is a transient WARN that
+        says it is retrying; an exhausted failure is a terminal ERROR that says it
+        gave up — so a fresh reader can tell recovered-and-retried apart from
+        actually-failed instead of seeing every attempt as a scary red error."""
+        max_attempts = self.max_stage_retries + 1
+        if retries_exhausted:
+            return (
+                "ERROR",
+                f"{human_stage} failed on attempt {retries_used} of {max_attempts} — "
+                f"no retries left, so this stage was given up.",
+            )
+        return (
+            "WARN",
+            f"{human_stage} failed on attempt {retries_used} of {max_attempts} — "
+            f"automatically retrying.",
+        )
 
     def _clear_claim_retry_state(self, batch_id: str, claim_id: str) -> None:
         for retry_key in [
@@ -267,14 +307,11 @@ class ValsciProcessor:
                     details={"max_tokens_per_claim": self.max_tokens_per_claim, "claim_tokens": new_usage},
                 )
                 claim_data['status'] = 'processed'
-                report = {
-                    "relevantPapers": [],
-                    "explanation": "Stopped: token usage exceeded our cap.",
-                    "claimRating": 0,
-                    "timing_stats": {},
-                    "searchQueries": claim_data.get('semantic_scholar_queries', []),
-                    "claim_text": claim_data.get('text', '')
-                }
+                report = terminal_failure_report(
+                    "Stopped: token usage exceeded our cap.",
+                    queries=claim_data.get('semantic_scholar_queries', []),
+                    claim_text=claim_data.get('text', ''),
+                )
                 claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
                 await self._save_processed_claim(claim_data, batch_id, claim_id)
 
@@ -543,14 +580,10 @@ class ValsciProcessor:
                     message="Query generation produced zero queries. Skipping paper search.",
                     details={"claim_text_length": len(claim_data.get('text', ''))},
                 )
-                report = {
-                    "relevantPapers": [],
-                    "explanation": "Search query generation produced no queries. The claim could not be evaluated.",
-                    "claimRating": 0,
-                    "timing_stats": {},
-                    "searchQueries": [],
-                    "claim_text": claim_data.get('text', ''),
-                }
+                report = terminal_failure_report(
+                    "Search query generation produced no queries. The claim could not be evaluated.",
+                    claim_text=claim_data.get('text', ''),
+                )
                 claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
                 await self._save_processed_claim(claim_data, batch_id, claim_id)
                 self._clear_claim_stage_retry(batch_id, claim_id, LLMTask.QUERY_GENERATION)
@@ -576,13 +609,14 @@ class ValsciProcessor:
                 batch_id, claim_id, LLMTask.QUERY_GENERATION
             )
 
+            severity, message = self._stage_retry_issue("Search query generation", retries_used, retries_exhausted)
             await ai_service.add_issue(
                 batch_id=batch_id,
                 claim_id=claim_id,
-                severity="ERROR",
+                severity=severity,
                 stage=LLMTask.QUERY_GENERATION,
-                message=f"Search query generation failed (processor attempt {retries_used}/{self.max_stage_retries + 1}).",
-                details={"exception_message": str(e)},
+                message=message,
+                details={"exception_type": type(e).__name__, "exception_message": str(e)},
             )
 
             if retries_exhausted:
@@ -590,14 +624,10 @@ class ValsciProcessor:
                 logger.error(f"Claim {claim_id}: query generation failed after {retries_used} processor attempts. Marking as processed.")
                 claim_data = self.claims_in_memory.get((batch_id, claim_id), claim_data)
                 claim_data['status'] = 'processed'
-                report = {
-                    "relevantPapers": [],
-                    "explanation": f"Search query generation failed after all retries: {str(e)}",
-                    "claimRating": 0,
-                    "timing_stats": {},
-                    "searchQueries": [],
-                    "claim_text": claim_data.get('text', ''),
-                }
+                report = terminal_failure_report(
+                    f"Search query generation failed after all retries: {str(e)}",
+                    claim_text=claim_data.get('text', ''),
+                )
                 claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
                 await self._save_processed_claim(claim_data, batch_id, claim_id)
                 self._clear_claim_stage_retry(batch_id, claim_id, LLMTask.QUERY_GENERATION)
@@ -635,14 +665,10 @@ class ValsciProcessor:
                     details={"error": str(exc)},
                 )
                 claim_data['status'] = 'processed'
-                report = {
-                    "relevantPapers": [],
-                    "explanation": "Query validation failed before paper search. The claim could not be evaluated.",
-                    "claimRating": 0,
-                    "timing_stats": {},
-                    "searchQueries": [],
-                    "claim_text": claim_data.get('text', ''),
-                }
+                report = terminal_failure_report(
+                    "Query validation failed before paper search. The claim could not be evaluated.",
+                    claim_text=claim_data.get('text', ''),
+                )
                 claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
                 await self._save_processed_claim(claim_data, batch_id, claim_id)
                 self._clear_claim_stage_retry(batch_id, claim_id, "paper_search")
@@ -674,14 +700,10 @@ class ValsciProcessor:
                     details={},
                 )
                 claim_data['status'] = 'processed'
-                report = {
-                    "relevantPapers": [],
-                    "explanation": "No search queries were available. The claim could not be evaluated.",
-                    "claimRating": 0,
-                    "timing_stats": {},
-                    "searchQueries": [],
-                    "claim_text": claim_data.get('text', ''),
-                }
+                report = terminal_failure_report(
+                    "No search queries were available. The claim could not be evaluated.",
+                    claim_text=claim_data.get('text', ''),
+                )
                 claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
                 await self._save_processed_claim(claim_data, batch_id, claim_id)
                 self._clear_claim_stage_retry(batch_id, claim_id, "paper_search")
@@ -742,25 +764,23 @@ class ValsciProcessor:
             retries_used, retries_exhausted = self._claim_stage_retry_result(
                 batch_id, claim_id, "paper_search"
             )
+            severity, message = self._stage_retry_issue("Paper search", retries_used, retries_exhausted)
             await ai_service.add_issue(
                 batch_id=batch_id,
                 claim_id=claim_id,
-                severity="ERROR",
+                severity=severity,
                 stage="paper_search",
-                message=f"Paper search failed (processor attempt {retries_used}/{self.max_stage_retries + 1}).",
-                details={"exception_message": str(e)},
+                message=message,
+                details={"exception_type": type(e).__name__, "exception_message": str(e)},
             )
             if retries_exhausted:
                 claim_data = self.claims_in_memory.get((batch_id, claim_id), claim_data)
                 claim_data['status'] = 'processed'
-                report = {
-                    "relevantPapers": [],
-                    "explanation": f"Paper search failed after all retries: {str(e)}",
-                    "claimRating": 0,
-                    "timing_stats": {},
-                    "searchQueries": claim_data.get('semantic_scholar_queries', []),
-                    "claim_text": claim_data.get('text', ''),
-                }
+                report = terminal_failure_report(
+                    f"Paper search failed after all retries: {str(e)}",
+                    queries=claim_data.get('semantic_scholar_queries', []),
+                    claim_text=claim_data.get('text', ''),
+                )
                 claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
                 await self._save_processed_claim(claim_data, batch_id, claim_id)
                 self._clear_claim_stage_retry(batch_id, claim_id, "paper_search")
@@ -800,14 +820,11 @@ class ValsciProcessor:
                 },
             )
             claim_data['status'] = 'processed'
-            report = {
-                "relevantPapers": [],
-                "explanation": "Stopped: token usage exceeded our cap.",
-                "claimRating": 0,
-                "timing_stats": {},
-                "searchQueries": claim_data.get('semantic_scholar_queries', []),
-                "claim_text": claim_data.get('text', '')
-            }
+            report = terminal_failure_report(
+                "Stopped: token usage exceeded our cap.",
+                queries=claim_data.get('semantic_scholar_queries', []),
+                claim_text=claim_data.get('text', ''),
+            )
             claim_data['report'] = await self._attach_report_debug(batch_id, claim_id, claim_data, report)
             await self._save_processed_claim(claim_data, batch_id, claim_id)
             return
@@ -1096,13 +1113,14 @@ class ValsciProcessor:
             retries_used, retries_exhausted = self._paper_stage_retry_result(
                 batch_id, claim_id, paper_id, LLMTask.PAPER_ANALYSIS
             )
+            severity, message = self._stage_retry_issue("Paper analysis", retries_used, retries_exhausted)
             await ai_service.add_issue(
                 batch_id=batch_id,
                 claim_id=claim_id,
-                severity="ERROR",
+                severity=severity,
                 stage=LLMTask.PAPER_ANALYSIS,
-                message=f"Paper analysis failed (processor attempt {retries_used}/{self.max_stage_retries + 1}).",
-                details={"paper_id": paper_id, "exception_message": str(e)},
+                message=message,
+                details={"paper_id": paper_id, "exception_type": type(e).__name__, "exception_message": str(e)},
             )
             if retries_exhausted:
                 claim_data = self.claims_in_memory.get((batch_id, claim_id))
@@ -1172,13 +1190,14 @@ class ValsciProcessor:
             retries_used, retries_exhausted = self._paper_stage_retry_result(
                 batch_id, claim_id, paper_id, LLMTask.VENUE_SCORING
             )
+            severity, message = self._stage_retry_issue("Evidence scoring", retries_used, retries_exhausted)
             await ai_service.add_issue(
                 batch_id=batch_id,
                 claim_id=claim_id,
-                severity="ERROR",
+                severity=severity,
                 stage=LLMTask.VENUE_SCORING,
-                message=f"Evidence scoring failed for paper (processor attempt {retries_used}/{self.max_stage_retries + 1}).",
-                details={"paper_id": paper_id, "exception_message": str(e)},
+                message=message,
+                details={"paper_id": paper_id, "exception_type": type(e).__name__, "exception_message": str(e)},
             )
             if retries_exhausted:
                 claim_data = self.claims_in_memory.get((batch_id, claim_id))
@@ -1206,8 +1225,18 @@ class ValsciProcessor:
         """Generate the final report."""
         ai_service = self.ai_service
         try:
-            # Get claim data from memory
-            claim_data = self.claims_in_memory[(batch_id, claim_id)]
+            # Get claim data from memory. If it's gone, the claim already finished
+            # and was evicted (a redundant/late final-report dispatch after the
+            # report was saved) — skip quietly. Reporting this as a failure logged
+            # a scary ERROR for work that actually succeeded, with an opaque
+            # KeyError message that was just the (batch_id, claim_id) tuple.
+            claim_data = self.claims_in_memory.get((batch_id, claim_id))
+            if claim_data is None:
+                logger.info(
+                    f"Skipping final report for claim {claim_id}: already completed "
+                    f"and no longer in memory (redundant dispatch)."
+                )
+                return
             self._ensure_claim_usage(claim_data)
             ai_service = self._get_ai_service(claim_data)
             
@@ -1269,39 +1298,58 @@ class ValsciProcessor:
             await self._save_processed_claim(claim_data, batch_id, claim_id)
 
         except Exception as e:
-            logger.error(f"Error preparing final report: {e}")
+            logger.error(f"Error preparing final report: {type(e).__name__}: {e}", exc_info=True)
+            claim_data = self.claims_in_memory.get((batch_id, claim_id))
+            details = {"exception_type": type(e).__name__, "exception_message": str(e)}
+            if claim_data is None:
+                # The claim finished and was evicted from memory while this attempt
+                # was still running — a stale/duplicate final-report dispatch. The
+                # report that was already saved stands; the verdict is untouched.
+                # This is not a failure of the run, so don't log it as one or claim
+                # a fallback was applied (it was not).
+                await ai_service.add_issue(
+                    batch_id=batch_id,
+                    claim_id=claim_id,
+                    severity="WARN",
+                    stage=LLMTask.FINAL_REPORT,
+                    message="A duplicate final-report attempt errored after this claim had already completed; it was ignored. The saved report and its verdict are unaffected.",
+                    details=details,
+                )
+                return
+            # Genuine failure while finalizing the report: replace it with a fallback
+            # and mark the run failed so it reads as "Failed" instead of masquerading
+            # as a real verdict. The message reflects what actually happened.
             await ai_service.add_issue(
                 batch_id=batch_id,
                 claim_id=claim_id,
                 severity="ERROR",
                 stage=LLMTask.FINAL_REPORT,
-                message="Final report generation failed.",
-                details={"exception_message": str(e)},
+                message="Final report generation failed — the run was finalized with a fallback report and marked failed.",
+                details=details,
             )
-            claim_data = self.claims_in_memory.get((batch_id, claim_id))
-            if claim_data:
-                claim_data["status"] = "processed"
-                claim_data["completed_stage"] = LLMTask.FINAL_REPORT
-                claim_data["is_stage_checkpoint"] = False
-                fallback_report = {
-                    "relevantPapers": [],
-                    "nonRelevantPapers": self.claim_processor._format_non_relevant_papers(
-                        claim_data.get("non_relevant_papers", [])
-                    ),
-                    "inaccessiblePapers": self.claim_processor._format_inaccessible_papers(
-                        claim_data.get("inaccessible_papers", [])
-                    ),
-                    "explanation": f"Error generating final report: {str(e)}",
-                    "claimRating": -1,
-                    "timing_stats": {},
-                    "searchQueries": claim_data.get("semantic_scholar_queries", []),
-                    "claim_text": claim_data.get("text", ""),
-                    "bibliometric_config": claim_data.get("bibliometric_config"),
-                }
-                claim_data["report"] = await self._attach_report_debug(
-                    batch_id, claim_id, claim_data, fallback_report
-                )
-                await self._save_processed_claim(claim_data, batch_id, claim_id)
+            claim_data["status"] = "processed"
+            claim_data["completed_stage"] = LLMTask.FINAL_REPORT
+            claim_data["is_stage_checkpoint"] = False
+            fallback_report = {
+                "relevantPapers": [],
+                "nonRelevantPapers": self.claim_processor._format_non_relevant_papers(
+                    claim_data.get("non_relevant_papers", [])
+                ),
+                "inaccessiblePapers": self.claim_processor._format_inaccessible_papers(
+                    claim_data.get("inaccessible_papers", [])
+                ),
+                "explanation": f"Error generating final report: {str(e)}",
+                "claimRating": -1,
+                "evaluation_failed": True,
+                "timing_stats": {},
+                "searchQueries": claim_data.get("semantic_scholar_queries", []),
+                "claim_text": claim_data.get("text", ""),
+                "bibliometric_config": claim_data.get("bibliometric_config"),
+            }
+            claim_data["report"] = await self._attach_report_debug(
+                batch_id, claim_id, claim_data, fallback_report
+            )
+            await self._save_processed_claim(claim_data, batch_id, claim_id)
         finally:
             self.claims_final_reporting_in_progress.discard(claim_id)
 
@@ -1358,14 +1406,11 @@ class ValsciProcessor:
                                         "claim_tokens": self.claim_token_usage.get(claim_id, 0),
                                     },
                                 )
-                                report = {
-                                    "relevantPapers": [],
-                                    "explanation": "Stopped: token usage exceeded our cap.",
-                                    "claimRating": 0,
-                                    "timing_stats": {},
-                                    "searchQueries": claim_data.get('semantic_scholar_queries', []),
-                                    "claim_text": claim_data.get('text', '')
-                                }
+                                report = terminal_failure_report(
+                                    "Stopped: token usage exceeded our cap.",
+                                    queries=claim_data.get('semantic_scholar_queries', []),
+                                    claim_text=claim_data.get('text', ''),
+                                )
                                 claim_data['report'] = await self._attach_report_debug(
                                     batch_id, claim_id, claim_data, report
                                 )
@@ -1429,8 +1474,30 @@ async def main():
             logger.info("Recovered %s waiting reuse runs during startup.", recovered_waiting_runs)
         logger.info("Started monitoring queued_jobs directory")
 
+        last_heartbeat = 0.0
+        # Live config reload: when env_vars.json changes (e.g. saved from the
+        # Settings page), re-apply it to Config so the next claim's LLM gateway —
+        # which the GatewayFactory rebuilds from fresh Config reads — picks up the
+        # new routing, token budgets, timeouts, etc. without restarting the
+        # process. Storage-path settings, captured at import, still need a restart.
+        last_config_mtime = env_file_mtime()
         while True:
             try:
+                current_config_mtime = env_file_mtime()
+                if current_config_mtime is not None and current_config_mtime != last_config_mtime:
+                    try:
+                        await asyncio.to_thread(apply_env_vars_to_runtime)
+                        last_config_mtime = current_config_mtime
+                        logger.info("Reloaded configuration from env_vars.json (live update).")
+                    except Exception as exc:
+                        logger.error(f"Failed to reload env_vars.json: {exc}")
+                if time.time() - last_heartbeat >= processor_heartbeat.WRITE_INTERVAL_SECONDS:
+                    await asyncio.to_thread(
+                        processor_heartbeat.write_heartbeat,
+                        settings.Config.STATE_DIR,
+                        config_mtime=last_config_mtime,
+                    )
+                    last_heartbeat = time.time()
                 await processor.check_for_claims()
                 await asyncio.sleep(1)
             except Exception as e:

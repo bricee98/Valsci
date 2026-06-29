@@ -47,6 +47,9 @@ class OpenAIProvider(BaseProvider):
         response = await self.async_client.chat.completions.create(**kwargs)
         message = response.choices[0].message
         raw_text = message.content or ""
+        # Reasoning models emit chain-of-thought into a side channel, not content.
+        # Captured so traces and the empty-content diagnostic can reference it.
+        reasoning = getattr(message, "reasoning", None) or getattr(message, "reasoning_content", None)
         usage = {}
         if getattr(response, "usage", None):
             usage = {
@@ -62,6 +65,7 @@ class OpenAIProvider(BaseProvider):
             usage=usage,
             http_status=None,
             raw_response=response.model_dump() if hasattr(response, "model_dump") else response,
+            reasoning=str(reasoning) if reasoning else None,
         )
 
 

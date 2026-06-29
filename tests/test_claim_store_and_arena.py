@@ -55,7 +55,9 @@ def seed_stage_checkpoint_run(
     candidate_prefix: str | None = None,
     candidate_label: str | None = None,
     candidate_color: str | None = None,
+    status: str = "processed",
 ):
+    completed_stage = stop_after if status == "processed" else None
     claim_record, _ = store.get_or_create_claim(claim_text, batch_tags=[arena_id])
     run_record = store.create_run(
         claim_record=claim_record,
@@ -67,9 +69,9 @@ def seed_stage_checkpoint_run(
         cost_confirmation={"accepted": True},
         transport_batch_id=arena_id,
         review_type="regular",
-        status="processed",
+        status=status,
         source="arena",
-        completed_stage=stop_after,
+        completed_stage=completed_stage,
         is_stage_checkpoint=(stop_after != "final_report"),
         candidate_id=candidate_id,
         candidate_index=candidate_index,
@@ -79,7 +81,7 @@ def seed_stage_checkpoint_run(
     )
     claim_data = {
         "text": claim_text,
-        "status": "processed",
+        "status": status,
         "batch_id": arena_id,
         "claim_id": run_record["run_id"],
         "run_id": run_record["run_id"],
@@ -88,7 +90,7 @@ def seed_stage_checkpoint_run(
         "review_type": "regular",
         "execution_mode": "full_pipeline",
         "stop_after": stop_after,
-        "completed_stage": stop_after,
+        "completed_stage": completed_stage,
         "is_stage_checkpoint": stop_after != "final_report",
         "provider_snapshot": provider_snapshot,
         "model_overrides": {},
@@ -490,16 +492,70 @@ def test_create_arena_can_compare_same_provider_with_different_candidate_labels(
     assert labels == {"Default Baseline", "Default Final Only"}
 
 
+def test_candidate_default_model_matches_chosen_model(monkeypatch, tmp_path):
+    # A candidate's stored default_model should reflect the model it actually runs,
+    # not the provider's global default — otherwise the recorded config contradicts
+    # the per-stage models (the bug that made an arena look like it ran the wrong model).
+    client, saved_jobs_dir, queued_jobs_dir, state_dir, provider_catalog_path = create_test_client(monkeypatch, tmp_path)
+    catalog = ProviderCatalog(str(provider_catalog_path))
+    catalog.upsert_provider(
+        {
+            "provider_id": "default",
+            "label": "Two Model Provider",
+            "provider_type": "ollama",
+            "base_url": "http://localhost:11434/v1",
+            "default_model": "llama3.1:8b",
+            "models": [
+                {"model_name": "llama3.1:8b", "context_window_tokens": 8192, "max_output_tokens_default": 1024,
+                 "supports_temperature": True, "supports_json_mode": True, "input_cost_per_million": 0.0, "output_cost_per_million": 0.0},
+                {"model_name": "gemma4:12b", "context_window_tokens": 8192, "max_output_tokens_default": 1024,
+                 "supports_temperature": True, "supports_json_mode": True, "input_cost_per_million": 0.0, "output_cost_per_million": 0.0},
+            ],
+        }
+    )
+
+    response = client.post(
+        "/api/v1/arenas",
+        json={
+            "title": "Model Identity Arena",
+            "claims": ["Creatine improves short-term memory."],
+            "candidates": [
+                # Explicit default_model (how the builder now sends it).
+                {"provider_id": "default", "label": "Gemma", "default_model": "gemma4:12b",
+                 "model_overrides": {stage: "gemma4:12b" for stage in
+                                     ["query_generation", "paper_analysis", "venue_scoring", "final_report"]}},
+                # No explicit default_model, but uniform overrides -> inferred.
+                {"provider_id": "default", "label": "Gemma Inferred",
+                 "model_overrides": {stage: "gemma4:12b" for stage in
+                                     ["query_generation", "paper_analysis", "venue_scoring", "final_report"]}},
+            ],
+            "cost_confirmation": {"accepted": True},
+        },
+    )
+    assert response.status_code == 202
+    payload = response.get_json()
+
+    store = ClaimStore(
+        state_dir=str(state_dir),
+        saved_jobs_dir=str(saved_jobs_dir),
+        queued_jobs_dir=str(queued_jobs_dir),
+        trace_dir=str(saved_jobs_dir),
+    )
+    for run in payload["created_runs"]:
+        record = store.get_run(run["run_id"])
+        assert record["provider_snapshot"]["default_model"] == "gemma4:12b"
+        assert ClaimStore.effective_models(record)["task_models"]["final_report"] == "gemma4:12b"
+
+
 def test_reuse_retrieval_only_queues_baseline_run_initially(monkeypatch, tmp_path):
     client, saved_jobs_dir, queued_jobs_dir, state_dir, provider_catalog_path = create_test_client(monkeypatch, tmp_path)
     catalog = ProviderCatalog(str(provider_catalog_path))
     catalog.upsert_provider(
         {
-            "provider_id": "local-alt",
-            "label": "Local Alt",
-            "provider_type": "local",
+            "provider_id": "ollama-alt",
+            "label": "Ollama Alt",
+            "provider_type": "ollama",
             "base_url": "http://localhost:11434/v1",
-            "local_backend": "ollama",
             "default_model": "llama3.2",
             "models": [
                 {
@@ -519,7 +575,7 @@ def test_reuse_retrieval_only_queues_baseline_run_initially(monkeypatch, tmp_pat
         "/api/v1/arenas",
         json={
             "claims": ["Blue light blocking glasses improve sleep latency."],
-            "candidates": [{"provider_id": "default"}, {"provider_id": "local-alt"}],
+            "candidates": [{"provider_id": "default"}, {"provider_id": "ollama-alt"}],
             "execution_mode": "reuse_retrieval",
             "cost_confirmation": {"accepted": True},
         },
@@ -792,7 +848,7 @@ def test_arena_page_surfaces_advanced_reuse_copy(monkeypatch, tmp_path):
     assert response.status_code == 200
     page = response.get_data(as_text=True)
     assert "Reuse retrieval" in page
-    assert "Candidate A supplies shared query-generation and retrieval outputs" in page
+    assert "Reuse retrieval: candidate A supplies retrieval" in page
     assert "Advanced Arena Settings" in page
 
 
@@ -862,6 +918,184 @@ def test_arenas_api_returns_summary_and_progress(monkeypatch, tmp_path):
     assert progress_payload["summary"]["arena_id"] == arena["arena_id"]
     assert len(progress_payload["candidates"]) == 2
     assert {candidate["candidate"]["prefix"] for candidate in progress_payload["candidates"]} == {"A", "B"}
+
+
+def test_arena_summary_reports_needs_attention_for_failed_runs(monkeypatch, tmp_path):
+    client, saved_jobs_dir, queued_jobs_dir, state_dir, provider_catalog_path = create_test_client(monkeypatch, tmp_path)
+    store = ClaimStore(
+        state_dir=str(state_dir),
+        saved_jobs_dir=str(saved_jobs_dir),
+        queued_jobs_dir=str(queued_jobs_dir),
+        trace_dir=str(saved_jobs_dir),
+    )
+    arena = store.create_arena(
+        title="Failure Arena",
+        batch_tags=["failure-arena"],
+        execution_mode="full_pipeline",
+        current_stage="final_report",
+        candidates=[
+            {"candidate_id": "candidate-0", "candidate_index": 0, "candidate_prefix": "A", "candidate_color": "#0f766e", "label": "Baseline"},
+            {"candidate_id": "candidate-1", "candidate_index": 1, "candidate_prefix": "B", "candidate_color": "#c2410c", "label": "Alt"},
+        ],
+    )
+    snapshot = ProviderCatalog(str(provider_catalog_path)).build_snapshot("default")
+    run_ok = seed_stage_checkpoint_run(
+        store,
+        saved_jobs_dir,
+        arena_id=arena["arena_id"],
+        claim_text="Creatine improves memory.",
+        provider_snapshot={**snapshot, "label": "Baseline"},
+        stop_after="final_report",
+        candidate_id="candidate-0",
+        candidate_index=0,
+        candidate_prefix="A",
+        candidate_label="Baseline",
+        candidate_color="#0f766e",
+    )
+    run_failed = seed_stage_checkpoint_run(
+        store,
+        saved_jobs_dir,
+        arena_id=arena["arena_id"],
+        claim_text="Creatine improves memory.",
+        provider_snapshot={**snapshot, "label": "Alt"},
+        stop_after="final_report",
+        candidate_id="candidate-1",
+        candidate_index=1,
+        candidate_prefix="B",
+        candidate_label="Alt",
+        candidate_color="#c2410c",
+        status="error",
+    )
+    arena["claim_keys"] = [run_ok["claim_key"]]
+    arena = store.append_arena_stage_history(
+        arena,
+        stage="final_report",
+        run_ids=[run_ok["run_id"], run_failed["run_id"]],
+        source="initial_submit",
+    )
+
+    summary = store.build_arena_summary(arena)
+    assert summary["status"] == "needs_attention"
+    assert summary["status_counts"] == {"processed": 1, "error": 1}
+
+    list_payload = client.get("/api/v1/arenas").get_json()
+    assert list_payload["arenas"][0]["status"] == "needs_attention"
+
+    # A run that is still queued keeps the arena in_progress even alongside a failure.
+    run_pending = seed_stage_checkpoint_run(
+        store,
+        saved_jobs_dir,
+        arena_id=arena["arena_id"],
+        claim_text="Vitamin D reduces falls.",
+        provider_snapshot={**snapshot, "label": "Baseline"},
+        stop_after="final_report",
+        candidate_id="candidate-0",
+        candidate_index=0,
+        candidate_prefix="A",
+        candidate_label="Baseline",
+        candidate_color="#0f766e",
+        status="queued",
+    )
+    arena = store.append_arena_stage_history(
+        arena,
+        stage="final_report",
+        run_ids=[run_ok["run_id"], run_failed["run_id"], run_pending["run_id"]],
+        source="initial_submit",
+    )
+    summary = store.build_arena_summary(arena)
+    assert summary["status"] == "in_progress"
+
+
+def test_arena_preferences_record_and_clear(monkeypatch, tmp_path):
+    client, saved_jobs_dir, queued_jobs_dir, state_dir, provider_catalog_path = create_test_client(monkeypatch, tmp_path)
+    store = ClaimStore(
+        state_dir=str(state_dir),
+        saved_jobs_dir=str(saved_jobs_dir),
+        queued_jobs_dir=str(queued_jobs_dir),
+        trace_dir=str(saved_jobs_dir),
+    )
+    arena = store.create_arena(
+        title="Pick Arena",
+        batch_tags=["pick-arena"],
+        execution_mode="full_pipeline",
+        current_stage="final_report",
+        candidates=[
+            {"candidate_id": "candidate-0", "candidate_index": 0, "candidate_prefix": "A", "candidate_color": "#0f766e", "label": "Baseline"},
+            {"candidate_id": "candidate-1", "candidate_index": 1, "candidate_prefix": "B", "candidate_color": "#c2410c", "label": "Alt"},
+        ],
+    )
+    snapshot = ProviderCatalog(str(provider_catalog_path)).build_snapshot("default")
+    run_a = seed_stage_checkpoint_run(
+        store,
+        saved_jobs_dir,
+        arena_id=arena["arena_id"],
+        claim_text="Creatine improves memory.",
+        provider_snapshot={**snapshot, "label": "Baseline"},
+        stop_after="final_report",
+        candidate_id="candidate-0",
+        candidate_index=0,
+        candidate_prefix="A",
+        candidate_label="Baseline",
+        candidate_color="#0f766e",
+    )
+    run_b = seed_stage_checkpoint_run(
+        store,
+        saved_jobs_dir,
+        arena_id=arena["arena_id"],
+        claim_text="Creatine improves memory.",
+        provider_snapshot={**snapshot, "label": "Alt"},
+        stop_after="final_report",
+        candidate_id="candidate-1",
+        candidate_index=1,
+        candidate_prefix="B",
+        candidate_label="Alt",
+        candidate_color="#c2410c",
+    )
+    other_claim_run = seed_stage_checkpoint_run(
+        store,
+        saved_jobs_dir,
+        arena_id=arena["arena_id"],
+        claim_text="Vitamin D reduces falls.",
+        provider_snapshot={**snapshot, "label": "Baseline"},
+        stop_after="final_report",
+        candidate_id="candidate-0",
+        candidate_index=0,
+        candidate_prefix="A",
+        candidate_label="Baseline",
+        candidate_color="#0f766e",
+    )
+    arena["claim_keys"] = [run_a["claim_key"], other_claim_run["claim_key"]]
+    store.append_arena_stage_history(
+        arena,
+        stage="final_report",
+        run_ids=[run_a["run_id"], run_b["run_id"], other_claim_run["run_id"]],
+        source="initial_submit",
+    )
+
+    assert store.get_arena(arena["arena_id"])["preferences"] == {}
+
+    prefs_url = f"/api/v1/arenas/{arena['arena_id']}/preferences"
+    response = client.post(prefs_url, json={"claim_key": run_a["claim_key"], "run_id": run_b["run_id"]})
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["preferences"][run_a["claim_key"]]["run_id"] == run_b["run_id"]
+    assert payload["preferences"][run_a["claim_key"]]["candidate_id"] == "candidate-1"
+
+    arena_payload = client.get(f"/api/v1/arenas/{arena['arena_id']}").get_json()
+    assert arena_payload["preferences"][run_a["claim_key"]]["run_id"] == run_b["run_id"]
+
+    assert client.post(prefs_url, json={"claim_key": "unknown-claim", "run_id": run_b["run_id"]}).status_code == 400
+    assert client.post(prefs_url, json={"run_id": run_b["run_id"]}).status_code == 400
+    mismatched = client.post(prefs_url, json={"claim_key": run_a["claim_key"], "run_id": other_claim_run["run_id"]})
+    assert mismatched.status_code == 400
+    assert client.post(
+        "/api/v1/arenas/does-not-exist/preferences",
+        json={"claim_key": run_a["claim_key"], "run_id": run_b["run_id"]},
+    ).status_code == 404
+
+    cleared = client.post(prefs_url, json={"claim_key": run_a["claim_key"], "run_id": None})
+    assert cleared.status_code == 200
+    assert cleared.get_json()["preferences"] == {}
 
 
 def test_claim_detail_api_respects_focused_run(monkeypatch, tmp_path):

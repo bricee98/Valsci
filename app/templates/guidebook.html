@@ -147,6 +147,7 @@
             <li><a href="#arenas-library">Arenas Library</a></li>
             <li><a href="#arena-workspace">Arena Workspace</a></li>
             <li><a href="#providers">Providers</a></li>
+            <li><a href="#settings">Settings</a></li>
             <li><a href="#migration">Migration</a></li>
             <li><a href="#trace-view">Trace View</a></li>
             <li><a href="#login">Login</a></li>
@@ -198,7 +199,7 @@
                 <li><strong>The number of queries and papers</strong> &mdash; More search queries and more results per query mean more papers to analyze, which means more tokens.</li>
                 <li><strong>Bibliometric scoring</strong> &mdash; When enabled, adds an extra scoring stage per paper.</li>
             </ul>
-            <p>Before every submission, you can click <strong>Estimate Cost</strong> to see a preflight calculation. The actual cost may differ slightly because token counts are estimates until the LLM responds. All costs are tracked per run and visible in reports, batch results, and arena workspaces.</p>
+            <p>Every submission starts with a preflight cost estimate that you review and approve before anything queues. The actual cost may differ slightly because token counts are estimates until the LLM responds. All costs are tracked per run and visible in reports, batch results, and arena workspaces.</p>
 
             <div class="gb-tip">
                 <strong>Tip:</strong> If you're exploring locally, start with the curated mini corpus on the Data page. It keeps the production Semantic Scholar lookup path intact while using a small focused dataset.
@@ -219,8 +220,8 @@
             <h3>Step 2: Submit a Claim</h3>
             <p>Go to the <strong>Home</strong> page. Select your provider and model from the dropdowns. Type a scientific claim (e.g., "Vitamin D supplementation reduces the severity of COVID-19") into the Claims textarea. Click <strong>Stage Claims</strong>.</p>
 
-            <h3>Step 3: Estimate and Queue</h3>
-            <p>Click <strong>Estimate Cost</strong> to see the projected token usage and dollar cost. If it looks reasonable, click <strong>Queue Run</strong>, approve the cost in the confirmation modal, and wait.</p>
+            <h3>Step 3: Review and Queue</h3>
+            <p>Click <strong>Review &amp; Queue Run</strong>. Valsci estimates the projected token usage and dollar cost, then opens a confirmation modal — approve the spend there and the run queues. You land on the live Progress page automatically.</p>
 
             <h3>Step 4: Monitor Progress</h3>
             <p>You'll be redirected to the <strong>Progress</strong> page, which shows a real-time progress bar as your claim moves through the pipeline stages. When complete, you'll be sent to <strong>Batch Results</strong>.</p>
@@ -388,8 +389,7 @@
 
             <h4>Cost Estimation &amp; Submission</h4>
             <ul>
-                <li><strong>Estimate Cost</strong> &mdash; Sends a preflight request to calculate the estimated token usage and dollar cost for the staged claims. The result appears in the preflight panel below.</li>
-                <li><strong>Queue Run</strong> &mdash; Enabled after a successful cost estimate. Clicking it opens a confirmation modal showing the estimated cost. You must check the "I approve this estimated spend" checkbox before confirming. Once confirmed, claims are submitted for processing and you are redirected to the Progress page.</li>
+                <li><strong>Review &amp; Queue Run</strong> &mdash; A single two-step button. It first runs a preflight estimate of token usage and dollar cost (shown in the preflight panel below), then opens a confirmation modal. You must check the "I approve this estimated spend" checkbox before confirming. Once confirmed, claims are submitted for processing and you are redirected to the Progress page. If you change any settings after the estimate, the next click re-estimates first.</li>
             </ul>
 
             <h3>Sidebar Panels</h3>
@@ -447,6 +447,7 @@
                 <li><strong>Selected Size</strong> &mdash; Disk usage for the release currently selected in the Releases panel.</li>
                 <li><strong>S2 API Key</strong> &mdash; Shows whether <code>SEMANTIC_SCHOLAR_API_KEY</code> is configured. Downloads and live search require it.</li>
                 <li><strong>Status card</strong> &mdash; Warns when no release is present, the API key is missing, or setup work is still needed.</li>
+                <li><strong>Fetch missing papers &amp; author data from the web</strong> &mdash; A toggle. When on, if a paper or author a claim needs isn't in your local corpus, Valsci pulls it from the live Semantic Scholar API (paper abstract/TLDR, and author h-index/citation counts for bibliometrics), using your API key and respecting rate limits. This is most useful with a small <em>mini</em> corpus, where live search routinely returns papers outside the bundled set. It takes effect for processing within a few seconds &mdash; no restart needed.</li>
                 <li><strong>Refresh</strong> &mdash; Re-scans local files, indices, manifest state, and data jobs.</li>
             </ul>
 
@@ -568,6 +569,16 @@
                 <li><strong>Open Trace</strong> &mdash; Open the Trace View to see every step of this run's processing.</li>
             </ul>
 
+            <h3>Runtime and Health</h3>
+            <p>This panel summarizes execution state and warning signals: current stage, elapsed time, token usage, and counters for issues, retries, truncation, context warnings, and inaccessible papers. When the issue count is non-zero it becomes a link to the <strong>Issues &amp; Warnings</strong> panel below.</p>
+
+            <h3>Issues &amp; Warnings</h3>
+            <p>If anything was logged while the run processed, this panel lists each record &mdash; severity, stage, message, timestamp, and details &mdash; with a <strong>Download (.jsonl)</strong> button for the raw log. It opens with a banner that interprets the records against the run's final outcome, so you can tell recovery from real failure at a glance:</p>
+            <ul>
+                <li><strong>Severity tells you what happened next.</strong> A <span class="badge warning-badge">WARN</span> is a transient failure that was <em>automatically retried</em> (e.g. "failed on attempt 1 of 3 &mdash; retrying"). An <span class="badge error-badge">ERROR</span> is terminal &mdash; the step gave up after exhausting retries.</li>
+                <li><strong>The banner ties it to the verdict.</strong> "This run completed despite the errors below" (the run still produced a verdict) versus "This run did not complete" (no verdict &mdash; the errors explain why). A run can log errors and still succeed, because most failures are retried.</li>
+            </ul>
+
             <h3>Stage Output</h3>
             <p>If the focused run has intermediate stage data (e.g., from an arena that stopped after a middle stage), it is displayed in this collapsible section.</p>
 
@@ -582,8 +593,7 @@
             <h3>Rerun This Claim</h3>
             <p>A form to queue a new evaluation of the same claim (or a modified version). The controls mirror the Home Page's run configuration: provider, model, duplicate strategy, batch tags, and advanced settings (queries, results per query, bibliometrics).</p>
             <ul>
-                <li><strong>Estimate Rerun</strong> &mdash; Calculate the cost of re-evaluating this claim.</li>
-                <li><strong>Queue Rerun</strong> &mdash; Submit the rerun after approving the cost in the confirmation modal.</li>
+                <li><strong>Review &amp; Queue Rerun</strong> &mdash; Estimates the cost of re-evaluating this claim, then asks you to approve the spend in a confirmation modal before queueing.</li>
             </ul>
 
             <h3>Comparison Matrix</h3>
@@ -706,13 +716,14 @@
             <p class="panel-subtitle">Real-time processing status for a batch or individual claim.</p>
             <div class="panel-divider"></div>
 
-            <p>You are sent here automatically after submitting claims. The page polls for updates and displays:</p>
+            <p>You are sent here automatically after submitting claims. The page refreshes every five seconds (a countdown in the header shows when the next refresh lands) and displays:</p>
             <ul>
-                <li><strong>Progress bar</strong> &mdash; Visual indicator of how many claims have been processed out of the total.</li>
-                <li><strong>Status breakdown</strong> &mdash; Counts of claims in each state (queued, processing, completed, error).</li>
-                <li><strong>Current claim</strong> &mdash; Which claim is currently being evaluated.</li>
+                <li><strong>Animated progress bar</strong> &mdash; Fills as claims complete; an animated stripe pattern indicates the batch is actively being worked.</li>
+                <li><strong>Pipeline stages</strong> &mdash; Counts of claims at each step (Queued &rarr; Searching literature &rarr; Analyzing evidence &rarr; Done), with a separate chip for errors.</li>
+                <li><strong>Current claim</strong> &mdash; Which claim is currently being evaluated, plus elapsed time on the page.</li>
+                <li><strong>Processor health</strong> &mdash; If the background processor daemon is not running, a banner warns you that claims will stay queued and explains how to start it. The processor reports a heartbeat every few seconds while alive.</li>
             </ul>
-            <p>Once all claims are complete, the page automatically redirects to Batch Results.</p>
+            <p>Once all claims are complete, the page automatically redirects to the results (the claim report for a single claim, or Batch Results for a batch). If the batch settles with failed claims, a warning summarizes how many failed so you can inspect or retry them.</p>
 
             <div class="gb-tip">
                 <strong>Tip:</strong> Processing time depends on the number of claims, the number of queries per claim, and the speed of your chosen LLM provider. A single claim with default settings (5 queries, 5 results each) typically takes 30 seconds to a few minutes. Local models (Ollama/llama.cpp) may be slower depending on your hardware.
@@ -765,12 +776,15 @@
             </ul>
 
             <h3>Candidates Panel</h3>
-            <p>Shows a live preview of the candidates that will participate in the arena, based on your model selections. Each candidate is a named combination of provider and model.</p>
+            <p>Shows a live preview of the candidates that will participate in the arena, based on your model selections. Each candidate is a named combination of provider and model, and each card states plainly what it will run:</p>
+            <ul>
+                <li><strong>One model</strong> (default) &mdash; The candidate runs the same model for all four pipeline stages. The card reads "Runs <em>model</em> for all four stages."</li>
+                <li><strong>Per-stage models</strong> &mdash; Click <strong>Use a different model per stage</strong> on a card to expand an inline editor with one dropdown per stage (Query Generation, Paper Analysis, Venue Scoring, Final Report). Any stage you change is tagged "changed," the card switches to a per-stage breakdown listing exactly what runs where, and a <strong>Reset all stages</strong> button returns it to a single model. You can also rename the candidate here.</li>
+            </ul>
 
             <h3>Review and Launch</h3>
             <ul>
-                <li><strong>Estimate Arena</strong> &mdash; Calculate the estimated cost for all candidates across all claims.</li>
-                <li><strong>Launch Arena</strong> &mdash; Opens a confirmation modal showing the cost breakdown. Check the "I approve this arena spend" checkbox and click <strong>Launch Arena</strong> to start the comparison. You will be redirected to the Arena Workspace.</li>
+                <li><strong>Review &amp; Launch Arena</strong> &mdash; Estimates the cost for all candidates across all claims, then opens a confirmation modal with the breakdown. Check the "I approve this arena spend" checkbox and click <strong>Launch Arena</strong> to start the comparison. You will be redirected to the Arena Workspace.</li>
             </ul>
 
             <h3>Advanced Arena Settings</h3>
@@ -790,13 +804,7 @@
 
             <h4>Advanced Provider Setup</h4>
             <p><strong>Add Provider Block</strong> &mdash; Adds a second (or third, etc.) provider block so you can compare models across different API providers in the same arena.</p>
-
-            <h4>Advanced Candidate Editor</h4>
-            <p>Once candidates are generated, this section lets you:</p>
-            <ul>
-                <li><strong>Edit candidate labels</strong> &mdash; Give candidates human-friendly names instead of auto-generated ones.</li>
-                <li><strong>Override stage models</strong> &mdash; Assign a different model for a specific pipeline stage on a per-candidate basis. For example, use a cheaper model for query generation and a more capable one for the final report.</li>
-            </ul>
+            <p>Candidate labels and per-stage model overrides are edited directly on each candidate card under <strong>Candidates</strong> (see above) &mdash; there is no separate editor.</p>
         </section>
 
         <!-- ============================================================ -->
@@ -817,13 +825,14 @@
                         <li><em>All statuses</em> &mdash; Show everything.</li>
                         <li><em>In Progress</em> &mdash; Arenas that are currently processing.</li>
                         <li><em>Ready for Review</em> &mdash; Arenas that have completed a stage and are waiting for you to review results and decide which candidates advance.</li>
+                        <li><em>Needs Attention</em> &mdash; Arenas where every run has settled but at least one failed. Open the workspace to review the failures and retry them.</li>
                         <li><em>Completed</em> &mdash; Arenas that have finished all stages.</li>
                     </ul>
                 </li>
             </ul>
 
             <h3>Arena Cards</h3>
-            <p>Each card shows the arena title (or ID), status, number of claims and candidates, and creation date. Click <strong>Open Workspace</strong> to navigate to the Arena Workspace for that arena.</p>
+            <p>Each card shows the arena title (or ID), status, number of claims and candidates, and last-updated date. Click <strong>Open Workspace</strong> to navigate to the Arena Workspace for that arena.</p>
         </section>
 
         <!-- ============================================================ -->
@@ -838,28 +847,35 @@
 
             <h3>Header</h3>
             <ul>
-                <li><strong>Arena title</strong> and a <strong>summary strip</strong> showing: status, current stage, number of claims, number of candidates, expected cost, and actual cost so far.</li>
+                <li><strong>Arena title</strong> and a <strong>summary strip</strong> showing: status, current stage, number of claims, number of models, failed runs (if any), expected cost, and actual cost so far.</li>
+                <li><strong>Export CSV / Export JSON</strong> &mdash; Download the full model comparison (verdicts, costs, tokens, timings, your picks, summaries, and reasoning) for analysis or sharing.</li>
                 <li><strong>Refresh state badge</strong> &mdash; Shows whether the workspace is synced or stale.</li>
                 <li><strong>Last updated</strong> &mdash; Timestamp of the last data refresh.</li>
                 <li><strong>Refresh Now</strong> &mdash; Manually re-fetch the latest arena data from the server.</li>
             </ul>
 
             <h3>Stage Stepper</h3>
-            <p>A visual progress indicator showing which pipeline stages have been completed, which is current, and which are still ahead.</p>
+            <p>A visual progress indicator. For full-pipeline arenas it shows Setup &rarr; Running &rarr; Compare Results. For staged arenas it also shows each pipeline review stage and the winner-selection/continue steps.</p>
 
             <h3>Workspace Tabs</h3>
             <p>Three tabs organize the workspace content:</p>
 
             <h4>Overview Tab</h4>
-            <p>A performance comparison table showing all candidates with columns for: provider, model, status, stage, elapsed time, metrics for each pipeline stage (query, evidence, scoring, report), issue count, evidence count, and actual cost. Use this to quickly see which candidates are performing best.</p>
+            <p>Two tables answer "which model should I use?":</p>
+            <ul>
+                <li><strong>Model Scorecard</strong> &mdash; Output quality per model: mean verdict (1&ndash;5), verdict mix, No Evidence count, majority agreement (how often the model matched the consensus verdict), your picks, failed runs, claims with evidence, retrieval overlap with other models, tokens, actual cost, and total time. The best value in key columns is highlighted.</li>
+                <li><strong>Pipeline Operations</strong> &mdash; Runtime and reliability: status, stage, per-stage timings, issues, retries, and expected cost.</li>
+            </ul>
 
             <h4>Claims Tab</h4>
-            <p>Claims are grouped by claim text. For each claim:</p>
+            <p>This is the comparison bench. It opens with a <strong>Verdict Matrix</strong>: one row per claim, one column per model, each cell a color-coded verdict chip (a ★ marks your pick). The last column flags agreement ("Agree", "Disagree by N pts", or "Split: evidence vs. none"), and the footer shows each model's mean verdict. Click a claim to jump to its side-by-side comparison. Use the toolbar to sort claims (original order, most disagreement, lowest average verdict) and to expand or collapse all outputs.</p>
+            <p>Below the matrix, claims are grouped by claim text. For each claim:</p>
             <ul>
-                <li>A progress indicator shows how many candidate runs are complete (e.g., "3/4 complete").</li>
-                <li>A comparison table lists each candidate's results for that claim, with columns for status, cost, issues, stage-specific metrics, and a <strong>Detail</strong> link to the Claim Detail page.</li>
-                <li><strong>Winner radio buttons</strong> &mdash; Select which candidate produced the best result for this claim. Winners are used when continuing the arena to the next stage.</li>
-                <li><strong>Skip claim</strong> checkbox &mdash; Exclude this claim from the next stage's continuation. Useful if a claim is ambiguous or not worth further processing.</li>
+                <li>A progress indicator shows how many candidate runs are complete and flags failed runs.</li>
+                <li>A comparison table lists each model's status, verdict, cost, tokens, issues, and stage-specific metrics, with a <strong>Detail</strong> link to the Claim Detail page and a <strong>Retry</strong> button for failed runs.</li>
+                <li><strong>Compare Outputs</strong> &mdash; Expands a side-by-side grid with each model's verdict, summary, final reasoning, evidence (papers are marked "Unique to A" or "Also found by B, C"), and search queries aligned in columns so you can read them against each other.</li>
+                <li><strong>Best</strong> radio buttons (final stage) &mdash; Record which model produced the best output for this claim. Picks are saved to the arena, starred in the matrix, and tallied in the scorecard's "Your Picks" column.</li>
+                <li><strong>Advance</strong> radio buttons and a <strong>Skip claim</strong> checkbox (staged arenas only) &mdash; Choose which run advances to the next stage. A failed candidate does not block the others: you can still advance a surviving run or retry the failure.</li>
             </ul>
 
             <h4>History Tab</h4>
@@ -896,13 +912,16 @@
 
             <p>Navigate here using the <strong>Providers</strong> link in the top navigation bar.</p>
 
+            <div class="gb-tip">
+                <strong>Providers vs. Settings (which wins).</strong> This page is the source of truth for which providers and models runs actually use. The provider env values on the <a href="#settings">Settings</a> page (<code>LLM_PROVIDER</code>, <code>LLM_BASE_URL</code>, <code>LLM_API_KEY</code>, <code>LLM_EVALUATION_MODEL</code>) only <em>seed</em> the "Default Config Provider" here. A model's <strong>context window</strong> and <strong>max output tokens</strong> set here take precedence over the <code>LOCAL_MODEL_CONTEXT_OVERRIDE</code> and <code>MODEL_REGISTRY_OVERRIDES</code> fallbacks in Settings (and for Ollama, the live model's window auto-detected from <code>/api/show</code> wins over both). Per-task output budgets are separate and live in Settings → Model Routing &amp; Token Budgets.</div>
+
             <h3>Understanding Provider Types</h3>
             <p>Valsci supports several LLM provider types, each with different trade-offs:</p>
             <ul>
                 <li><strong>OpenAI</strong> &mdash; The most common choice. Connects to OpenAI's API (GPT-4o, GPT-4, etc.). Requires an OpenAI API key. Models are high quality but incur per-token costs.</li>
                 <li><strong>OpenRouter</strong> &mdash; A unified API gateway that provides access to models from many providers (OpenAI, Anthropic, Meta, Google, etc.) through a single API key. Useful if you want to compare models across providers without managing multiple API keys.</li>
                 <li><strong>Ollama</strong> &mdash; Run open-source models (Llama, Mistral, Gemma, etc.) locally on your own hardware. Free to run but requires sufficient GPU/CPU resources. Valsci can auto-discover which models are installed on your Ollama instance.</li>
-                <li><strong>Local (llama.cpp)</strong> &mdash; Connect to a local llama.cpp server. Similar to Ollama but uses the llama.cpp HTTP server directly.</li>
+                <li><strong>llama.cpp</strong> &mdash; Connect to a local llama.cpp server. Similar to Ollama but uses the llama.cpp HTTP server directly.</li>
                 <li><strong>Azure OpenAI</strong> &mdash; OpenAI models hosted on Microsoft Azure. Requires an Azure OpenAI resource endpoint and API key. Used by organizations with Azure enterprise agreements.</li>
                 <li><strong>Azure AI Inference</strong> &mdash; Azure's model inference endpoint for non-OpenAI models hosted on Azure. Requires a separate endpoint URL.</li>
             </ul>
@@ -979,6 +998,39 @@
             <div class="gb-tip">
                 <strong>Tip:</strong> For Ollama users, use the <strong>Discover From Provider URL</strong> button after installing new models. It automatically detects all models available on your Ollama instance and lets you import them with one click, saving you from manually entering model names and parameters.
             </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- SECTION: Settings                                            -->
+        <!-- ============================================================ -->
+        <section class="panel guidebook-section" id="settings">
+            <h2 class="panel-title">Settings</h2>
+            <p class="panel-subtitle">Edit Valsci's configuration (env_vars.json) from the browser.</p>
+            <div class="panel-divider"></div>
+
+            <p>The <strong>Settings</strong> page edits the values in <code>app/config/env_vars.json</code>. Settings are organized into collapsible groups (AI Provider, Model Routing &amp; Token Budgets, Performance &amp; Rate Limits, Literature Data, Diagnostics &amp; Tracing, Email, Security, General, and Storage Paths). Each setting shows a friendly label, its raw key, a description, and badges for whether it is <strong>Configured</strong> (set in your file) or running on a <strong>Default</strong>.</p>
+
+            <h3>Finding and editing settings</h3>
+            <ul>
+                <li><strong>Search</strong> &mdash; Filter all settings by name or description.</li>
+                <li><strong>Only configured</strong> &mdash; Show just the settings you have explicitly set.</li>
+                <li><strong>Save Changes</strong> &mdash; Writes every change back to env_vars.json. A <strong>Unsaved changes</strong> badge appears while you have pending edits.</li>
+            </ul>
+
+            <div class="gb-tip">
+                <strong>Restart badge.</strong> Saving applies changes to the running web app immediately, but the background <em>processor</em> reads its configuration at startup. Settings marked <span class="badge neutral-badge">Restart</span> only affect claim processing after you restart the processor (e.g. <code>docker compose restart processor</code>).
+            </div>
+
+            <h3>Per-task output token budgets</h3>
+            <p>Under <strong>Model Routing &amp; Token Budgets</strong>, the <strong>Task Routing &amp; Budgets</strong> setting includes a friendly editor with one field per pipeline stage (Query Generation, Paper Analysis, Venue Scoring, Final Report). Each field sets the maximum number of tokens a model may generate for that stage.</p>
+            <p>This matters for <strong>reasoning ("thinking") models</strong>: they spend output tokens on hidden chain-of-thought before answering, so a budget that is too small gets used up before any answer is produced, and the run fails with empty output. If you see that error, raise the budget for the named stage (e.g. 16000) here. Leave a field blank to use the built-in default. The full routing object is still editable as raw JSON under <strong>Advanced</strong>.</p>
+
+            <h3>Structured-output reliability</h3>
+            <p>Also under <strong>Model Routing &amp; Token Budgets</strong>, two settings control how strictly Valsci holds models to the JSON shape it expects for the final report and query generation:</p>
+            <ul>
+                <li><strong>Strict JSON Schema</strong> (on by default) &mdash; Forces those stages to match an exact JSON schema instead of just "valid JSON," so a model can't invent its own field names. If a provider doesn't support schema mode, Valsci automatically falls back to plain JSON. Recommended on; especially helpful for local models that otherwise drift from the required fields.</li>
+                <li><strong>JSON Repair Pass</strong> (off by default) &mdash; When a model returns valid JSON with the wrong fields, run a second LLM pass that reshapes its output into the required schema (without changing the content), then re-validate. It costs an extra call only when the first output fails validation. Turn it on if a particular model frequently produces non-conforming output even with strict schema.</li>
+            </ul>
         </section>
 
         <!-- ============================================================ -->

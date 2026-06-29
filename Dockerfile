@@ -3,6 +3,10 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /valsci
 
+# Lets the app tailor networking hints (localhost vs host.docker.internal)
+# even on runtimes that don't create /.dockerenv (e.g. Kubernetes, Podman).
+ENV VALSCI_IN_DOCKER=1
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \

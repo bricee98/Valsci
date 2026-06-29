@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import ipaddress
+import os
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse, urlunparse
 
@@ -12,6 +15,38 @@ import requests
 TABLE_SPLIT_RE = re.compile(r"\s{2,}")
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 _PATH_SUFFIXES_TO_TRIM = ("/api", "/api/", "/v1", "/v1/")
+
+
+def running_in_docker() -> bool:
+    return bool(os.environ.get("VALSCI_IN_DOCKER")) or Path("/.dockerenv").exists()
+
+
+def _is_loopback_host(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def docker_networking_hint(base_url: str) -> str:
+    """A hint for unreachable hosts that are likely a Docker networking mixup."""
+    host = (urlparse(base_url).hostname or "").lower()
+    if not host:
+        return ""
+    if running_in_docker() and _is_loopback_host(host):
+        return (
+            " Valsci is running inside Docker, where localhost refers to the container itself, "
+            "not your machine. If Ollama runs on the host, use http://host.docker.internal:11434 instead."
+        )
+    if not running_in_docker() and host == "host.docker.internal":
+        return (
+            " host.docker.internal is Docker's name for the host machine and may not resolve "
+            "outside Docker. If Valsci is running directly on this machine, use "
+            "http://localhost:11434 instead."
+        )
+    return ""
 
 
 def parse_ollama_list_output(output: str) -> List[Dict[str, Any]]:
@@ -115,9 +150,14 @@ def probe_ollama_host(
             timeout_seconds=timeout_seconds,
         )
     except requests.Timeout as exc:
-        raise RuntimeError("Ollama model discovery timed out.") from exc
+        raise RuntimeError(
+            f"Ollama model discovery timed out.{docker_networking_hint(normalized_base_url)}"
+        ) from exc
     except requests.RequestException as exc:
-        raise RuntimeError(f"Could not reach an Ollama host at {normalized_base_url}: {exc}") from exc
+        raise RuntimeError(
+            f"Could not reach an Ollama host at {normalized_base_url}: {exc}."
+            f"{docker_networking_hint(normalized_base_url)}"
+        ) from exc
 
     models = tags_payload.get("models")
     if not isinstance(models, list):

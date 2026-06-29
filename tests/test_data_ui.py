@@ -107,11 +107,11 @@ def test_settings_page_and_env_api(monkeypatch, tmp_path):
                 "FLASK_SECRET_KEY": "dev-secret",
                 "USER_EMAIL": "dev@example.com",
                 "SEMANTIC_SCHOLAR_API_KEY": "",
-                "LLM_PROVIDER": "local",
+                "LLM_PROVIDER": "ollama",
                 "LLM_BASE_URL": "http://localhost:11434/v1",
                 "REQUIRE_PASSWORD": "false",
                 "SMTP_PORT": "587",
-                "LLM_ROUTING": "{\"enabled\": false}",
+                "LLM_ROUTING": "{\"enabled\": false, \"tasks\": {\"query_generation\": {\"max_output_tokens\": 16000}}}",
             }
         ),
         encoding="utf-8",
@@ -127,7 +127,7 @@ def test_settings_page_and_env_api(monkeypatch, tmp_path):
     page = client.get("/settings")
     assert page.status_code == 200
     html = page.get_data(as_text=True)
-    assert "Environment Values" in html
+    assert "Settings" in html
     assert "settings.js" in html
 
     response = client.get("/api/v1/settings/env")
@@ -138,7 +138,30 @@ def test_settings_page_and_env_api(monkeypatch, tmp_path):
     assert "SEMANTIC_SCHOLAR_API_KEY" in entries
     assert entries["REQUIRE_PASSWORD"]["value"] is False
     assert entries["SMTP_PORT"]["value"] == 587
-    assert entries["LLM_ROUTING"]["value"] == {"enabled": False}
+    assert entries["LLM_ROUTING"]["value"]["enabled"] is False
+
+    # Enriched per-entry metadata for the grouped UI.
+    assert entries["LLM_ROUTING"]["category"] == "routing"
+    # Gateway-backed settings hot-reload (no restart); startup-captured ones don't.
+    assert entries["LLM_ROUTING"]["restart_required"] is False
+    assert entries["LLM_ROUTING"]["label"] and entries["LLM_ROUTING"]["description"]
+    assert entries["SMTP_PORT"]["restart_required"] is True
+    assert entries["RATE_LIMIT_MAX_TOKENS_PER_CLAIM"]["restart_required"] is True
+
+    # Processor config-sync status is attached for the live UI indicator.
+    assert "processor" in payload
+    assert set(payload["processor"]) >= {"alive", "config_synced", "env_file_mtime"}
+
+    # Grouped structure + the friendly per-task output budget surfacing.
+    group_ids = {group["id"] for group in payload["groups"]}
+    assert {"provider", "routing", "performance"} <= group_ids
+    routing_group = next(group for group in payload["groups"] if group["id"] == "routing")
+    assert any(entry["env_key"] == "LLM_ROUTING" for entry in routing_group["entries"])
+    assert payload["routing_output_budgets"]["query_generation"] == 16000
+    assert payload["routing_output_budgets"]["final_report"] is None
+    assert [stage["key"] for stage in payload["routing_task_stages"]] == [
+        "query_generation", "paper_analysis", "venue_scoring", "final_report",
+    ]
 
     response = client.put(
         "/api/v1/settings/env",
@@ -149,6 +172,64 @@ def test_settings_page_and_env_api(monkeypatch, tmp_path):
     assert updated_file["SEMANTIC_SCHOLAR_API_KEY"] == "test-s2-key"
     assert Config.SEMANTIC_SCHOLAR_API_KEY == "test-s2-key"
     assert app.config["SEMANTIC_SCHOLAR_API_KEY"] == "test-s2-key"
+
+
+def test_processor_config_status_reflects_heartbeat(monkeypatch, tmp_path):
+    from app.services.processor_heartbeat import write_heartbeat
+
+    env_path = tmp_path / "env_vars.json"
+    env_path.write_text(json.dumps({"LLM_PROVIDER": "ollama"}), encoding="utf-8")
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    monkeypatch.setattr(env_config.settings_module, "env_file_path", env_path)
+    monkeypatch.setattr(Config, "STATE_DIR", str(state_dir), raising=False)
+
+    app = create_app(TestConfig)
+    app.config["STATE_DIR"] = str(state_dir)
+    client = app.test_client()
+
+    # No heartbeat: processor down, not synced.
+    down = client.get("/api/v1/settings/processor-status").get_json()
+    assert down["alive"] is False
+    assert down["config_synced"] is False
+
+    # Heartbeat stamped with a config mtime at/after the env file: synced.
+    env_mtime = env_path.stat().st_mtime
+    write_heartbeat(state_dir, config_mtime=env_mtime)
+    synced = client.get("/api/v1/settings/processor-status").get_json()
+    assert synced["alive"] is True
+    assert synced["config_synced"] is True
+
+    # Heartbeat stamped before a newer save: alive but not yet synced.
+    write_heartbeat(state_dir, config_mtime=env_mtime - 100)
+    pending = client.get("/api/v1/settings/processor-status").get_json()
+    assert pending["alive"] is True
+    assert pending["config_synced"] is False
+
+
+def test_routing_output_budgets_extraction():
+    extract = env_config.routing_output_budgets
+    # Full set, partial, and missing/invalid shapes all resolve cleanly.
+    assert extract({"tasks": {"query_generation": {"max_output_tokens": 16000}}}) == {
+        "query_generation": 16000,
+        "paper_analysis": None,
+        "venue_scoring": None,
+        "final_report": None,
+    }
+    assert extract({}) == {s["key"]: None for s in env_config.ROUTING_TASK_STAGES}
+    assert extract(None) == {s["key"]: None for s in env_config.ROUTING_TASK_STAGES}
+    # Non-int values are ignored rather than surfaced as budgets.
+    assert extract({"tasks": {"venue_scoring": {"max_output_tokens": "lots"}}})["venue_scoring"] is None
+    assert extract("not-an-object") == {s["key"]: None for s in env_config.ROUTING_TASK_STAGES}
+
+
+def test_settings_catalog_covers_every_known_config_key():
+    # Every catalogued key maps to a real category, so nothing lands in a
+    # mislabeled or non-existent group.
+    category_ids = {category["id"] for category in env_config.SETTING_CATEGORIES}
+    for env_key, info in env_config._SETTING_CATALOG.items():
+        assert info["category"] in category_ids, f"{env_key} -> unknown category {info['category']}"
+        assert info.get("label"), f"{env_key} missing label"
 
 
 def test_data_warning_links_settings_and_page_titles_are_left_aligned():
